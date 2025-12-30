@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Animated Parametric SVG Face - Living UI Interface POC">
+  <title>Drifting Sagan - Living Face UI</title>
+  <link rel="stylesheet" href="/src/styles/main.css">
+</head>
+
+<body>
+  <!-- Main Face Container -->
+  <div id="face-container">
+    <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Animated parametric face">
+      <!-- Face components will be injected here by TypeScript -->
+      <g id="face-group" transform="translate(200, 250)">
+        <!-- Eyebrows -->
+        <g id="eyebrows-group">
+          <path id="left-eyebrow" class="face-stroke" />
+          <path id="right-eyebrow" class="face-stroke" />
+        </g>
+
+        <!-- Eyes -->
+        <g id="eyes-group">
+          <g id="left-eye" class="eye-group">
+            <path id="left-eye-top" class="face-stroke" />
+            <path id="left-eye-line" class="face-stroke" />
+            <path id="left-eye-bottom" class="face-stroke" />
+          </g>
+          <g id="right-eye" class="eye-group">
+            <path id="right-eye-top" class="face-stroke" />
+            <path id="right-eye-line" class="face-stroke" />
+            <path id="right-eye-bottom" class="face-stroke" />
+          </g>
+        </g>
+
+        <!-- Mouth -->
+        <g id="mouth-group">
+          <path id="mouth" class="face-stroke" />
+        </g>
+      </g>
+    </svg>
+
+    <!-- Thinking Label (for future AI integration) -->
+    <div id="thinking-label" class="hidden">
+      <span class="thinking-text">Thinking</span>
+      <span class="thinking-dots">...</span>
+    </div>
+  </div>
+
+  <!-- Demo Controls Panel -->
+  <div id="controls-panel">
+    <h3>Face States</h3>
+    <div class="button-group">
+      <button id="btn-neutral" class="state-btn active">Neutral</button>
+      <button id="btn-smile" class="state-btn">Smile</button>
+      <button id="btn-attention" class="state-btn">Attention</button>
+      <button id="btn-thinking" class="state-btn">Thinking</button>
+      <button id="btn-wink" class="state-btn">Wink</button>
+    </div>
+
+    <h3>Theme</h3>
+    <div class="button-group">
+      <button id="btn-dark" class="theme-btn active">Dark</button>
+      <button id="btn-light" class="theme-btn">Light</button>
+    </div>
+
+    <h3>Microexpressions</h3>
+    <div class="toggle-group">
+      <label>
+        <input type="checkbox" id="toggle-micro" checked>
+        Enable organic animations
+      </label>
+    </div>
+
+    <h3>Connect</h3>
+    <div class="button-group">
+      <button id="btn-qr" class="state-btn">📱 Scan QR</button>
+    </div>
+    <div id="connection-status" class="connection-status">
+      <span class="status-indicator"></span>
+      <span class="status-text">Not connected</span>
+    </div>
+  </div>
+
+  <!-- Swipe hint overlay -->
+  <div id="swipe-hint" class="swipe-hint hidden">
+    <span>← Swipe to transfer →</span>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

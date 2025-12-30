@@ -1,0 +1,13 @@
+{
+    "name": "drifting-sagan-sync-server",
+    "version": "1.0.0",
+    "description": "WebSocket sync server for Drifting Sagan face transfer",
+    "type": "module",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node server.js"
+    },
+    "dependencies": {
+        "ws": "^8.16.0"
+    }
+}

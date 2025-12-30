@@ -1,0 +1,360 @@
+/* =====================================================
+   DRIFTING SAGAN - Living Face UI
+   Main Stylesheet
+   ===================================================== */
+
+/* CSS Custom Properties (Design Tokens) */
+:root {
+  /* Colors - Dark Theme (Default) */
+  --bg-primary: #0a0a0a;
+  --stroke-color: #ffffff;
+  --accent-color: #666666;
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --control-bg: rgba(255, 255, 255, 0.05);
+  --control-border: rgba(255, 255, 255, 0.1);
+  --control-hover: rgba(255, 255, 255, 0.1);
+  --control-active: rgba(255, 255, 255, 0.2);
+
+  /* Stroke properties */
+  --stroke-width: 2.5px;
+  --stroke-linecap: round;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 300ms ease;
+
+  /* Typography */
+  --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Light Theme */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --stroke-color: #0a0a0a;
+  --accent-color: #999999;
+  --text-primary: #0a0a0a;
+  --text-secondary: #666666;
+  --control-bg: rgba(0, 0, 0, 0.03);
+  --control-border: rgba(0, 0, 0, 0.1);
+  --control-hover: rgba(0, 0, 0, 0.05);
+  --control-active: rgba(0, 0, 0, 0.1);
+}
+
+/* Reset & Base */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-primary);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color var(--transition-normal),
+    color var(--transition-normal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* =====================================================
+   Face Container
+   ===================================================== */
+
+#face-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#face-svg {
+  width: min(80vw, 80vh);
+  height: min(80vw, 80vh);
+  max-width: 500px;
+  max-height: 600px;
+}
+
+/* Face Stroke Styling */
+.face-stroke {
+  fill: none;
+  stroke: var(--stroke-color);
+  stroke-width: var(--stroke-width);
+  stroke-linecap: var(--stroke-linecap);
+  stroke-linejoin: round;
+  transition: stroke var(--transition-normal);
+}
+
+/* =====================================================
+   Thinking Label
+   ===================================================== */
+
+#thinking-label {
+  position: absolute;
+  top: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 20px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  opacity: 1;
+  transition: opacity var(--transition-normal);
+}
+
+#thinking-label.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.thinking-text {
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.thinking-dots {
+  animation: thinking-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes thinking-pulse {
+
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* =====================================================
+   Controls Panel
+   ===================================================== */
+
+#controls-panel {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  max-width: 90vw;
+}
+
+#controls-panel h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  margin-bottom: -8px;
+}
+
+.button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* State Buttons */
+.state-btn,
+.theme-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-primary);
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.state-btn:hover,
+.theme-btn:hover {
+  background: var(--control-hover);
+}
+
+.state-btn.active,
+.theme-btn.active {
+  background: var(--control-active);
+  border-color: var(--text-secondary);
+}
+
+/* Toggle Group */
+.toggle-group {
+  display: flex;
+  align-items: center;
+}
+
+.toggle-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.toggle-group input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--stroke-color);
+}
+
+/* =====================================================
+   Utility Classes
+   ===================================================== */
+
+.hidden {
+  display: none !important;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* =====================================================
+   Responsive Adjustments
+   ===================================================== */
+
+@media (max-width: 600px) {
+  #controls-panel {
+    bottom: 16px;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .state-btn,
+  .theme-btn {
+    padding: 6px 12px;
+    font-size: 12px;
+  }
+}
+
+/* =====================================================
+   Animations (for CSS-based micro-animations)
+   ===================================================== */
+
+@keyframes subtle-breathe {
+
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.002);
+  }
+}
+
+/* =====================================================
+   Connection Status
+   ===================================================== */
+
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #666;
+}
+
+.status-indicator.connected {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+/* =====================================================
+   Swipe Hint
+   ===================================================== */
+
+.swipe-hint {
+  position: fixed;
+  bottom: 50%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 24px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 30px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 100;
+}
+
+.swipe-hint.visible {
+  opacity: 1;
+}
+
+/* =====================================================
+   Face Container (for drag interaction)
+   ===================================================== */
+
+#face-container {
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#face-container:active {
+  cursor: grabbing;
+}
+
+/* Smooth transitions for face group */
+#face-group {
+  transition: opacity 0.1s ease;
+}
+
+/* Face hidden state */
+#face-group.hidden {
+  opacity: 0;
+  pointer-events: none;
+}

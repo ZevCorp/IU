@@ -1,0 +1,21 @@
+{
+  "name": "drifting-sagan",
+  "version": "1.0.0",
+  "description": "Animated Parametric SVG Face POC - Living UI Interface",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "gsap": "^3.12.5",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.10"
+  }
+}

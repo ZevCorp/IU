@@ -1,0 +1,9 @@
+[2025-12-30T23:16:58.606Z] device-1767127368647-u0eyh5vt7 (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:16:58.629Z] device-1767127368647-u0eyh5vt7 (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:16:58.682Z] device-1767127368647-u0eyh5vt7 (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:16:58.830Z] device-1767127369032-cu3ge0b2w (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:18:11.375Z] device-1767127369032-cu3ge0b2w (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:18:13.439Z] device-1767127369032-cu3ge0b2w (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:18:19.431Z] device-1767127369032-cu3ge0b2w (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:18:26.767Z] device-1767127369032-cu3ge0b2w (desktop): Attempting to connect to: ws://localhost:3001 
+[2025-12-30T23:21:02.556Z] device-1767127369032-cu3ge0b2w (desktop): Attempting to connect to: ws://localhost:3001 
