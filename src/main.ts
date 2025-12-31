@@ -10,6 +10,7 @@ import { faceEventBus } from './events/FaceEventBus';
 import { getDeviceSync } from './sync/DeviceSync';
 import { getQRConnect } from './sync/QRConnect';
 import { getFaceTransfer } from './sync/FaceTransfer';
+import { initSharedState, getSharedState } from './sync/SharedState';
 import './styles/main.css';
 
 // =====================================================
@@ -29,13 +30,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Set up demo controls
         setupStateButtons(face);
-        setupThemeButtons();
+        setupThemeButtons(face);
         setupMicroToggle(face);
+        setupMenuToggle();
 
         // Initialize device sync and QR connect
         setupDeviceSync(face);
         setupQRButton();
         setupFaceTransfer(face);
+
+        // Initialize shared state (after DeviceSync is set up)
+        setupSharedState(face);
 
         // Log available presets
         console.log('Available presets:', face.getPresets());
@@ -73,44 +78,66 @@ function setupStateButtons(face: ReturnType<typeof initializeFace>): void {
         if (!btn) return;
 
         btn.addEventListener('click', () => {
-            // Update active button
-            document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-
-            // Transition to preset
-            face.transitionTo(presetName, 0.5);
-
-            // Show thinking label for thinking state
-            const thinkingLabel = document.getElementById('thinking-label');
-            if (thinkingLabel) {
-                if (presetName === 'thinking') {
-                    thinkingLabel.classList.remove('hidden');
-                } else {
-                    thinkingLabel.classList.add('hidden');
-                }
-            }
-
-            console.log(`Transitioning to: ${presetName}`);
+            applyPreset(face, presetName);
+            // Broadcast to other devices
+            getSharedState().set('activePreset', presetName);
         });
     });
 }
 
-function setupThemeButtons(): void {
+/** Apply a preset and update UI */
+function applyPreset(face: ReturnType<typeof initializeFace>, presetName: string): void {
+    // Update active button
+    document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById(`btn-${presetName}`);
+    if (btn) btn.classList.add('active');
+
+    // Transition to preset
+    face.transitionTo(presetName, 0.5);
+
+    // Show thinking label for thinking state
+    const thinkingLabel = document.getElementById('thinking-label');
+    if (thinkingLabel) {
+        if (presetName === 'thinking') {
+            thinkingLabel.classList.remove('hidden');
+        } else {
+            thinkingLabel.classList.add('hidden');
+        }
+    }
+
+    console.log(`Transitioning to: ${presetName}`);
+}
+
+function setupThemeButtons(face: ReturnType<typeof initializeFace>): void {
     const darkBtn = document.getElementById('btn-dark');
     const lightBtn = document.getElementById('btn-light');
 
     if (darkBtn && lightBtn) {
         darkBtn.addEventListener('click', () => {
-            document.documentElement.removeAttribute('data-theme');
-            darkBtn.classList.add('active');
-            lightBtn.classList.remove('active');
+            applyTheme('dark');
+            getSharedState().set('theme', 'dark');
         });
 
         lightBtn.addEventListener('click', () => {
-            document.documentElement.setAttribute('data-theme', 'light');
-            lightBtn.classList.add('active');
-            darkBtn.classList.remove('active');
+            applyTheme('light');
+            getSharedState().set('theme', 'light');
         });
+    }
+}
+
+/** Apply theme and update UI */
+function applyTheme(theme: 'dark' | 'light'): void {
+    const darkBtn = document.getElementById('btn-dark');
+    const lightBtn = document.getElementById('btn-light');
+
+    if (theme === 'dark') {
+        document.documentElement.removeAttribute('data-theme');
+        darkBtn?.classList.add('active');
+        lightBtn?.classList.remove('active');
+    } else {
+        document.documentElement.setAttribute('data-theme', 'light');
+        lightBtn?.classList.add('active');
+        darkBtn?.classList.remove('active');
     }
 }
 
@@ -120,9 +147,87 @@ function setupMicroToggle(face: ReturnType<typeof initializeFace>): void {
     if (toggle) {
         toggle.addEventListener('change', () => {
             face.setMicroExpressionsEnabled(toggle.checked);
+            getSharedState().set('microExpressionsEnabled', toggle.checked);
             console.log(`Micro-expressions: ${toggle.checked ? 'enabled' : 'disabled'}`);
         });
     }
+}
+
+// =====================================================
+// Menu Toggle
+// =====================================================
+
+function setupMenuToggle(): void {
+    const toggleBtn = document.getElementById('menu-toggle');
+    const controlsPanel = document.getElementById('controls-panel');
+
+    if (!toggleBtn || !controlsPanel) return;
+
+    let isCollapsed = false;
+    let isLandscape = window.matchMedia('(orientation: landscape) and (max-height: 500px)').matches;
+
+    // Toggle menu visibility
+    toggleBtn.addEventListener('click', () => {
+        isCollapsed = !isCollapsed;
+        toggleBtn.classList.toggle('active', !isCollapsed);
+
+        if (isLandscape) {
+            // In landscape, toggle force-visible class
+            controlsPanel.classList.toggle('force-visible', !isCollapsed);
+        } else {
+            // In portrait, toggle collapsed class
+            controlsPanel.classList.toggle('collapsed', isCollapsed);
+        }
+    });
+
+    // Handle orientation change
+    const landscapeQuery = window.matchMedia('(orientation: landscape) and (max-height: 500px)');
+
+    const handleOrientationChange = (e: MediaQueryListEvent | MediaQueryList) => {
+        isLandscape = e.matches;
+        if (isLandscape) {
+            // Entering landscape - menu is auto-hidden by CSS
+            controlsPanel.classList.remove('collapsed');
+            controlsPanel.classList.remove('force-visible');
+            toggleBtn.classList.remove('active');
+            isCollapsed = true;
+        } else {
+            // Leaving landscape - reset to normal state
+            controlsPanel.classList.remove('force-visible');
+            controlsPanel.classList.remove('collapsed');
+            isCollapsed = false;
+        }
+    };
+
+    landscapeQuery.addEventListener('change', handleOrientationChange);
+    handleOrientationChange(landscapeQuery); // Initial check
+}
+
+// =====================================================
+// Shared State Setup
+// =====================================================
+
+function setupSharedState(face: ReturnType<typeof initializeFace>): void {
+    const sharedState = initSharedState();
+
+    // Listen for remote state changes and update local UI
+    sharedState.subscribe('theme', (state) => {
+        applyTheme(state.theme);
+    });
+
+    sharedState.subscribe('activePreset', (state) => {
+        applyPreset(face, state.activePreset);
+    });
+
+    sharedState.subscribe('microExpressionsEnabled', (state) => {
+        const toggle = document.getElementById('toggle-micro') as HTMLInputElement;
+        if (toggle && toggle.checked !== state.microExpressionsEnabled) {
+            toggle.checked = state.microExpressionsEnabled;
+            face.setMicroExpressionsEnabled(state.microExpressionsEnabled);
+        }
+    });
+
+    console.log('[SharedState] Listening for remote state changes');
 }
 
 // =====================================================

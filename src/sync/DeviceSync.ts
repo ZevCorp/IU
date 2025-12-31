@@ -24,7 +24,7 @@ interface DeviceInfo {
 }
 
 interface SyncMessage {
-    type: 'state' | 'transfer_start' | 'transfer_complete' | 'transfer_cancel' | 'ping' | 'pong' | 'register';
+    type: 'state' | 'transfer_start' | 'transfer_complete' | 'transfer_cancel' | 'ping' | 'pong' | 'register' | 'shared_state';
     deviceId: string;
     payload?: unknown;
     timestamp: number;
@@ -65,6 +65,7 @@ export class DeviceSync {
     private onFaceReceived: ((state: FaceState, direction: TransferDirection) => void) | null = null;
     private onTransferProgress: ((progress: number, direction: TransferDirection) => void) | null = null;
     private onConnectionChange: ((connected: boolean, devices: DeviceInfo[]) => void) | null = null;
+    private onSharedStateChange: ((state: Record<string, unknown>) => void) | null = null;
 
     // Current face state (to sync)
     private _currentFaceState: FaceState | null = null;
@@ -316,6 +317,9 @@ export class DeviceSync {
                     timestamp: Date.now()
                 });
                 break;
+            case 'shared_state':
+                this.handleSharedState(message);
+                break;
         }
     }
 
@@ -341,6 +345,15 @@ export class DeviceSync {
         // Note: Full state sync could be implemented here
         if (this.onFaceReceived && !this.transferState.isTransferring) {
             // Just sync state, no animation
+        }
+    }
+
+    private handleSharedState(message: SyncMessage): void {
+        const payload = message.payload as Record<string, unknown>;
+        console.log('[DeviceSync] Received shared state:', payload);
+
+        if (this.onSharedStateChange) {
+            this.onSharedStateChange(payload);
         }
     }
 
@@ -511,6 +524,22 @@ export class DeviceSync {
 
     setOnConnectionChange(callback: (connected: boolean, devices: DeviceInfo[]) => void): void {
         this.onConnectionChange = callback;
+    }
+
+    setOnSharedStateChange(callback: (state: Record<string, unknown>) => void): void {
+        this.onSharedStateChange = callback;
+    }
+
+    /**
+     * Broadcast shared state to all connected devices in the room
+     */
+    broadcastSharedState(state: Record<string, unknown>): void {
+        this.sendMessage({
+            type: 'shared_state',
+            deviceId: this.deviceId,
+            payload: state,
+            timestamp: Date.now()
+        });
     }
 
     // =====================================================

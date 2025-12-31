@@ -83,10 +83,8 @@ body {
 }
 
 #face-svg {
-  width: min(80vw, 80vh);
-  height: min(80vw, 80vh);
-  max-width: 500px;
-  max-height: 600px;
+  width: 100%;
+  height: 100%;
 }
 
 /* Face Stroke Styling */
@@ -148,6 +146,48 @@ body {
 }
 
 /* =====================================================
+   Menu Toggle Button
+   ===================================================== */
+
+.menu-toggle {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.menu-toggle:hover {
+  background: var(--control-hover);
+  transform: scale(1.05);
+}
+
+.menu-toggle:active {
+  transform: scale(0.95);
+}
+
+.menu-icon {
+  font-size: 20px;
+  color: var(--text-primary);
+  transition: transform var(--transition-normal);
+}
+
+.menu-toggle.active .menu-icon {
+  transform: rotate(90deg);
+}
+
+/* =====================================================
    Controls Panel
    ===================================================== */
 
@@ -155,7 +195,7 @@ body {
   position: fixed;
   bottom: 24px;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(0);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -166,6 +206,37 @@ body {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   max-width: 90vw;
+  z-index: 1000;
+  transition: transform var(--transition-normal), opacity var(--transition-normal);
+}
+
+/* Collapsed state */
+#controls-panel.collapsed {
+  transform: translateX(-50%) translateY(calc(100% + 48px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Auto-hide on landscape mobile */
+@media (orientation: landscape) and (max-height: 500px) {
+  #controls-panel {
+    transform: translateX(-50%) translateY(calc(100% + 48px));
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #controls-panel.force-visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .menu-toggle {
+    bottom: 16px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+  }
 }
 
 #controls-panel h3 {
