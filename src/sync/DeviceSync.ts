@@ -109,6 +109,23 @@ export class DeviceSync {
         return `${protocol}//${window.location.hostname}:3001`;
     }
 
+    /**
+     * Set the WebSocket server URL and reconnect if already connected/connecting
+     */
+    setServerUrl(url: string): void {
+        if (this.serverUrl === url) return;
+
+        console.log(`[DeviceSync] Updating server URL to: ${url}`);
+        this.serverUrl = url;
+
+        // If we have an active connection or are trying to connect, reconnect
+        if (this.ws || this.reconnectAttempts > 0) {
+            this.disconnect();
+            this.reconnectAttempts = 0;
+            this.connect();
+        }
+    }
+
     // =====================================================
     // Connection Management
     // =====================================================

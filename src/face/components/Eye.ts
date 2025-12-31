@@ -59,10 +59,10 @@ export class Eye {
             throw new Error(`Eye elements not found for: ${config.groupId}`);
         }
 
-        this.group = group as SVGGElement;
-        this.topPath = top as SVGPathElement;
-        this.linePath = line as SVGPathElement;
-        this.bottomPath = bottom as SVGPathElement;
+        this.group = group as unknown as SVGGElement;
+        this.topPath = top as unknown as SVGPathElement;
+        this.linePath = line as unknown as SVGPathElement;
+        this.bottomPath = bottom as unknown as SVGPathElement;
 
         // Initialize with default state
         this.update({ openness: 1, squint: 0 });

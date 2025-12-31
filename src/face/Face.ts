@@ -44,7 +44,7 @@ export class Face {
         if (!faceGroup) {
             throw new Error('Face group element not found');
         }
-        this.faceGroup = faceGroup as SVGGElement;
+        this.faceGroup = faceGroup as unknown as SVGGElement;
 
         // Initialize components
         this.eyebrows = createEyebrows();

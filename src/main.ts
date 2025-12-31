@@ -7,7 +7,7 @@
 
 import { initializeFace, getFace } from './face/Face';
 import { faceEventBus } from './events/FaceEventBus';
-import { initDeviceSync, getDeviceSync } from './sync/DeviceSync';
+import { getDeviceSync } from './sync/DeviceSync';
 import { getQRConnect } from './sync/QRConnect';
 import { getFaceTransfer } from './sync/FaceTransfer';
 import './styles/main.css';
@@ -130,13 +130,38 @@ function setupMicroToggle(face: ReturnType<typeof initializeFace>): void {
 // =====================================================
 
 function setupDeviceSync(_face: ReturnType<typeof initializeFace>): void {
-    const deviceSync = initDeviceSync();
+    // CRITICAL: Process connection params BEFORE initializing DeviceSync
+    // This ensures room ID is saved to sessionStorage before DeviceSync.getRoomId() is called
+    const connectionParams = processConnectionParams();
 
-    // Set the public URL for QR codes (from our tunnel)
-    // In a real app, this would be an env var or config
-    // Note: modifying protocol to wss for secure websocket
-    deviceSync.setPublicServerUrl('wss://ds-sock-v6.loca.lt');
-    deviceSync.setPublicAppUrl('https://ds-app-v6.loca.lt');
+    const renderUrl = 'wss://iu-rw9m.onrender.com';
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
+    // Get the device sync instance (but don't connect yet)
+    const deviceSync = getDeviceSync();
+
+    // Determine which server URL to use
+    let serverToUse: string;
+
+    // If we have a server URL from QR params, use that (mobile device joining)
+    if (connectionParams.serverUrl) {
+        serverToUse = connectionParams.serverUrl;
+        console.log(`[Setup] Using server from QR code: ${serverToUse}`);
+    } else if (!isLocal) {
+        serverToUse = renderUrl;
+        console.log('[Setup] Production environment, using Render backend');
+    } else {
+        serverToUse = renderUrl; // Default to Render for local testing too
+        console.log('[Setup] Local environment, using Render backend for testing');
+    }
+
+    // Set URLs BEFORE connecting
+    deviceSync.setServerUrl(serverToUse);
+    deviceSync.setPublicServerUrl(renderUrl);
+    deviceSync.setPublicAppUrl(window.location.origin);
+
+    // NOW connect (after all URLs are set)
+    deviceSync.connect();
 
     // Update connection status UI
     deviceSync.setOnConnectionChange((connected, devices) => {
@@ -159,6 +184,7 @@ function setupDeviceSync(_face: ReturnType<typeof initializeFace>): void {
 
     console.log(`[DeviceSync] Device ID: ${deviceSync.getDeviceId()}`);
     console.log(`[DeviceSync] Device Type: ${deviceSync.getDeviceType()}`);
+    console.log(`[DeviceSync] Room ID: ${sessionStorage.getItem('drifting-sagan-room')}`);
 }
 
 function setupQRButton(): void {
@@ -221,19 +247,43 @@ function updateConnectionStatus(connected: boolean, deviceCount: number): void {
     }
 }
 
-function checkConnectionParams(): void {
+/**
+ * Process connection parameters from QR code scan.
+ * MUST be called BEFORE initDeviceSync to ensure room ID is saved.
+ * Returns the server URL if provided in params.
+ */
+function processConnectionParams(): { serverUrl: string | null; roomId: string | null } {
     const params = new URLSearchParams(window.location.search);
     const connectTo = params.get('connect');
+    const roomId = params.get('room');
+    const serverUrl = params.get('server');
+
+    // Save room ID to sessionStorage BEFORE clearing URL
+    // This is critical - DeviceSync.getRoomId() reads from sessionStorage
+    if (roomId) {
+        console.log(`[Connection] Saving room ID to session: ${roomId}`);
+        sessionStorage.setItem('drifting-sagan-room', roomId);
+    }
 
     if (connectTo) {
-        console.log(`[DeviceSync] Connecting to device: ${connectTo}`);
-        // The device sync will automatically connect when initialized
+        console.log(`[Connection] Connecting to device: ${connectTo}`);
+        console.log(`[Connection] Room: ${roomId}`);
+        console.log(`[Connection] Server: ${serverUrl}`);
+    }
 
-        // Clean up URL
+    // Clean up URL (but only after we've saved everything we need)
+    if (connectTo || roomId || serverUrl) {
         const cleanUrl = window.location.origin + window.location.pathname;
         window.history.replaceState({}, document.title, cleanUrl);
+    }
 
-        // Show connected notification
+    return { serverUrl, roomId };
+}
+
+function checkConnectionParams(): void {
+    // Now just used for post-connection UI updates
+    const deviceSync = getDeviceSync();
+    if (deviceSync.isConnected()) {
         setTimeout(() => {
             updateConnectionStatus(true, 1);
         }, 500);
