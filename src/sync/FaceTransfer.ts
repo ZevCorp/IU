@@ -251,7 +251,10 @@ export class FaceTransfer {
         if (!this.faceGroup || !this.getCurrentState) return;
 
         this.isTransferring = true;
-        const state = this.getCurrentState();
+
+        // Get state and create a clean copy (GSAP adds circular refs)
+        const rawState = this.getCurrentState();
+        const state = this.cleanState(rawState);
 
         // Calculate exit position
         const screenWidth = window.innerWidth;
@@ -279,6 +282,23 @@ export class FaceTransfer {
                 faceEventBus.emit('state:changed', { stateName: 'transferred', state });
             }
         });
+    }
+
+    /**
+     * Create a clean copy of state without GSAP internal properties
+     */
+    private cleanState(state: FaceState): FaceState {
+        const clean: any = {};
+        for (const key of Object.keys(state)) {
+            // Skip GSAP internal properties
+            if (key.startsWith('_') || key === 'target') continue;
+            const value = (state as any)[key];
+            // Only copy primitive values
+            if (typeof value !== 'object' || value === null) {
+                clean[key] = value;
+            }
+        }
+        return clean as FaceState;
     }
 
     /**
