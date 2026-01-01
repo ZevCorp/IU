@@ -247,7 +247,7 @@ export class FaceTransfer {
     /**
      * Send the face to another device
      */
-    private sendFace(direction: TransferDirection): void {
+    sendFace(direction: TransferDirection): void {
         if (!this.faceGroup || !this.getCurrentState) return;
 
         this.isTransferring = true;

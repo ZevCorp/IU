@@ -438,8 +438,7 @@ function setupFaceDetection(face: ReturnType<typeof initializeFace>): void {
                     console.log(`[FaceDetection] Gaze transfer: ${direction}`);
                     if (faceTransfer.isFaceVisible()) {
                         // Transfer face in the direction of gaze
-                        const state = face.getState();
-                        faceTransfer['sendFace'](direction);
+                        faceTransfer.sendFace(direction);
                     }
                 });
 

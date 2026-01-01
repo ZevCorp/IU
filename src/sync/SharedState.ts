@@ -26,7 +26,7 @@ type RemoteChangeCallback<K extends StateKey> = (value: SharedStateData[K]) => v
 
 export class SharedState {
     private state: SharedStateData = {
-        theme: 'dark',
+        theme: 'light',
         activePreset: 'neutral',
         microExpressionsEnabled: true
     };

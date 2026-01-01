@@ -5,10 +5,9 @@
  * - Gaze direction (left/center/right)
  * - Eye state (open/closed)
  * - Wink detection
+ * 
+ * Uses CDN loading for better browser compatibility.
  */
-
-import { FaceMesh, Results } from '@mediapipe/face_mesh';
-import { Camera } from '@mediapipe/camera_utils';
 
 // =====================================================
 // Types
@@ -48,12 +47,40 @@ const RIGHT_EYE_TOP = 386;
 const RIGHT_EYE_BOTTOM = 374;
 
 // =====================================================
+// Dynamic Script Loading
+// =====================================================
+
+async function loadScript(src: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+        // Check if already loaded
+        if (document.querySelector(`script[src="${src}"]`)) {
+            resolve();
+            return;
+        }
+
+        const script = document.createElement('script');
+        script.src = src;
+        script.crossOrigin = 'anonymous';
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error(`Failed to load: ${src}`));
+        document.head.appendChild(script);
+    });
+}
+
+async function loadMediaPipe(): Promise<void> {
+    // Load MediaPipe scripts from CDN
+    await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js');
+    await loadScript('https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js');
+    console.log('[FaceDetector] MediaPipe scripts loaded');
+}
+
+// =====================================================
 // FaceDetector Class
 // =====================================================
 
 export class FaceDetector {
-    private faceMesh: FaceMesh | null = null;
-    private camera: Camera | null = null;
+    private faceMesh: any = null;
+    private camera: any = null;
     private videoElement: HTMLVideoElement | null = null;
     private callbacks: Set<DetectionCallback> = new Set();
     private isRunning = false;
@@ -72,9 +99,18 @@ export class FaceDetector {
     async init(videoElement: HTMLVideoElement): Promise<void> {
         this.videoElement = videoElement;
 
+        // Load MediaPipe from CDN
+        await loadMediaPipe();
+
+        // Access global FaceMesh from loaded script
+        const FaceMesh = (window as any).FaceMesh;
+        if (!FaceMesh) {
+            throw new Error('FaceMesh not loaded');
+        }
+
         // Initialize MediaPipe Face Mesh
         this.faceMesh = new FaceMesh({
-            locateFile: (file) => {
+            locateFile: (file: string) => {
                 return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
             }
         });
@@ -86,7 +122,7 @@ export class FaceDetector {
             minTrackingConfidence: 0.5
         });
 
-        this.faceMesh.onResults((results) => this.processResults(results));
+        this.faceMesh.onResults((results: any) => this.processResults(results));
 
         console.log('[FaceDetector] Initialized');
     }
@@ -97,6 +133,12 @@ export class FaceDetector {
     async start(): Promise<void> {
         if (!this.videoElement || !this.faceMesh) {
             throw new Error('FaceDetector not initialized');
+        }
+
+        // Access global Camera from loaded script
+        const Camera = (window as any).Camera;
+        if (!Camera) {
+            throw new Error('Camera utils not loaded');
         }
 
         this.camera = new Camera(this.videoElement, {
@@ -151,7 +193,7 @@ export class FaceDetector {
     // Processing
     // =====================================================
 
-    private processResults(results: Results): void {
+    private processResults(results: any): void {
         if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
             this.updateState({ ...this.lastState, faceDetected: false });
             return;
