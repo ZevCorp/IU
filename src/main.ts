@@ -433,23 +433,11 @@ function setupFaceDetection(face: ReturnType<typeof initializeFace>): void {
                 // Start gaze controller
                 gazeController.start();
 
-                // NEW LOGIC: "I'm being looked at!"
-                // When user looks at THIS device (center gaze), request the face if we don't have it
+                // Connect gaze to face transfer (simple fade, no lateral movement)
                 gazeController.setOnTransfer(() => {
-                    console.log(`[FaceDetection] User is looking at me!`);
-                    if (!faceTransfer.isFaceVisible()) {
-                        // I don't have the face - request it from the other device
-                        console.log(`[FaceDetection] Requesting face from other device`);
-                        getDeviceSync().requestFace();
-                    }
-                });
-
-                // Listen for face requests from other devices
-                // When another device says "I'm being looked at", send them the face
-                getDeviceSync().setOnFaceRequested(() => {
-                    console.log(`[FaceDetection] Other device wants the face`);
+                    console.log(`[FaceDetection] Gaze transfer triggered`);
                     if (faceTransfer.isFaceVisible()) {
-                        // I have the face - send it
+                        // Teleport face with simple fade (no slide animation)
                         faceTransfer.teleportFace();
                     }
                 });

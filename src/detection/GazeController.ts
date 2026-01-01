@@ -2,7 +2,7 @@
  * GazeController.ts
  * 
  * Monitors gaze direction and triggers actions:
- * - Sustained gaze at center (looking at screen) → Request face
+ * - Sustained gaze left/right → Transfer face
  * - Wink → Mirror to SVG face
  */
 
@@ -30,7 +30,7 @@ const DEFAULT_CONFIG: GazeControllerConfig = {
     winkMaxDuration: 500      // Max 500ms (otherwise it's just closed eyes)
 };
 
-type TransferCallback = () => void;
+type TransferCallback = (direction: 'left' | 'right') => void;
 type WinkCallback = (side: 'left' | 'right') => void;
 
 // =====================================================
@@ -132,12 +132,12 @@ export class GazeController {
             // Gaze changed - reset timer
             this.currentGaze = gaze;
             this.gazeStartTime = now;
-        } else if (gaze === 'center') {
-            // Looking at screen (center gaze) - check if held long enough
+        } else if (gaze !== 'center') {
+            // Same non-center gaze - check if held long enough
             const holdDuration = now - this.gazeStartTime;
 
             if (holdDuration >= this.config.gazeHoldDuration) {
-                this.triggerTransfer();
+                this.triggerTransfer(gaze as 'left' | 'right');
                 this.lastTransferTime = now;
                 this.resetGazeTracking();
             }
@@ -171,10 +171,10 @@ export class GazeController {
         this.gazeStartTime = 0;
     }
 
-    private triggerTransfer(): void {
-        console.log(`[GazeController] User is looking at me!`);
+    private triggerTransfer(direction: 'left' | 'right'): void {
+        console.log(`[GazeController] Transfer triggered: ${direction}`);
         if (this.onTransfer) {
-            this.onTransfer();
+            this.onTransfer(direction);
         }
     }
 

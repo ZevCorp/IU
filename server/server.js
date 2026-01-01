@@ -173,7 +173,6 @@ function handleMessage(client, message) {
         case 'transfer_complete':
         case 'transfer_cancel':
         case 'shared_state':
-        case 'request_face':
             // Broadcast to room
             broadcastToRoom(client, message);
             break;
