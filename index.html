@@ -87,7 +87,19 @@
       <span class="status-indicator"></span>
       <span class="status-text">Not connected</span>
     </div>
+
+    <h3>Face Detection</h3>
+    <div class="button-group">
+      <button id="btn-camera" class="state-btn">📷 Start Camera</button>
+    </div>
+    <div id="camera-status" class="connection-status">
+      <span class="status-indicator"></span>
+      <span class="status-text">Camera off</span>
+    </div>
   </div>
+
+  <!-- Hidden video element for camera -->
+  <video id="camera-video" style="display:none;" playsinline></video>
 
   <!-- Swipe hint overlay -->
   <div id="swipe-hint" class="swipe-hint hidden">

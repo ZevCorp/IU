@@ -11,6 +11,8 @@ import { getDeviceSync } from './sync/DeviceSync';
 import { getQRConnect } from './sync/QRConnect';
 import { getFaceTransfer } from './sync/FaceTransfer';
 import { initSharedState, getSharedState } from './sync/SharedState';
+import { getFaceDetector } from './detection/FaceDetector';
+import { getGazeController } from './detection/GazeController';
 import './styles/main.css';
 
 // =====================================================
@@ -42,6 +44,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // Initialize shared state (after DeviceSync is set up)
         setupSharedState(face);
 
+        // Set up face detection (camera-based gaze and wink)
+        setupFaceDetection(face);
+
         // Log available presets
         console.log('Available presets:', face.getPresets());
 
@@ -53,6 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         console.log('✅ Face initialized successfully!');
         console.log('The face is now alive with micro-expressions.');
+        console.log('📷 Click "Start Camera" for gaze-based transfer!');
         console.log('📱 Click "Scan QR" to connect your phone!');
 
     } catch (error) {
@@ -394,6 +400,96 @@ function checkConnectionParams(): void {
             updateConnectionStatus(true, 1);
         }, 500);
     }
+}
+
+// =====================================================
+// Face Detection (Camera-based)
+// =====================================================
+
+function setupFaceDetection(face: ReturnType<typeof initializeFace>): void {
+    const cameraBtn = document.getElementById('btn-camera');
+    const cameraStatus = document.getElementById('camera-status');
+    const videoElement = document.getElementById('camera-video') as HTMLVideoElement;
+
+    if (!cameraBtn || !videoElement) return;
+
+    const faceDetector = getFaceDetector();
+    const gazeController = getGazeController();
+    const faceTransfer = getFaceTransfer();
+
+    let cameraActive = false;
+
+    // Camera toggle button
+    cameraBtn.addEventListener('click', async () => {
+        if (!cameraActive) {
+            try {
+                cameraBtn.textContent = '⏳ Loading...';
+                cameraBtn.classList.add('active');
+
+                // Initialize and start face detector
+                await faceDetector.init(videoElement);
+                await faceDetector.start();
+
+                // Start gaze controller
+                gazeController.start();
+
+                // Connect gaze to face transfer
+                gazeController.setOnTransfer((direction) => {
+                    console.log(`[FaceDetection] Gaze transfer: ${direction}`);
+                    if (faceTransfer.isFaceVisible()) {
+                        // Transfer face in the direction of gaze
+                        const state = face.getState();
+                        faceTransfer['sendFace'](direction);
+                    }
+                });
+
+                // Connect wink to face animation
+                gazeController.setOnWink((side) => {
+                    console.log(`[FaceDetection] Wink: ${side}`);
+                    face.transitionTo('wink', 0.1);
+                    // Return to previous state after wink
+                    setTimeout(() => {
+                        const currentPreset = getSharedState().get('activePreset');
+                        face.transitionTo(currentPreset, 0.3);
+                    }, 300);
+                });
+
+                cameraActive = true;
+                cameraBtn.textContent = '📷 Stop Camera';
+                updateCameraStatus(true);
+
+            } catch (error) {
+                console.error('[FaceDetection] Failed to start:', error);
+                cameraBtn.textContent = '📷 Start Camera';
+                cameraBtn.classList.remove('active');
+                updateCameraStatus(false, 'Camera error');
+            }
+        } else {
+            // Stop camera
+            faceDetector.stop();
+            gazeController.stop();
+            cameraActive = false;
+            cameraBtn.textContent = '📷 Start Camera';
+            cameraBtn.classList.remove('active');
+            updateCameraStatus(false);
+        }
+    });
+
+    function updateCameraStatus(active: boolean, message?: string): void {
+        if (!cameraStatus) return;
+        const indicator = cameraStatus.querySelector('.status-indicator');
+        const text = cameraStatus.querySelector('.status-text');
+
+        if (active) {
+            indicator?.classList.add('connected');
+            if (text) text.textContent = 'Camera active - look left/right to transfer';
+        } else {
+            indicator?.classList.remove('connected');
+            if (text) text.textContent = message || 'Camera off';
+        }
+    }
+
+    console.log('[FaceDetection] Ready - click "Start Camera" to enable');
 }
 
 // =====================================================
