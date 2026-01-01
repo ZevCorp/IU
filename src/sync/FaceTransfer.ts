@@ -364,6 +364,71 @@ export class FaceTransfer {
     }
 
     /**
+     * Teleport face to another device with simple fade (no lateral movement)
+     * Used for gaze-based transfer
+     */
+    teleportFace(): void {
+        if (!this.faceGroup || !this.getCurrentState) return;
+        if (!this.faceVisible || this.isTransferring) return;
+
+        this.isTransferring = true;
+
+        // Get state and create a clean copy
+        const rawState = this.getCurrentState();
+        const state = this.cleanState(rawState);
+        const headTilt = state.headTilt || 0;
+
+        // Simple fade out animation (no lateral movement)
+        gsap.to(this.faceGroup, {
+            opacity: 0,
+            duration: 0.3,
+            ease: 'power2.in',
+            onComplete: () => {
+                this.faceVisible = false;
+                this.isTransferring = false;
+
+                // Send to other device (direction doesn't matter for teleport)
+                this.deviceSync.startTransfer('right', state);
+                this.deviceSync.completeTransfer();
+
+                if (this.onFaceHidden) {
+                    this.onFaceHidden();
+                }
+            }
+        });
+    }
+
+    /**
+     * Receive face with simple fade in (no lateral movement)
+     * Called when face is teleported via gaze
+     */
+    teleportReceive(state: FaceState): void {
+        if (!this.faceGroup) return;
+
+        this.isTransferring = true;
+        const headTilt = state.headTilt || 0;
+
+        // Set position (centered, not off-screen)
+        this.faceGroup.setAttribute('transform', `translate(200, 250) rotate(${headTilt})`);
+        this.faceGroup.style.opacity = '0';
+
+        // Simple fade in animation
+        gsap.to(this.faceGroup, {
+            opacity: 1,
+            duration: 0.3,
+            ease: 'power2.out',
+            onComplete: () => {
+                this.faceVisible = true;
+                this.isTransferring = false;
+
+                if (this.onFaceShown) {
+                    this.onFaceShown(state);
+                }
+            }
+        });
+    }
+
+    /**
      * Check if face is currently visible
      */
     isFaceVisible(): boolean {

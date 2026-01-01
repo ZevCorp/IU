@@ -433,12 +433,12 @@ function setupFaceDetection(face: ReturnType<typeof initializeFace>): void {
                 // Start gaze controller
                 gazeController.start();
 
-                // Connect gaze to face transfer
-                gazeController.setOnTransfer((direction) => {
-                    console.log(`[FaceDetection] Gaze transfer: ${direction}`);
+                // Connect gaze to face transfer (simple fade, no lateral movement)
+                gazeController.setOnTransfer(() => {
+                    console.log(`[FaceDetection] Gaze transfer triggered`);
                     if (faceTransfer.isFaceVisible()) {
-                        // Transfer face in the direction of gaze
-                        faceTransfer.sendFace(direction);
+                        // Teleport face with simple fade (no slide animation)
+                        faceTransfer.teleportFace();
                     }
                 });
 
