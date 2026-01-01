@@ -256,13 +256,16 @@ export class FaceTransfer {
         const rawState = this.getCurrentState();
         const state = this.cleanState(rawState);
 
+        // Preserve the head tilt during animation
+        const headTilt = state.headTilt || 0;
+
         // Calculate exit position
         const screenWidth = window.innerWidth;
         const exitX = direction === 'right' ? screenWidth : -screenWidth;
 
-        // Animate face sliding out
+        // Animate face sliding out while preserving rotation
         gsap.to(this.faceGroup, {
-            attr: { transform: `translate(${200 + exitX}, 250)` },
+            attr: { transform: `translate(${200 + exitX}, 250) rotate(${headTilt})` },
             opacity: 0,
             duration: this.config.slideDuration,
             ease: 'power2.in',
@@ -309,17 +312,20 @@ export class FaceTransfer {
 
         this.isTransferring = true;
 
+        // Preserve the head tilt from received state
+        const headTilt = state.headTilt || 0;
+
         // Calculate entry position (opposite of direction)
         const screenWidth = window.innerWidth;
         const entryX = direction === 'right' ? -screenWidth : screenWidth;
 
-        // Set initial position off-screen
-        this.faceGroup.setAttribute('transform', `translate(${200 + entryX}, 250)`);
+        // Set initial position off-screen with rotation preserved
+        this.faceGroup.setAttribute('transform', `translate(${200 + entryX}, 250) rotate(${headTilt})`);
         this.faceGroup.style.opacity = '0';
 
-        // Animate face sliding in
+        // Animate face sliding in while preserving rotation
         gsap.to(this.faceGroup, {
-            attr: { transform: 'translate(200, 250)' },
+            attr: { transform: `translate(200, 250) rotate(${headTilt})` },
             opacity: 1,
             duration: this.config.slideDuration,
             ease: 'power2.out',
