@@ -25,13 +25,19 @@ export interface SharedStateData {
 
 type SharedStateKey = keyof Omit<SharedStateData, 'lastUpdated'>;
 
+interface StateChangeEvent {
+    state: SharedStateData;
+    key: SharedStateKey;
+    isRemote: boolean;
+}
+
 // =====================================================
 // SharedState Class
 // =====================================================
 
 export class SharedState {
     private state: SharedStateData;
-    private listeners: Map<string, Set<(state: SharedStateData) => void>> = new Map();
+    private listeners: Map<string, Set<(event: StateChangeEvent) => void>> = new Map();
     private initialized = false;
 
     constructor() {
@@ -78,27 +84,32 @@ export class SharedState {
 
     /**
      * Set a specific property and broadcast to other devices
+     * @param broadcast - If false, only updates locally without broadcasting (used for receiving transfers)
      */
-    set<K extends SharedStateKey>(key: K, value: SharedStateData[K]): void {
+    set<K extends SharedStateKey>(key: K, value: SharedStateData[K], broadcast: boolean = true): void {
         if (this.state[key] === value) return;
 
         this.state[key] = value;
         this.state.lastUpdated = Date.now();
 
-        // Notify local listeners
-        this.notifyListeners(key);
+        // Only notify local listeners if NOT broadcasting (to avoid double-triggering)
+        // When broadcasting, the change is considered "local" and UI was already updated by the caller
+        if (!broadcast) {
+            this.notifyListeners(key, false);
+        }
 
         // Broadcast to other devices
-        this.broadcast({ [key]: value });
+        if (broadcast) {
+            this.broadcast({ [key]: value });
+        }
 
-        console.log(`[SharedState] Set ${key}:`, value);
+        console.log(`[SharedState] Set ${key}:`, value, broadcast ? '(broadcast)' : '(local only)');
     }
 
     /**
      * Apply state received from another device
      */
     private applyRemoteState(newState: Partial<SharedStateData>): void {
-        let changed = false;
         const keys = Object.keys(newState) as (keyof SharedStateData)[];
 
         for (const key of keys) {
@@ -106,13 +117,10 @@ export class SharedState {
             const value = newState[key];
             if (value !== undefined && this.state[key] !== value) {
                 (this.state as any)[key] = value;
-                changed = true;
-                this.notifyListeners(key as SharedStateKey);
+                this.state.lastUpdated = Date.now();
+                // Notify listeners that this is a REMOTE change - UI should update
+                this.notifyListeners(key as SharedStateKey, true);
             }
-        }
-
-        if (changed) {
-            this.state.lastUpdated = Date.now();
         }
     }
 
@@ -127,10 +135,12 @@ export class SharedState {
     /**
      * Subscribe to state changes
      * @param key - Property to listen to, or '*' for all changes
-     * @param callback - Function to call when state changes
+     * @param callback - Function to call when state changes. Receives event with isRemote flag.
+     *                   isRemote=true means UI should update to reflect the change.
+     *                   isRemote=false means the change came from local action (transfer receive).
      * @returns Unsubscribe function
      */
-    subscribe(key: SharedStateKey | '*', callback: (state: SharedStateData) => void): () => void {
+    subscribe(key: SharedStateKey | '*', callback: (event: StateChangeEvent) => void): () => void {
         if (!this.listeners.has(key)) {
             this.listeners.set(key, new Set());
         }
@@ -145,11 +155,13 @@ export class SharedState {
     /**
      * Notify listeners of a state change
      */
-    private notifyListeners(key: SharedStateKey): void {
+    private notifyListeners(key: SharedStateKey, isRemote: boolean): void {
+        const event: StateChangeEvent = { state: this.state, key, isRemote };
+
         // Notify specific key listeners
-        this.listeners.get(key)?.forEach(cb => cb(this.state));
+        this.listeners.get(key)?.forEach(cb => cb(event));
         // Notify wildcard listeners
-        this.listeners.get('*')?.forEach(cb => cb(this.state));
+        this.listeners.get('*')?.forEach(cb => cb(event));
     }
 }
 
