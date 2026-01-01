@@ -1,9 +1,8 @@
 /**
  * SharedState.ts
  * 
- * Manages shared state between connected devices.
- * Synchronizes theme, active preset, and other shared properties
- * via WebSocket through DeviceSync.
+ * Simple shared state between devices via WebSocket.
+ * Changes sync automatically - no dependency on face transfer.
  */
 
 import { getDeviceSync } from './DeviceSync';
@@ -13,55 +12,44 @@ import { getDeviceSync } from './DeviceSync';
 // =====================================================
 
 export interface SharedStateData {
-    /** Current theme: 'dark' or 'light' */
     theme: 'dark' | 'light';
-    /** Currently active face preset */
     activePreset: string;
-    /** Microexpressions enabled */
     microExpressionsEnabled: boolean;
-    /** Timestamp of last update */
-    lastUpdated: number;
 }
 
-type SharedStateKey = keyof Omit<SharedStateData, 'lastUpdated'>;
-
-interface StateChangeEvent {
-    state: SharedStateData;
-    key: SharedStateKey;
-    isRemote: boolean;
-}
+type StateKey = keyof SharedStateData;
+type RemoteChangeCallback<K extends StateKey> = (value: SharedStateData[K]) => void;
 
 // =====================================================
 // SharedState Class
 // =====================================================
 
 export class SharedState {
-    private state: SharedStateData;
-    private listeners: Map<string, Set<(event: StateChangeEvent) => void>> = new Map();
+    private state: SharedStateData = {
+        theme: 'dark',
+        activePreset: 'neutral',
+        microExpressionsEnabled: true
+    };
+
+    private remoteListeners: Map<StateKey, Set<RemoteChangeCallback<any>>> = new Map();
     private initialized = false;
 
-    constructor() {
-        // Default state
-        this.state = {
-            theme: 'dark',
-            activePreset: 'neutral',
-            microExpressionsEnabled: true,
-            lastUpdated: Date.now()
-        };
-    }
-
     /**
-     * Initialize shared state and connect to DeviceSync
+     * Initialize - connect to DeviceSync for remote changes
      */
     init(): void {
         if (this.initialized) return;
 
-        const deviceSync = getDeviceSync();
-
-        // Listen for shared state messages from other devices
-        deviceSync.setOnSharedStateChange((newState: Partial<SharedStateData>) => {
-            console.log('[SharedState] Received remote state:', newState);
-            this.applyRemoteState(newState);
+        getDeviceSync().setOnSharedStateChange((data: Partial<SharedStateData>) => {
+            // Apply each changed key and notify listeners
+            for (const key of Object.keys(data) as StateKey[]) {
+                const value = data[key];
+                if (value !== undefined && this.state[key] !== value) {
+                    (this.state as any)[key] = value;
+                    console.log(`[SharedState] Remote change: ${key} = ${value}`);
+                    this.notifyRemote(key, value);
+                }
+            }
         });
 
         this.initialized = true;
@@ -69,117 +57,56 @@ export class SharedState {
     }
 
     /**
-     * Get the current state
+     * Get current value
      */
-    getState(): SharedStateData {
-        return { ...this.state };
-    }
-
-    /**
-     * Get a specific property
-     */
-    get<K extends SharedStateKey>(key: K): SharedStateData[K] {
+    get<K extends StateKey>(key: K): SharedStateData[K] {
         return this.state[key];
     }
 
     /**
-     * Set a specific property and broadcast to other devices
-     * @param broadcast - If false, only updates locally without broadcasting (used for receiving transfers)
+     * Set value and broadcast to other devices
      */
-    set<K extends SharedStateKey>(key: K, value: SharedStateData[K], broadcast: boolean = true): void {
+    set<K extends StateKey>(key: K, value: SharedStateData[K]): void {
         if (this.state[key] === value) return;
 
         this.state[key] = value;
-        this.state.lastUpdated = Date.now();
-
-        // Only notify local listeners if NOT broadcasting (to avoid double-triggering)
-        // When broadcasting, the change is considered "local" and UI was already updated by the caller
-        if (!broadcast) {
-            this.notifyListeners(key, false);
-        }
+        console.log(`[SharedState] Local change: ${key} = ${value}`);
 
         // Broadcast to other devices
-        if (broadcast) {
-            this.broadcast({ [key]: value });
+        getDeviceSync().broadcastSharedState({ [key]: value });
+    }
+
+    /**
+     * Listen for REMOTE changes only (from other devices)
+     * Use this to update UI when remote device makes a change
+     */
+    onRemoteChange<K extends StateKey>(key: K, callback: RemoteChangeCallback<K>): () => void {
+        if (!this.remoteListeners.has(key)) {
+            this.remoteListeners.set(key, new Set());
         }
+        this.remoteListeners.get(key)!.add(callback);
 
-        console.log(`[SharedState] Set ${key}:`, value, broadcast ? '(broadcast)' : '(local only)');
+        return () => this.remoteListeners.get(key)?.delete(callback);
     }
 
-    /**
-     * Apply state received from another device
-     */
-    private applyRemoteState(newState: Partial<SharedStateData>): void {
-        const keys = Object.keys(newState) as (keyof SharedStateData)[];
-
-        for (const key of keys) {
-            if (key === 'lastUpdated') continue;
-            const value = newState[key];
-            if (value !== undefined && this.state[key] !== value) {
-                (this.state as any)[key] = value;
-                this.state.lastUpdated = Date.now();
-                // Notify listeners that this is a REMOTE change - UI should update
-                this.notifyListeners(key as SharedStateKey, true);
-            }
-        }
-    }
-
-    /**
-     * Broadcast state change to other devices
-     */
-    private broadcast(partialState: Partial<SharedStateData>): void {
-        const deviceSync = getDeviceSync();
-        deviceSync.broadcastSharedState(partialState);
-    }
-
-    /**
-     * Subscribe to state changes
-     * @param key - Property to listen to, or '*' for all changes
-     * @param callback - Function to call when state changes. Receives event with isRemote flag.
-     *                   isRemote=true means UI should update to reflect the change.
-     *                   isRemote=false means the change came from local action (transfer receive).
-     * @returns Unsubscribe function
-     */
-    subscribe(key: SharedStateKey | '*', callback: (event: StateChangeEvent) => void): () => void {
-        if (!this.listeners.has(key)) {
-            this.listeners.set(key, new Set());
-        }
-        this.listeners.get(key)!.add(callback);
-
-        // Return unsubscribe function
-        return () => {
-            this.listeners.get(key)?.delete(callback);
-        };
-    }
-
-    /**
-     * Notify listeners of a state change
-     */
-    private notifyListeners(key: SharedStateKey, isRemote: boolean): void {
-        const event: StateChangeEvent = { state: this.state, key, isRemote };
-
-        // Notify specific key listeners
-        this.listeners.get(key)?.forEach(cb => cb(event));
-        // Notify wildcard listeners
-        this.listeners.get('*')?.forEach(cb => cb(event));
+    private notifyRemote<K extends StateKey>(key: K, value: SharedStateData[K]): void {
+        this.remoteListeners.get(key)?.forEach(cb => cb(value));
     }
 }
 
 // =====================================================
-// Singleton Export
+// Singleton
 // =====================================================
 
-let sharedStateInstance: SharedState | null = null;
+let instance: SharedState | null = null;
 
 export function getSharedState(): SharedState {
-    if (!sharedStateInstance) {
-        sharedStateInstance = new SharedState();
-    }
-    return sharedStateInstance;
+    if (!instance) instance = new SharedState();
+    return instance;
 }
 
 export function initSharedState(): SharedState {
-    const sharedState = getSharedState();
-    sharedState.init();
-    return sharedState;
+    const s = getSharedState();
+    s.init();
+    return s;
 }

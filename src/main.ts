@@ -210,33 +210,24 @@ function setupMenuToggle(): void {
 function setupSharedState(face: ReturnType<typeof initializeFace>): void {
     const sharedState = initSharedState();
 
-    // Listen for REMOTE state changes and update local UI
-    // Only apply when isRemote=true (change came from another device)
-    sharedState.subscribe('theme', (event) => {
-        if (event.isRemote) {
-            console.log('[SharedState] Applying remote theme:', event.state.theme);
-            applyTheme(event.state.theme);
+    // Listen for REMOTE changes - update UI when other device makes changes
+    sharedState.onRemoteChange('theme', (theme) => {
+        applyTheme(theme);
+    });
+
+    sharedState.onRemoteChange('activePreset', (preset) => {
+        applyPreset(face, preset);
+    });
+
+    sharedState.onRemoteChange('microExpressionsEnabled', (enabled) => {
+        const toggle = document.getElementById('toggle-micro') as HTMLInputElement;
+        if (toggle) {
+            toggle.checked = enabled;
+            face.setMicroExpressionsEnabled(enabled);
         }
     });
 
-    sharedState.subscribe('activePreset', (event) => {
-        if (event.isRemote) {
-            console.log('[SharedState] Applying remote preset:', event.state.activePreset);
-            applyPreset(face, event.state.activePreset);
-        }
-    });
-
-    sharedState.subscribe('microExpressionsEnabled', (event) => {
-        if (event.isRemote) {
-            const toggle = document.getElementById('toggle-micro') as HTMLInputElement;
-            if (toggle && toggle.checked !== event.state.microExpressionsEnabled) {
-                toggle.checked = event.state.microExpressionsEnabled;
-                face.setMicroExpressionsEnabled(event.state.microExpressionsEnabled);
-            }
-        }
-    });
-
-    console.log('[SharedState] Listening for remote state changes');
+    console.log('[SharedState] Ready - state syncs automatically');
 }
 
 // =====================================================
@@ -337,37 +328,13 @@ function setupFaceTransfer(face: ReturnType<typeof initializeFace>): void {
             console.log('👋 Face transferred to another device');
         });
 
-        // When face is received
+        // When face is received - just apply the visual state
+        // Preset is already synced via SharedState
         faceTransfer.setOnFaceShown((state) => {
             console.log('🎉 Face received from another device');
             face.setState(state);
-
-            // Update SharedState to match the received face state
-            // Use broadcast=false since we're receiving, not initiating
-            // This keeps our local SharedState in sync without re-broadcasting
-            const presetName = detectPresetFromState(state);
-            if (presetName) {
-                getSharedState().set('activePreset', presetName, false);
-                // Update button UI to match
-                document.querySelectorAll('.state-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`btn-${presetName}`);
-                if (btn) btn.classList.add('active');
-            }
         });
     }
-}
-
-/**
- * Try to detect which preset matches the given face state
- * This is a simple heuristic based on key parameters
- */
-function detectPresetFromState(state: import('./face/FaceState').FaceState): string | null {
-    // Check mouth curve to detect smile vs neutral
-    if (state.mouthCurve > 0.3) return 'smile';
-    if (state.mouthCurve < -0.2) return 'thinking';
-    if (state.leftEyeOpenness < 0.2 && state.rightEyeOpenness < 0.2) return 'wink';
-    if (state.rightBrowHeight > 0.3) return 'attention';
-    return 'neutral';
 }
 
 function updateConnectionStatus(connected: boolean, deviceCount: number): void {
