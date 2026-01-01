@@ -24,7 +24,7 @@ interface DeviceInfo {
 }
 
 interface SyncMessage {
-    type: 'state' | 'transfer_start' | 'transfer_complete' | 'transfer_cancel' | 'ping' | 'pong' | 'register' | 'shared_state';
+    type: 'state' | 'transfer_start' | 'transfer_complete' | 'transfer_cancel' | 'ping' | 'pong' | 'register' | 'shared_state' | 'request_face';
     deviceId: string;
     payload?: unknown;
     timestamp: number;
@@ -66,6 +66,7 @@ export class DeviceSync {
     private onTransferProgress: ((progress: number, direction: TransferDirection) => void) | null = null;
     private onConnectionChange: ((connected: boolean, devices: DeviceInfo[]) => void) | null = null;
     private onSharedStateChange: ((state: Record<string, unknown>) => void) | null = null;
+    private onFaceRequested: (() => void) | null = null;
 
     // Current face state (to sync)
     private _currentFaceState: FaceState | null = null;
@@ -320,6 +321,9 @@ export class DeviceSync {
             case 'shared_state':
                 this.handleSharedState(message);
                 break;
+            case 'request_face':
+                this.handleFaceRequest(message);
+                break;
         }
     }
 
@@ -354,6 +358,15 @@ export class DeviceSync {
 
         if (this.onSharedStateChange) {
             this.onSharedStateChange(payload);
+        }
+    }
+
+    private handleFaceRequest(_message: SyncMessage): void {
+        console.log('[DeviceSync] Face requested by another device');
+
+        // Notify listener that another device wants the face
+        if (this.onFaceRequested) {
+            this.onFaceRequested();
         }
     }
 
@@ -541,6 +554,27 @@ export class DeviceSync {
             timestamp: Date.now()
         });
     }
+
+    /**
+     * Request the face from the device that has it
+     * Called when this device detects the user is looking at it
+     */
+    requestFace(): void {
+        console.log('[DeviceSync] Requesting face from other device');
+        this.sendMessage({
+            type: 'request_face',
+            deviceId: this.deviceId,
+            timestamp: Date.now()
+        });
+    }
+
+    /**
+     * Set callback for when another device requests the face
+     */
+    setOnFaceRequested(callback: () => void): void {
+        this.onFaceRequested = callback;
+    }
+
 
     // =====================================================
     // Getters
