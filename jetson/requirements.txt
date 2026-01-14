@@ -1,0 +1,19 @@
+# HRM Service Dependencies for Jetson Orin Nano
+# Install with: pip install -r requirements.txt
+
+# WebSocket client
+websockets>=12.0
+
+# Async support
+asyncio-throttle>=1.0.2
+
+# NumPy for array operations
+numpy>=1.24.0
+
+# PyTorch for HRM model (use CUDA version for Jetson)
+# Install separately: pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+# Or for Jetson: follow NVIDIA's PyTorch installation guide
+
+# Optional: For testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0

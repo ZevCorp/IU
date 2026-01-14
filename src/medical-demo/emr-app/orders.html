@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedEMR - Órdenes Médicas</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                </svg>
+                MedEMR
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="dashboard.html" class="nav-item" id="nav-dashboard">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="9" />
+                        <rect x="14" y="3" width="7" height="5" />
+                        <rect x="14" y="12" width="7" height="9" />
+                        <rect x="3" y="16" width="7" height="5" />
+                    </svg>
+                    Dashboard
+                </a>
+
+                <a href="patients.html" class="nav-item" id="nav-patients">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                        <circle cx="9" cy="7" r="4" />
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                    </svg>
+                    Pacientes
+                </a>
+
+                <a href="orders.html" class="nav-item active" id="nav-orders">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="16" y1="13" x2="8" y2="13" />
+                        <line x1="16" y1="17" x2="8" y2="17" />
+                        <polyline points="10 9 9 9 8 9" />
+                    </svg>
+                    Órdenes Médicas
+                </a>
+            </nav>
+
+            <div class="nav-item" id="logoutBtn" style="margin-top: auto;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                    <polyline points="16 17 21 12 16 7" />
+                    <line x1="21" y1="12" x2="9" y2="12" />
+                </svg>
+                Cerrar Sesión
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="header">
+                <h1 class="header-title">Órdenes Médicas</h1>
+                <div class="header-actions">
+                    <button class="btn btn-primary" id="newOrderBtn">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <line x1="12" y1="5" x2="12" y2="19" />
+                            <line x1="5" y1="12" x2="19" y2="12" />
+                        </svg>
+                        Nueva Orden
+                    </button>
+                </div>
+            </header>
+
+            <div class="content">
+                <!-- Order Type Selection -->
+                <div class="card" style="margin-bottom: 1.5rem;" id="orderTypeCard">
+                    <div class="card-header">
+                        <h2 class="card-title">Seleccionar Tipo de Orden</h2>
+                    </div>
+                    <div class="card-body">
+                        <div class="order-type-grid">
+                            <div class="order-type-btn" id="orderTypeLab" data-type="lab">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path
+                                        d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2v-4M9 21H5a2 2 0 0 1-2-2v-4" />
+                                </svg>
+                                <div>Laboratorio</div>
+                            </div>
+
+                            <div class="order-type-btn" id="orderTypeImaging" data-type="imaging">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                                    <circle cx="8.5" cy="8.5" r="1.5" />
+                                    <polyline points="21 15 16 10 5 21" />
+                                </svg>
+                                <div>Imagenología</div>
+                            </div>
+
+                            <div class="order-type-btn" id="orderTypeMedication" data-type="medication">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10.5 20.5L3.5 13.5a4.95 4.95 0 0 1 7-7l7 7a4.95 4.95 0 0 1-7 7z" />
+                                    <path d="M8.5 8.5l7 7" />
+                                </svg>
+                                <div>Medicamento</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Order Form (Hidden initially) -->
+                <div class="card" style="margin-bottom: 1.5rem; display: none;" id="orderFormCard">
+                    <div class="card-header">
+                        <h2 class="card-title" id="orderFormTitle">Nueva Orden</h2>
+                        <button class="btn btn-secondary" id="cancelOrderBtn">Cancelar</button>
+                    </div>
+                    <div class="card-body">
+                        <form class="order-form" id="orderForm">
+                            <div class="form-group">
+                                <label class="form-label" for="patientSelect">Paciente</label>
+                                <select id="patientSelect" class="form-control">
+                                    <option value="">Seleccionar paciente...</option>
+                                    <option value="1">María López - 1234567890</option>
+                                    <option value="2">Carlos Rodríguez - 0987654321</option>
+                                    <option value="3">Ana Martínez - 5678901234</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group" id="labTestsGroup">
+                                <label class="form-label">Exámenes de Laboratorio</label>
+                                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                    <label><input type="checkbox" id="test-hemograma"> Hemograma Completo</label>
+                                    <label><input type="checkbox" id="test-glucosa"> Glucosa en Ayunas</label>
+                                    <label><input type="checkbox" id="test-creatinina"> Creatinina</label>
+                                    <label><input type="checkbox" id="test-lipidos"> Perfil Lipídico</label>
+                                    <label><input type="checkbox" id="test-orina"> Parcial de Orina</label>
+                                </div>
+                            </div>
+
+                            <div class="form-group" id="imagingTypeGroup" style="display: none;">
+                                <label class="form-label" for="imagingType">Tipo de Imagen</label>
+                                <select id="imagingType" class="form-control">
+                                    <option value="">Seleccionar...</option>
+                                    <option value="xray">Rayos X</option>
+                                    <option value="ct">Tomografía (CT)</option>
+                                    <option value="mri">Resonancia Magnética (MRI)</option>
+                                    <option value="ultrasound">Ecografía</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group" id="medicationGroup" style="display: none;">
+                                <label class="form-label" for="medicationName">Medicamento</label>
+                                <input type="text" id="medicationName" class="form-control"
+                                    placeholder="Nombre del medicamento">
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label" for="orderNotes">Indicaciones</label>
+                                <textarea id="orderNotes" class="form-control" rows="3"
+                                    placeholder="Indicaciones especiales..."></textarea>
+                            </div>
+
+                            <div class="form-group">
+                                <label class="form-label" for="orderPriority">Prioridad</label>
+                                <select id="orderPriority" class="form-control">
+                                    <option value="normal">Normal</option>
+                                    <option value="urgent">Urgente</option>
+                                    <option value="stat">STAT (Inmediato)</option>
+                                </select>
+                            </div>
+
+                            <button type="submit" class="btn btn-success" id="submitOrderBtn">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <polyline points="20 6 9 17 4 12" />
+                                </svg>
+                                Crear Orden
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Recent Orders -->
+                <div class="card">
+                    <div class="card-header">
+                        <h2 class="card-title">Órdenes Recientes</h2>
+                    </div>
+                    <div class="card-body" style="padding: 0;">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Orden #</th>
+                                    <th>Paciente</th>
+                                    <th>Tipo</th>
+                                    <th>Descripción</th>
+                                    <th>Fecha</th>
+                                    <th>Estado</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr id="order-row-1">
+                                    <td><strong>ORD-2026-001</strong></td>
+                                    <td>María López</td>
+                                    <td>Laboratorio</td>
+                                    <td>Hemograma, Glucosa</td>
+                                    <td>14 Ene 2026</td>
+                                    <td><span class="badge badge-warning">Pendiente</span></td>
+                                </tr>
+                                <tr id="order-row-2">
+                                    <td><strong>ORD-2026-002</strong></td>
+                                    <td>Carlos Rodríguez</td>
+                                    <td>Imagenología</td>
+                                    <td>Rayos X Tórax</td>
+                                    <td>13 Ene 2026</td>
+                                    <td><span class="badge badge-success">Completada</span></td>
+                                </tr>
+                                <tr id="order-row-3">
+                                    <td><strong>ORD-2026-003</strong></td>
+                                    <td>Ana Martínez</td>
+                                    <td>Medicamento</td>
+                                    <td>Ibuprofeno 400mg</td>
+                                    <td>12 Ene 2026</td>
+                                    <td><span class="badge badge-info">Dispensada</span></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
