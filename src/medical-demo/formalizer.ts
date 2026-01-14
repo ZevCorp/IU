@@ -4,15 +4,26 @@
  */
 
 import type { Page } from 'playwright';
-import { createHash } from 'crypto';
 import type {
     UIElement,
     UINode,
     UIGraph,
     UIGraphJSON,
-    UIGrid,
-    GridToken
-} from './types';
+    UIGrid
+} from './types.js';
+import { GridToken } from './types.js';
+
+/**
+ * Simple hash function (djb2 algorithm) - no Node crypto dependency
+ */
+function simpleHash(str: string): string {
+    let hash = 5381;
+    for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) + hash) + str.charCodeAt(i);
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(16).padStart(8, '0').substring(0, 16);
+}
 
 // ============================================
 // DOM Normalization
@@ -83,10 +94,7 @@ export async function normalizeDOM(page: Page): Promise<string> {
  * Generates a unique hash for a DOM state
  */
 export function hashState(normalizedDOM: string): string {
-    return createHash('sha256')
-        .update(normalizedDOM)
-        .digest('hex')
-        .substring(0, 16); // Truncate for readability
+    return simpleHash(normalizedDOM);
 }
 
 /**
