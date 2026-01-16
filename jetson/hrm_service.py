@@ -33,7 +33,7 @@ from websockets.client import WebSocketClientProtocol
 # Configuration
 # ============================================
 
-DEFAULT_SERVER = os.environ.get('RENDER_WS_URL', 'ws://localhost:3001')
+DEFAULT_SERVER = os.environ.get('RENDER_WS_URL', 'wss://iu-rw9m.onrender.com')
 JETSON_SECRET = os.environ.get('JETSON_SECRET', 'dev-secret-change-in-prod')
 RECONNECT_DELAY = 5  # seconds
 PING_INTERVAL = 25   # seconds
