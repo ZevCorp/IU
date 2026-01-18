@@ -103,10 +103,23 @@ const httpServer = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server: httpServer });
 
 // =====================================================
+// Jetson Bridge Integration
+// =====================================================
+
+import { jetsonBridge } from './jetson-bridge.js';
+
+// =====================================================
 // WebSocket Handlers
 // =====================================================
 
 wss.on('connection', (ws, req) => {
+    // FIRST: Check if this is a Jetson connection
+    if (jetsonBridge.handleConnection(ws, req)) {
+        // This was a Jetson connection, handled by the bridge
+        return;
+    }
+
+    // NOT a Jetson connection, handle as normal client
     const clientIp = req.socket.remoteAddress;
     console.log(`[Server] New connection from ${clientIp}`);
 
