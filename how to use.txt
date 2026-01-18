@@ -1,0 +1,3 @@
+para testear el flujo completo con medical online:
+
+desde windows /IU: npx tsx src/medical-demo/hrm-controller.ts 
