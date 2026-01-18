@@ -1,18 +1,24 @@
-# HRM Service Dependencies for Jetson Orin Nano
-# Install with: pip install -r requirements.txt
+# HRM Service Dependencies for Jetson Orin Nano Super Dev Kit
+# 
+# IMPORTANT: Install PyTorch for Jetson FIRST (before this file):
+#   pip3 install torch torchvision --extra-index-url https://developer.download.nvidia.com/compute/pytorch/whl/cu118
+#
+# Then install these dependencies:
+#   pip install -r requirements.txt
 
 # WebSocket client
 websockets>=12.0
 
-# Async support
-asyncio-throttle>=1.0.2
+# HuggingFace for model download
+huggingface_hub>=0.20.0
+transformers>=4.36.0
 
 # NumPy for array operations
 numpy>=1.24.0
 
-# PyTorch for HRM model (use CUDA version for Jetson)
-# Install separately: pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
-# Or for Jetson: follow NVIDIA's PyTorch installation guide
+# Flash Attention (for Ampere/Orin GPUs)
+# Install separately: pip install flash-attn --no-build-isolation
+# OR for newer GPUs: install from source
 
 # Optional: For testing
 pytest>=7.0.0
