@@ -199,8 +199,74 @@ function handleMessage(client, message) {
             });
             break;
 
+        case 'navigation_request':
+            // Handle HRM navigation request
+            handleNavigationRequest(client, message);
+            break;
+
         default:
             console.log(`[Server] Unknown message type: ${type}`);
+    }
+}
+
+/**
+ * Handle navigation request from web client
+ * Forwards to Jetson HRM for processing
+ */
+async function handleNavigationRequest(client, message) {
+    const { requestId, payload } = message;
+
+    console.log(`[Server] Navigation request: ${requestId}`);
+    console.log(`  From: ${payload.currentScreen} → To: ${payload.targetScreen}`);
+
+    try {
+        // Check if Jetson is connected
+        if (!jetsonBridge.isConnected()) {
+            console.error('[Server] Jetson not connected, cannot process navigation');
+            send(client.ws, {
+                type: 'navigation_result',
+                requestId,
+                payload: {
+                    success: false,
+                    error: 'Jetson HRM not connected'
+                }
+            });
+            return;
+        }
+
+        // Extract grid from UI state
+        const grid = payload.uiState?.grid || [];
+        const width = payload.uiState?.width || 0;
+        const height = payload.uiState?.height || 0;
+
+        console.log(`[Server] Forwarding to Jetson: ${grid.length} tokens (${width}x${height})`);
+
+        // Send to Jetson for HRM processing
+        const solution = await jetsonBridge.solve(grid, width, height);
+
+        console.log(`[Server] Jetson returned path: ${solution.path?.length || 0} steps`);
+
+        // Send result back to client
+        send(client.ws, {
+            type: 'navigation_result',
+            requestId,
+            payload: {
+                success: solution.success,
+                path: solution.path,
+                inferenceTimeMs: solution.inferenceTimeMs
+            }
+        });
+
+    } catch (error) {
+        console.error('[Server] Navigation request failed:', error);
+        send(client.ws, {
+            type: 'navigation_result',
+            requestId,
+            payload: {
+                success: false,
+                error: error.message
+            }
+        });
     }
 }
 
