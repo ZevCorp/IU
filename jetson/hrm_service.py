@@ -138,7 +138,7 @@ class HRMModel:
             checkpoint_dir = download_checkpoint(self.model_id)
             self.checkpoint_path = checkpoint_dir
             
-            # Find checkpoint file (usually named like "checkpoint" or "step_XXXXX")
+            # Find checkpoint file
             checkpoint_files = []
             for f in os.listdir(checkpoint_dir):
                 fpath = os.path.join(checkpoint_dir, f)
@@ -160,52 +160,59 @@ class HRMModel:
             with open(config_path, 'r') as f:
                 config_dict = yaml.safe_load(f)
             
-            logger.info(f"Loaded config: arch={config_dict.get('arch', {}).get('name', 'unknown')}")
+            arch_name = config_dict.get('arch', {}).get('name', 'unknown')
+            logger.info(f"Loaded config: arch={arch_name}")
             
-            # Import HRM modules (requires HRM in PYTHONPATH)
+            # Import model directly (bypass pretrain.py to avoid training deps)
             try:
                 from utils.functions import load_model_class
-                from pretrain import PretrainConfig, init_train_state, create_dataloader
-                from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
             except ImportError as e:
-                logger.error(f"Failed to import HRM modules: {e}")
-                logger.error("Make sure HRM repo is cloned and in PYTHONPATH")
+                logger.error(f"Failed to import HRM utils: {e}")
                 raise
             
-            # Create config
-            self.config = PretrainConfig(**config_dict)
-            
-            # Create a minimal metadata for model initialization
-            # This is derived from the checkpoint config
+            # Get arch config for model instantiation
             arch_config = config_dict.get('arch', {})
             
-            # Create metadata placeholder - we need this for init_train_state
-            class MinimalMetadata:
-                def __init__(self, config):
-                    self.vocab_size = config.get('vocab_size', 4)  # 0=wall, 1=path, 2=start, 3=target for maze
-                    self.seq_len = config.get('seq_len', 900)  # 30x30 = 900
-                    self.num_puzzle_identifiers = config.get('num_puzzle_identifiers', 1)
-                    self.total_groups = 1
-                    self.mean_puzzle_examples = 1
+            # Build model config dict
+            model_config = {
+                **{k: v for k, v in arch_config.items() if k not in ['name', 'loss']},
+                'batch_size': 1,  # Inference batch size
+                'vocab_size': arch_config.get('vocab_size', 4),
+                'seq_len': arch_config.get('seq_len', 900),
+                'num_puzzle_identifiers': arch_config.get('num_puzzle_identifiers', 1),
+                'causal': False
+            }
             
-            metadata = MinimalMetadata(arch_config)
+            # Load model class
+            model_cls = load_model_class(arch_name)
             
-            # Initialize model using HRM's own loading mechanism
-            train_state = init_train_state(self.config, metadata, world_size=1)
+            # Instantiate model
+            logger.info(f"Instantiating model: {arch_name}")
+            with torch.device('cuda' if torch.cuda.is_available() else 'cpu'):
+                self.model = model_cls(model_config)
             
             # Load checkpoint weights
             logger.info(f"Loading model weights from: {checkpoint_file}")
             state_dict = torch.load(checkpoint_file, map_location=self.device)
             
-            # Handle torch.compile wrapped models
-            try:
-                train_state.model.load_state_dict(state_dict, assign=True)
-            except:
-                # Remove _orig_mod. prefix if present (from torch.compile)
-                clean_state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
-                train_state.model.load_state_dict(clean_state_dict, assign=True)
+            # Clean state dict - remove loss head and _orig_mod prefixes
+            clean_state_dict = {}
+            for k, v in state_dict.items():
+                # Remove _orig_mod. prefix (from torch.compile)
+                k = k.removeprefix("_orig_mod.")
+                # Remove model. prefix if loading into unwrapped model
+                if k.startswith("model."):
+                    k = k[6:]  # Remove "model."
+                clean_state_dict[k] = v
             
-            self.model = train_state.model
+            # Try to load weights
+            try:
+                self.model.load_state_dict(clean_state_dict, strict=False)
+            except Exception as load_err:
+                logger.warning(f"Partial weight loading: {load_err}")
+                # Try with original state dict
+                self.model.load_state_dict(state_dict, strict=False)
+            
             self.model.to(self.device)
             self.model.eval()
             

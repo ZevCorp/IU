@@ -86,7 +86,8 @@ pip install --quiet \
     coolname>=2.2.0 \
     pydantic>=2.0.0 \
     omegaconf>=2.3.0 \
-    hydra-core>=1.3.0
+    hydra-core>=1.3.0 \
+    wandb
 
 echo -e "${GREEN}✓ Dependencies installed${NC}"
 
