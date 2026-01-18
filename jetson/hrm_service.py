@@ -293,8 +293,21 @@ class HRMModel:
         import torch
         
         try:
+            # The model was trained with seq_len=900 (30x30 grids)
+            # We need to pad the input to match this expected size
+            MODEL_SEQ_LEN = 900  # 30x30
+            MODEL_GRID_SIZE = 30
+            
+            actual_seq_len = len(grid)
+            
+            # Pad input to MODEL_SEQ_LEN with zeros (walls)
+            if actual_seq_len < MODEL_SEQ_LEN:
+                padded_grid = grid + [0] * (MODEL_SEQ_LEN - actual_seq_len)
+            else:
+                padded_grid = grid[:MODEL_SEQ_LEN]  # Truncate if larger (shouldn't happen)
+            
             # Prepare input tensor in the format HRM expects
-            input_tensor = torch.tensor(grid, dtype=torch.long).unsqueeze(0).to(self.device)
+            input_tensor = torch.tensor(padded_grid, dtype=torch.long).unsqueeze(0).to(self.device)
             
             # HRM uses puzzle_identifiers for identifying which puzzle this is
             # For inference, we use 0
@@ -319,8 +332,11 @@ class HRMModel:
                         break
                 
                 # Get output logits
-                logits = outputs["logits"]  # Shape: (batch, seq_len, vocab_size)
-                predictions = logits.argmax(dim=-1)[0].cpu().numpy()  # Shape: (seq_len,)
+                logits = outputs["logits"]  # Shape: (batch, seq_len=900, vocab_size)
+                predictions = logits.argmax(dim=-1)[0].cpu().numpy()  # Shape: (900,)
+            
+            # Extract only the relevant portion of predictions (original grid size)
+            predictions = predictions[:actual_seq_len]
             
             # Reshape predictions to grid
             output_grid = predictions.reshape(height, width)
