@@ -16,6 +16,10 @@ PARENT_DIR="$(dirname "$SCRIPT_DIR")"
 export PATH="/usr/local/cuda/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
 
+# Add local flash_attn compatibility layer FIRST (before any other paths)
+# This provides PyTorch-native attention without requiring flash-attn compilation
+export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH}"
+
 # Add HRM to PYTHONPATH
 export PYTHONPATH="${SCRIPT_DIR}/HRM:${PYTHONPATH}"
 
