@@ -1,47 +1,42 @@
 #!/bin/bash
 # ==============================================================================
-# Run HRM Service with proper PYTHONPATH
+# Run HRM Service
 # ==============================================================================
 #
-# This script ensures HRM repository is in PYTHONPATH before running the service.
-# HRM is NOT a pip-installable package - it must be available as a module path.
-#
-# Usage:
-#   ./run_hrm_service.sh [options]
-#
-# Options:
-#   --server URL     WebSocket server URL (default: wss://iu-rw9m.onrender.com)
-#   --bfs-only       Use BFS fallback (skip HRM model loading)
-#   --test           Test connection only
-#   --help           Show help
+# Uses the parent directory's venv (~/IU/.venv) which should have:
+# - PyTorch with CUDA (inherited from system via --system-site-packages)
+# - websockets, huggingface_hub, etc.
 #
 # ==============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Add CUDA to path
+export PATH="/usr/local/cuda/bin:${PATH}"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
 
 # Add HRM to PYTHONPATH
-if [ -d "${SCRIPT_DIR}/HRM" ]; then
-    export PYTHONPATH="${SCRIPT_DIR}/HRM:${PYTHONPATH}"
-    echo "[INFO] Added HRM to PYTHONPATH: ${SCRIPT_DIR}/HRM"
-else
-    echo "[WARNING] HRM directory not found at ${SCRIPT_DIR}/HRM"
-    echo "[WARNING] Run setup.sh first or clone HRM manually:"
-    echo "  git clone https://github.com/sapientinc/HRM.git ${SCRIPT_DIR}/HRM"
-fi
+export PYTHONPATH="${SCRIPT_DIR}/HRM:${PYTHONPATH}"
 
-# Activate virtual environment if it exists
-if [ -f "${SCRIPT_DIR}/.venv/bin/activate" ]; then
+# Activate parent venv (~/IU/.venv) if exists, otherwise try local
+if [ -f "${PARENT_DIR}/.venv/bin/activate" ]; then
+    echo "[INFO] Using parent venv: ${PARENT_DIR}/.venv"
+    source "${PARENT_DIR}/.venv/bin/activate"
+elif [ -f "${SCRIPT_DIR}/.venv/bin/activate" ]; then
+    echo "[INFO] Using local venv: ${SCRIPT_DIR}/.venv"
     source "${SCRIPT_DIR}/.venv/bin/activate"
-    echo "[INFO] Activated virtual environment"
+else
+    echo "[WARNING] No venv found, using system Python"
 fi
 
-# Set CUDA paths if not already set
-if [ -d "/usr/local/cuda" ]; then
-    export PATH="/usr/local/cuda/bin:${PATH}"
-    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
-fi
+# Quick verification
+echo "[INFO] Python: $(which python3)"
+python3 -c "import torch; print(f'[INFO] PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>/dev/null || echo "[WARNING] PyTorch not available"
 
-# Run the HRM service
+echo ""
 echo "[INFO] Starting HRM Service..."
 echo "=============================================="
+
+# Run service
 python3 "${SCRIPT_DIR}/hrm_service.py" "$@"

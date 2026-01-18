@@ -3,265 +3,203 @@
 # HRM Service Setup Script - Jetson Orin Nano Super Dev Kit
 # ==============================================================================
 #
-# IMPORTANT: HRM is NOT a pip-installable package!
-# This script properly sets up HRM by:
-# 1. Cloning the HRM repository 
-# 2. Installing dependencies
-# 3. Adding HRM to PYTHONPATH
+# Prerequisites:
+#   - PyTorch with CUDA installed at system level
+#   - venv created with: python3 -m venv --system-site-packages .venv
 #
 # Usage:
-#   chmod +x setup.sh
+#   source .venv/bin/activate
 #   ./setup.sh
 #
 # ==============================================================================
 
-set -e  # Exit on error
+set -e
 
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+echo ""
 echo "=========================================="
 echo "  HRM Service Setup - Jetson Orin Nano"
 echo "=========================================="
 echo ""
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-# Check if running on Jetson
-if [ -f /etc/nv_tegra_release ]; then
-    echo -e "${GREEN}✓ Detected Jetson device${NC}"
-    cat /etc/nv_tegra_release
-else
-    echo -e "${YELLOW}⚠ Warning: Not running on Jetson. Some optimizations may not work.${NC}"
-fi
-
-echo ""
-
 # ==============================================================================
-# Step 1: Check/Install CUDA
+# Step 1: Verify Environment
 # ==============================================================================
-echo "Step 1: Checking CUDA..."
+echo -e "${BLUE}Step 1: Verifying environment...${NC}"
 
-if command -v nvcc &> /dev/null; then
-    CUDA_VERSION=$(nvcc --version | grep release | awk '{print $6}' | cut -d',' -f1)
-    echo -e "${GREEN}✓ CUDA detected: ${CUDA_VERSION}${NC}"
-else
-    echo -e "${YELLOW}⚠ CUDA nvcc not in PATH. Checking for installation...${NC}"
-    
-    if [ -d /usr/local/cuda ]; then
-        export PATH="/usr/local/cuda/bin:$PATH"
-        export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
-        echo -e "${GREEN}✓ Found CUDA at /usr/local/cuda${NC}"
+# Check if we're in a venv
+if [ -z "$VIRTUAL_ENV" ]; then
+    echo -e "${YELLOW}⚠ Virtual environment not activated${NC}"
+    if [ -f ".venv/bin/activate" ]; then
+        echo "Activating .venv..."
+        source .venv/bin/activate
     else
-        echo -e "${RED}✗ CUDA not found. Please install CUDA toolkit:${NC}"
-        echo "  sudo apt-get update && sudo apt-get install nvidia-cuda-toolkit"
-        # Continue anyway - some Jetsons have CUDA but not nvcc
-    fi
-fi
-
-echo ""
-
-# ==============================================================================
-# Step 2: Create/Activate Virtual Environment (optional but recommended)
-# ==============================================================================
-echo "Step 2: Setting up Python environment..."
-
-if [ -d ".venv" ]; then
-    echo -e "${GREEN}✓ Virtual environment exists${NC}"
-    source .venv/bin/activate 2>/dev/null || true
-else
-    echo "Creating virtual environment..."
-    python3 -m venv .venv
-    source .venv/bin/activate
-    echo -e "${GREEN}✓ Virtual environment created${NC}"
-fi
-
-echo ""
-
-# ==============================================================================
-# Step 3: Install PyTorch for Jetson
-# ==============================================================================
-echo "Step 3: Installing PyTorch for Jetson..."
-
-# Check if PyTorch is already installed with CUDA
-if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
-    TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)")
-    echo -e "${GREEN}✓ PyTorch ${TORCH_VERSION} with CUDA already installed${NC}"
-else
-    echo "Installing PyTorch for Jetson (CUDA enabled)..."
-    
-    # For Jetson Orin (JetPack 5.x / 6.x), use the NVIDIA wheel index
-    pip3 install --upgrade pip
-    pip3 install torch torchvision torchaudio --extra-index-url https://developer.download.nvidia.com/compute/pytorch/whl/cu118
-    
-    # Verify installation
-    if python3 -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')" 2>/dev/null; then
-        echo -e "${GREEN}✓ PyTorch installed successfully${NC}"
-    else
-        echo -e "${YELLOW}⚠ PyTorch installed but CUDA may not be available${NC}"
-    fi
-fi
-
-echo ""
-
-# ==============================================================================
-# Step 4: Clone HRM Repository (NOT pip install!)
-# ==============================================================================
-echo "Step 4: Setting up HRM repository..."
-
-if [ -d "HRM" ]; then
-    echo -e "${GREEN}✓ HRM repository already exists${NC}"
-    cd HRM
-    git pull origin main || echo -e "${YELLOW}⚠ Could not update HRM (might be offline)${NC}"
-    cd ..
-else
-    echo "Cloning HRM from GitHub..."
-    git clone --recursive https://github.com/sapientinc/HRM.git
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✓ HRM repository cloned${NC}"
-    else
-        echo -e "${RED}✗ Failed to clone HRM repository${NC}"
+        echo -e "${RED}✗ No .venv found. Create one first:${NC}"
+        echo "  python3 -m venv --system-site-packages .venv"
+        echo "  source .venv/bin/activate"
         exit 1
     fi
 fi
 
-# Verify HRM structure
-if [ -f "HRM/pretrain.py" ] && [ -d "HRM/models" ]; then
-    echo -e "${GREEN}✓ HRM repository structure verified${NC}"
+echo -e "${GREEN}✓ Virtual environment: $VIRTUAL_ENV${NC}"
+
+# Check PyTorch with CUDA
+if python3 -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)")
+    GPU_NAME=$(python3 -c "import torch; print(torch.cuda.get_device_name(0))")
+    echo -e "${GREEN}✓ PyTorch ${TORCH_VERSION} with CUDA${NC}"
+    echo -e "${GREEN}✓ GPU: ${GPU_NAME}${NC}"
 else
-    echo -e "${RED}✗ HRM repository appears incomplete. Try re-cloning:${NC}"
-    echo "  rm -rf HRM && git clone --recursive https://github.com/sapientinc/HRM.git"
+    echo -e "${RED}✗ PyTorch with CUDA not available${NC}"
+    echo "Install PyTorch at system level first:"
+    echo "  pip3 install torch torchvision --index-url https://pypi.jetson-ai-lab.dev/jp6/cu126"
     exit 1
 fi
 
 echo ""
 
 # ==============================================================================
-# Step 5: Install HRM Dependencies
+# Step 2: Install Dependencies
 # ==============================================================================
-echo "Step 5: Installing dependencies..."
+echo -e "${BLUE}Step 2: Installing dependencies...${NC}"
 
-# Install HRM's own requirements
-if [ -f "HRM/requirements.txt" ]; then
-    echo "Installing HRM requirements..."
-    pip3 install -r HRM/requirements.txt
-fi
+pip install --quiet --upgrade pip
 
-# Install our service requirements
-if [ -f "requirements.txt" ]; then
-    echo "Installing service requirements..."
-    pip3 install -r requirements.txt
-fi
+# Core service dependencies
+echo "Installing core dependencies..."
+pip install --quiet \
+    websockets>=12.0 \
+    huggingface_hub>=0.20.0 \
+    PyYAML>=6.0
+
+# HRM dependencies (for model loading)
+echo "Installing HRM dependencies..."
+pip install --quiet \
+    einops>=0.7.0 \
+    tqdm>=4.66.0 \
+    coolname>=2.2.0 \
+    pydantic>=2.0.0 \
+    omegaconf>=2.3.0 \
+    hydra-core>=1.3.0
 
 echo -e "${GREEN}✓ Dependencies installed${NC}"
 
 echo ""
 
 # ==============================================================================
-# Step 6: Install FlashAttention (optional, improves performance)
+# Step 3: Clone HRM Repository
 # ==============================================================================
-echo "Step 6: Checking FlashAttention..."
+echo -e "${BLUE}Step 3: Setting up HRM repository...${NC}"
 
-if python3 -c "import flash_attn" 2>/dev/null; then
-    echo -e "${GREEN}✓ FlashAttention already installed${NC}"
+if [ -d "HRM" ]; then
+    echo -e "${GREEN}✓ HRM repository exists${NC}"
+    # Try to update
+    cd HRM && git pull --quiet 2>/dev/null || true && cd ..
 else
-    echo "Attempting to install FlashAttention..."
-    pip3 install flash-attn 2>/dev/null || {
-        echo -e "${YELLOW}⚠ FlashAttention installation failed (optional, HRM will work without it)${NC}"
-        echo "  For best performance on supported GPUs, install manually:"
-        echo "  pip3 install flash-attn"
-    }
+    echo "Cloning HRM from GitHub..."
+    git clone --recursive https://github.com/sapientinc/HRM.git
+    echo -e "${GREEN}✓ HRM cloned${NC}"
+fi
+
+# Verify structure
+if [ -f "HRM/pretrain.py" ] && [ -d "HRM/models" ]; then
+    echo -e "${GREEN}✓ HRM structure verified${NC}"
+else
+    echo -e "${RED}✗ HRM structure incomplete${NC}"
+    exit 1
 fi
 
 echo ""
 
 # ==============================================================================
-# Step 7: Create run script with PYTHONPATH
+# Step 4: Create Run Script
 # ==============================================================================
-echo "Step 7: Creating run script..."
+echo -e "${BLUE}Step 4: Creating run script...${NC}"
 
-cat > run_hrm_service.sh << 'EOF'
+cat > run_hrm_service.sh << 'RUNSCRIPT'
 #!/bin/bash
-# Run HRM Service with proper PYTHONPATH
+# Run HRM Service
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Add HRM to PYTHONPATH
+# CUDA paths
+export PATH="/usr/local/cuda/bin:${PATH}"
+export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+
+# HRM in PYTHONPATH
 export PYTHONPATH="${SCRIPT_DIR}/HRM:${PYTHONPATH}"
 
-# Activate venv if exists
-if [ -f "${SCRIPT_DIR}/.venv/bin/activate" ]; then
-    source "${SCRIPT_DIR}/.venv/bin/activate"
-fi
+# Activate venv
+source "${SCRIPT_DIR}/.venv/bin/activate"
 
-# Run the service
+# Run
 python3 "${SCRIPT_DIR}/hrm_service.py" "$@"
-EOF
+RUNSCRIPT
 
 chmod +x run_hrm_service.sh
-
-echo -e "${GREEN}✓ Run script created: run_hrm_service.sh${NC}"
+echo -e "${GREEN}✓ Created run_hrm_service.sh${NC}"
 
 echo ""
 
 # ==============================================================================
-# Step 8: Test the setup
+# Step 5: Verify Everything
 # ==============================================================================
-echo "Step 8: Testing setup..."
+echo -e "${BLUE}Step 5: Final verification...${NC}"
 
-# Set PYTHONPATH for testing
 export PYTHONPATH="$(pwd)/HRM:${PYTHONPATH}"
 
-# Test imports
-echo "Testing Python imports..."
-python3 -c "
+python3 << 'VERIFY'
 import sys
-print(f'Python: {sys.version}')
+print(f"Python: {sys.version.split()[0]}")
 
+# PyTorch
 import torch
-print(f'PyTorch: {torch.__version__}')
-print(f'CUDA available: {torch.cuda.is_available()}')
+print(f"PyTorch: {torch.__version__}")
+print(f"  CUDA: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
-    print(f'GPU: {torch.cuda.get_device_name(0)}')
+    print(f"  GPU: {torch.cuda.get_device_name(0)}")
 
-# Test HRM imports
+# HRM imports
 try:
     from pretrain import PretrainConfig
-    from utils.functions import load_model_class
-    print('HRM imports: ✓')
+    print("HRM pretrain: ✓")
 except ImportError as e:
-    print(f'HRM imports: ✗ ({e})')
+    print(f"HRM pretrain: ✗ ({e})")
 
-# Test huggingface_hub
 try:
-    from huggingface_hub import snapshot_download
-    print('HuggingFace Hub: ✓')
-except ImportError:
-    print('HuggingFace Hub: ✗')
+    from utils.functions import load_model_class
+    print("HRM utils: ✓")
+except ImportError as e:
+    print(f"HRM utils: ✗ ({e})")
 
-# Test websockets
-try:
-    import websockets
-    print('WebSockets: ✓')
-except ImportError:
-    print('WebSockets: ✗')
-"
+# Service deps
+for pkg in ['websockets', 'huggingface_hub', 'yaml', 'einops', 'pydantic']:
+    try:
+        __import__(pkg)
+        print(f"{pkg}: ✓")
+    except ImportError:
+        print(f"{pkg}: ✗")
+VERIFY
 
 echo ""
 
 # ==============================================================================
-# Step 9: Quick connectivity test
+# Step 6: Test Connection (optional)
 # ==============================================================================
-echo "Step 9: Running connectivity test..."
+echo -e "${BLUE}Step 6: Testing connection...${NC}"
 
-python3 hrm_service.py --test --bfs-only || echo -e "${YELLOW}⚠ Connectivity test failed (server may be offline)${NC}"
+python3 hrm_service.py --test --bfs-only 2>&1 | head -20 || echo -e "${YELLOW}⚠ Connection test failed (server may be offline)${NC}"
 
 echo ""
 
 # ==============================================================================
-# Complete!
+# Done!
 # ==============================================================================
 echo "=========================================="
 echo -e "${GREEN}  Setup Complete!${NC}"
@@ -269,17 +207,9 @@ echo "=========================================="
 echo ""
 echo "To run the HRM service:"
 echo ""
-echo "  Option 1 (Recommended):"
-echo "    ./run_hrm_service.sh --server wss://iu-rw9m.onrender.com"
-echo ""
-echo "  Option 2 (Manual):"
-echo "    export PYTHONPATH=\"\$(pwd)/HRM:\${PYTHONPATH}\""
-echo "    python3 hrm_service.py --server wss://iu-rw9m.onrender.com"
+echo "  ./run_hrm_service.sh --server wss://iu-rw9m.onrender.com"
 echo ""
 echo "Options:"
-echo "  --bfs-only    Use BFS fallback instead of HRM (faster startup)"
+echo "  --bfs-only    Use BFS only (skip HRM model loading)"
 echo "  --test        Test connection only"
-echo "  --hrm-path    Path to HRM repository (default: ./HRM)"
-echo ""
-echo "Logs will show [HRM] or [BFS] for each solve request."
 echo ""

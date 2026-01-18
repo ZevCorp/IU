@@ -408,9 +408,9 @@ class HRMModel:
 class HRMService:
     """WebSocket client that connects to Render backend"""
     
-    def __init__(self, server_url: str):
+    def __init__(self, server_url: str, model_id: str = HRM_MODEL_ID):
         self.server_url = server_url
-        self.model = HRMModel()
+        self.model = HRMModel(model_id=model_id)
         self.ws: Optional[WebSocketClientProtocol] = None
         self.running = True
         
@@ -554,10 +554,16 @@ def main():
     parser.add_argument('--bfs-only', action='store_true', help='Force BFS mode (no HRM)')
     args = parser.parse_args()
     
-    # Update global config
-    global HRM_REPO_PATH, HRM_MODEL_ID
-    HRM_REPO_PATH = args.hrm_path
-    HRM_MODEL_ID = args.model
+    # Use args values (don't need to modify globals)
+    hrm_repo_path = args.hrm_path
+    hrm_model_id = args.model
+    
+    # Update the path in sys.path if custom path provided
+    if hrm_repo_path != HRM_REPO_PATH:
+        import sys
+        hrm_abs_path = os.path.abspath(hrm_repo_path)
+        if hrm_abs_path not in sys.path:
+            sys.path.insert(0, hrm_abs_path)
     
     logger.info("=" * 60)
     logger.info("  HRM Service - Jetson Orin Nano Super Dev Kit")
@@ -566,7 +572,7 @@ def main():
     logger.info(f"Model: {args.model}")
     logger.info(f"HRM Repo: {args.hrm_path}")
     
-    service = HRMService(args.server)
+    service = HRMService(args.server, model_id=hrm_model_id)
     
     if args.bfs_only:
         service.model.use_bfs_fallback = True
