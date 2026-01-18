@@ -177,7 +177,7 @@ class HRMModel:
             model_config = {
                 **{k: v for k, v in arch_config.items() if k not in ['name', 'loss']},
                 'batch_size': 1,  # Inference batch size
-                'vocab_size': arch_config.get('vocab_size', 4),
+                'vocab_size': arch_config.get('vocab_size', 6),  # HRM uses 6 tokens: wall, path, start, target, path_solution, error
                 'seq_len': arch_config.get('seq_len', 900),
                 'num_puzzle_identifiers': arch_config.get('num_puzzle_identifiers', 1),
                 'causal': False
