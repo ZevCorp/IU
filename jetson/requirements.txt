@@ -1,25 +1,46 @@
-# HRM Service Dependencies for Jetson Orin Nano Super Dev Kit
+# HRM Service - Dependencies for Jetson Orin Nano
 # 
-# IMPORTANT: Install PyTorch for Jetson FIRST (before this file):
+# IMPORTANT: PyTorch should be installed from NVIDIA's Jetson wheels:
 #   pip3 install torch torchvision --extra-index-url https://developer.download.nvidia.com/compute/pytorch/whl/cu118
 #
-# Then install these dependencies:
-#   pip install -r requirements.txt
+# HRM repository (https://github.com/sapientinc/HRM) should be CLONED, not pip-installed.
+# Add it to PYTHONPATH before running:
+#   export PYTHONPATH="${PYTHONPATH}:$(pwd)/HRM"
 
-# WebSocket client
+# ========================================
+# HRM Core Dependencies (from HRM/requirements.txt)
+# ========================================
+adam-atan2>=0.0.1
+einops>=0.7.0
+tqdm>=4.66.0
+coolname>=2.2.0
+pydantic>=2.0.0
+argdantic>=1.0.0
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+
+# ========================================
+# HuggingFace (for model checkpoint download)
+# ========================================
+huggingface_hub>=0.20.0
+
+# ========================================
+# WebSocket Client
+# ========================================
 websockets>=12.0
 
-# HuggingFace for model download
-huggingface_hub>=0.20.0
-transformers>=4.36.0
+# ========================================
+# Optional: FlashAttention (recommended for GPU performance)
+# Note: May require building from source on ARM64
+# ========================================
+# flash-attn  # Uncomment if available for your platform
 
-# NumPy for array operations
-numpy>=1.24.0
+# ========================================
+# YAML parsing
+# ========================================
+PyYAML>=6.0
 
-# Flash Attention (for Ampere/Orin GPUs)
-# Install separately: pip install flash-attn --no-build-isolation
-# OR for newer GPUs: install from source
-
-# Optional: For testing
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
+# ========================================
+# Weights & Biases (optional, for training/logging)
+# ========================================
+# wandb  # Uncomment if needed for experiment tracking

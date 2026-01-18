@@ -15,16 +15,10 @@ Environment:
     JETSON_SECRET - Authentication secret for the backend
     HRM_MODEL_PATH - Path to the HRM model checkpoint (default: auto-download from HuggingFace)
     
-Setup on Jetson:
-    # Install PyTorch for Jetson (CUDA)
-    pip3 install torch torchvision --extra-index-url https://developer.download.nvidia.com/compute/pytorch/whl/cu118
-    
-    # Install HRM dependencies
-    pip3 install transformers huggingface_hub flash-attn websockets
-    
-    # Clone HRM repo for model code
-    git clone https://github.com/sapientinc/HRM.git
-    cd HRM && pip install -e .
+IMPORTANT: HRM is NOT a pip-installable package. You must:
+1. Clone the HRM repository: git clone https://github.com/sapientinc/HRM.git
+2. Add it to PYTHONPATH: export PYTHONPATH="${PYTHONPATH}:$(pwd)/HRM"
+3. Run this script with the modified PYTHONPATH
 """
 
 import asyncio
@@ -35,7 +29,7 @@ import signal
 import sys
 import time
 from collections import deque
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -46,7 +40,8 @@ from websockets.client import WebSocketClientProtocol
 
 DEFAULT_SERVER = os.environ.get('RENDER_WS_URL', 'wss://iu-rw9m.onrender.com')
 JETSON_SECRET = os.environ.get('JETSON_SECRET', 'dev-secret-change-in-prod')
-HRM_MODEL_PATH = os.environ.get('HRM_MODEL_PATH', 'sapientinc/HRM-checkpoint-maze-30x30-hard')
+HRM_MODEL_ID = os.environ.get('HRM_MODEL_ID', 'sapientinc/HRM-checkpoint-maze-30x30-hard')
+HRM_REPO_PATH = os.environ.get('HRM_REPO_PATH', './HRM')  # Path to cloned HRM repo
 RECONNECT_DELAY = 5  # seconds
 PING_INTERVAL = 25   # seconds
 
@@ -62,120 +57,172 @@ logging.basicConfig(
 logger = logging.getLogger('HRMService')
 
 # ============================================
-# HRM Model - Real Implementation
+# HRM Model Loader - Real Implementation
 # ============================================
+
+def ensure_hrm_in_path():
+    """Ensure HRM repository is in Python path"""
+    hrm_path = os.path.abspath(HRM_REPO_PATH)
+    
+    if not os.path.exists(hrm_path):
+        logger.warning(f"HRM repository not found at {hrm_path}")
+        return False
+    
+    if hrm_path not in sys.path:
+        sys.path.insert(0, hrm_path)
+        logger.info(f"Added HRM to PYTHONPATH: {hrm_path}")
+    
+    return True
+
+
+def download_checkpoint(model_id: str) -> str:
+    """Download model checkpoint from HuggingFace"""
+    from huggingface_hub import snapshot_download
+    
+    logger.info(f"Downloading checkpoint from HuggingFace: {model_id}")
+    
+    local_path = snapshot_download(
+        repo_id=model_id,
+        cache_dir=os.path.expanduser('~/.cache/hrm')
+    )
+    
+    logger.info(f"Checkpoint downloaded to: {local_path}")
+    return local_path
+
 
 class HRMModel:
     """
-    Wrapper for the REAL HRM (Hierarchical Reasoning Model) with 27M parameters.
+    Wrapper for the REAL HRM (Hierarchical Reasoning Model).
     
-    Uses the official checkpoint from HuggingFace:
-    https://huggingface.co/sapientinc/HRM-checkpoint-maze-30x30-hard
+    HRM is NOT a pip package - it must be cloned and added to PYTHONPATH.
+    Uses checkpoints from HuggingFace: sapientinc/HRM-checkpoint-maze-30x30-hard
     
     Falls back to BFS if HRM loading fails.
     """
     
-    def __init__(self, model_path: str = HRM_MODEL_PATH):
-        self.model_path = model_path
+    def __init__(self, model_id: str = HRM_MODEL_ID):
+        self.model_id = model_id
         self.model = None
-        self.tokenizer = None
         self.device = None
         self.loaded = False
         self.use_bfs_fallback = False
-        logger.info(f"HRM Model initialized with path: {model_path}")
+        self.checkpoint_path = None
+        self.config = None
+        logger.info(f"HRM Model wrapper initialized for: {model_id}")
         
     def load(self) -> bool:
-        """Load the HRM model from HuggingFace or local path"""
+        """Load the HRM model from HuggingFace checkpoint"""
         try:
             import torch
+            import yaml
             
             # Determine device
             if torch.cuda.is_available():
                 self.device = torch.device('cuda')
-                logger.info(f"Using CUDA: {torch.cuda.get_device_name(0)}")
+                gpu_name = torch.cuda.get_device_name(0)
+                gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
+                logger.info(f"Using CUDA: {gpu_name} ({gpu_mem:.1f} GB)")
             else:
                 self.device = torch.device('cpu')
-                logger.warning("CUDA not available, using CPU (slower)")
+                logger.warning("CUDA not available, using CPU (will be slower)")
             
-            # Try to load HRM model
+            # Ensure HRM repo is available
+            if not ensure_hrm_in_path():
+                logger.warning("HRM repository not available - attempting to clone...")
+                clone_result = os.system(f'git clone https://github.com/sapientinc/HRM.git {HRM_REPO_PATH}')
+                if clone_result != 0:
+                    raise RuntimeError("Failed to clone HRM repository")
+                ensure_hrm_in_path()
+            
+            # Download checkpoint from HuggingFace
+            checkpoint_dir = download_checkpoint(self.model_id)
+            self.checkpoint_path = checkpoint_dir
+            
+            # Find checkpoint file (usually named like "checkpoint" or "step_XXXXX")
+            checkpoint_files = []
+            for f in os.listdir(checkpoint_dir):
+                fpath = os.path.join(checkpoint_dir, f)
+                if os.path.isfile(fpath) and f not in ['.gitattributes', 'all_config.yaml', 'README.md']:
+                    if not f.endswith(('.yaml', '.json', '.md', '.txt')):
+                        checkpoint_files.append(f)
+            
+            if not checkpoint_files:
+                raise RuntimeError(f"No checkpoint file found in {checkpoint_dir}")
+            
+            checkpoint_file = os.path.join(checkpoint_dir, checkpoint_files[0])
+            logger.info(f"Using checkpoint: {checkpoint_file}")
+            
+            # Load config
+            config_path = os.path.join(checkpoint_dir, 'all_config.yaml')
+            if not os.path.exists(config_path):
+                raise RuntimeError(f"Config file not found: {config_path}")
+            
+            with open(config_path, 'r') as f:
+                config_dict = yaml.safe_load(f)
+            
+            logger.info(f"Loaded config: arch={config_dict.get('arch', {}).get('name', 'unknown')}")
+            
+            # Import HRM modules (requires HRM in PYTHONPATH)
             try:
-                logger.info(f"Loading HRM model from: {self.model_path}")
-                
-                # Check if it's a HuggingFace model ID
-                if self.model_path.startswith('sapientinc/'):
-                    from huggingface_hub import hf_hub_download, snapshot_download
-                    
-                    # Download checkpoint
-                    logger.info("Downloading model from HuggingFace...")
-                    local_path = snapshot_download(
-                        repo_id=self.model_path,
-                        cache_dir=os.path.expanduser('~/.cache/hrm')
-                    )
-                    logger.info(f"Model downloaded to: {local_path}")
-                    
-                    # Load model architecture (requires HRM repo to be installed)
-                    try:
-                        from hrm.model import HRM
-                        from hrm.config import HRMConfig
-                        
-                        # Load config and model
-                        config_path = os.path.join(local_path, 'config.json')
-                        if os.path.exists(config_path):
-                            with open(config_path) as f:
-                                config = HRMConfig(**json.load(f))
-                        else:
-                            # Default config for maze task
-                            config = HRMConfig(
-                                vocab_size=4,  # 0=wall, 1=path, 2=start, 3=target
-                                max_seq_len=900,  # 30x30 grid
-                                hidden_dim=256,
-                                num_layers=6,
-                                num_heads=8
-                            )
-                        
-                        self.model = HRM(config)
-                        
-                        # Load weights
-                        checkpoint_path = os.path.join(local_path, 'model.pt')
-                        if os.path.exists(checkpoint_path):
-                            state_dict = torch.load(checkpoint_path, map_location=self.device)
-                            self.model.load_state_dict(state_dict)
-                            logger.info("Loaded HRM weights successfully!")
-                        
-                        self.model.to(self.device)
-                        self.model.eval()
-                        self.loaded = True
-                        self.use_bfs_fallback = False
-                        
-                        logger.info("✅ HRM Model loaded successfully!")
-                        return True
-                        
-                    except ImportError:
-                        logger.warning("HRM package not installed. Installing...")
-                        os.system('pip install git+https://github.com/sapientinc/HRM.git')
-                        raise Exception("Please restart after installing HRM package")
-                        
-                else:
-                    # Local checkpoint path
-                    state_dict = torch.load(self.model_path, map_location=self.device)
-                    # Would need model architecture here
-                    raise NotImplementedError("Local checkpoint loading requires model architecture")
-                    
-            except Exception as e:
-                logger.warning(f"Failed to load HRM model: {e}")
-                logger.warning("Falling back to BFS solver")
-                self.use_bfs_fallback = True
-                self.loaded = True
-                return True
-                
-        except ImportError as e:
-            logger.error(f"PyTorch not installed: {e}")
-            logger.warning("Running in BFS-only mode")
-            self.use_bfs_fallback = True
+                from utils.functions import load_model_class
+                from pretrain import PretrainConfig, init_train_state, create_dataloader
+                from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
+            except ImportError as e:
+                logger.error(f"Failed to import HRM modules: {e}")
+                logger.error("Make sure HRM repo is cloned and in PYTHONPATH")
+                raise
+            
+            # Create config
+            self.config = PretrainConfig(**config_dict)
+            
+            # Create a minimal metadata for model initialization
+            # This is derived from the checkpoint config
+            arch_config = config_dict.get('arch', {})
+            
+            # Create metadata placeholder - we need this for init_train_state
+            class MinimalMetadata:
+                def __init__(self, config):
+                    self.vocab_size = config.get('vocab_size', 4)  # 0=wall, 1=path, 2=start, 3=target for maze
+                    self.seq_len = config.get('seq_len', 900)  # 30x30 = 900
+                    self.num_puzzle_identifiers = config.get('num_puzzle_identifiers', 1)
+                    self.total_groups = 1
+                    self.mean_puzzle_examples = 1
+            
+            metadata = MinimalMetadata(arch_config)
+            
+            # Initialize model using HRM's own loading mechanism
+            train_state = init_train_state(self.config, metadata, world_size=1)
+            
+            # Load checkpoint weights
+            logger.info(f"Loading model weights from: {checkpoint_file}")
+            state_dict = torch.load(checkpoint_file, map_location=self.device)
+            
+            # Handle torch.compile wrapped models
+            try:
+                train_state.model.load_state_dict(state_dict, assign=True)
+            except:
+                # Remove _orig_mod. prefix if present (from torch.compile)
+                clean_state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+                train_state.model.load_state_dict(clean_state_dict, assign=True)
+            
+            self.model = train_state.model
+            self.model.to(self.device)
+            self.model.eval()
+            
             self.loaded = True
+            self.use_bfs_fallback = False
+            
+            # Count parameters
+            total_params = sum(p.numel() for p in self.model.parameters())
+            logger.info(f"✅ HRM Model loaded! Parameters: {total_params:,} (~{total_params/1e6:.1f}M)")
+            
             return True
+            
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
+            logger.error(f"Failed to load HRM model: {e}")
+            import traceback
+            traceback.print_exc()
+            logger.warning("Falling back to BFS solver")
             self.use_bfs_fallback = True
             self.loaded = True
             return True
@@ -185,7 +232,7 @@ class HRMModel:
         Run HRM inference on the grid
         
         Args:
-            grid: Flattened grid sequence (tokens 0-3)
+            grid: Flattened grid sequence (tokens 0-3: 0=wall, 1=path, 2=start, 3=target)
             width: Grid width
             height: Grid height
             
@@ -196,7 +243,7 @@ class HRMModel:
         """
         start_time = time.time()
         
-        # Reshape grid
+        # Reshape grid to 2D
         grid_2d = [grid[i*width:(i+1)*width] for i in range(height)]
         
         # Find start and target positions
@@ -213,12 +260,12 @@ class HRMModel:
             logger.warning("Could not find start or target in grid")
             return [], False
         
-        # Use HRM if available, otherwise BFS
+        # Use HRM if available, otherwise BFS fallback
         if self.use_bfs_fallback or self.model is None:
             path = self._bfs_solve(grid_2d, start, target, width, height)
             method = "BFS"
         else:
-            path = self._hrm_solve(grid, width, height, start, target)
+            path = self._hrm_solve(grid, grid_2d, width, height, start, target)
             method = "HRM"
         
         elapsed = (time.time() - start_time) * 1000
@@ -229,6 +276,7 @@ class HRMModel:
     def _hrm_solve(
         self,
         grid: List[int],
+        grid_2d: List[List[int]],
         width: int,
         height: int,
         start: Tuple[int, int],
@@ -238,43 +286,63 @@ class HRMModel:
         import torch
         
         try:
-            # Prepare input tensor
+            # Prepare input tensor in the format HRM expects
             input_tensor = torch.tensor(grid, dtype=torch.long).unsqueeze(0).to(self.device)
             
-            with torch.no_grad():
-                # Run HRM inference
-                # The model outputs the path as a sequence of positions
-                output = self.model.generate(
-                    input_tensor,
-                    max_length=width * height,
-                    temperature=0.0  # Greedy decoding
-                )
+            # HRM uses puzzle_identifiers for identifying which puzzle this is
+            # For inference, we use 0
+            puzzle_ids = torch.zeros((1,), dtype=torch.long).to(self.device)
             
-            # Parse output to path
-            path = self._parse_hrm_output(output[0], width, height, start, target)
-            return path
+            batch = {
+                "inputs": input_tensor,
+                "puzzle_identifiers": puzzle_ids,
+            }
+            
+            with torch.no_grad():
+                # Initialize carry state
+                carry = self.model.initial_carry(batch)
+                
+                # Run forward pass(es) until halted
+                max_iterations = 100  # Safety limit
+                for _ in range(max_iterations):
+                    carry, outputs = self.model(carry, batch)
+                    
+                    # Check if all sequences have halted
+                    if carry.halted.all():
+                        break
+                
+                # Get output logits
+                logits = outputs["logits"]  # Shape: (batch, seq_len, vocab_size)
+                predictions = logits.argmax(dim=-1)[0].cpu().numpy()  # Shape: (seq_len,)
+            
+            # Reshape predictions to grid
+            output_grid = predictions.reshape(height, width)
+            
+            # Extract path from output - cells marked as path (1) or target (3)
+            path = self._extract_path_from_output(output_grid, start, target, width, height)
+            
+            if path:
+                return path
+            else:
+                logger.warning("HRM output did not produce valid path, falling back to BFS")
+                return self._bfs_solve(grid_2d, start, target, width, height)
             
         except Exception as e:
-            logger.error(f"HRM inference failed: {e}, falling back to BFS")
-            grid_2d = [grid[i*width:(i+1)*width] for i in range(height)]
+            logger.error(f"HRM inference failed: {e}")
+            import traceback
+            traceback.print_exc()
             return self._bfs_solve(grid_2d, start, target, width, height)
     
-    def _parse_hrm_output(
+    def _extract_path_from_output(
         self,
-        output: 'torch.Tensor',
-        width: int,
-        height: int,
+        output_grid,
         start: Tuple[int, int],
-        target: Tuple[int, int]
+        target: Tuple[int, int],
+        width: int,
+        height: int
     ) -> List[Tuple[int, int]]:
-        """Parse HRM output to path coordinates"""
-        # HRM outputs the solution grid
-        # We need to extract the path from start to target
+        """Extract path from HRM output grid using BFS on marked cells"""
         
-        output_grid = output.cpu().numpy().reshape(height, width)
-        
-        # The solution path is marked in the output
-        # Use BFS to trace from start to target through marked cells
         path = [start]
         current = start
         visited = {start}
@@ -287,7 +355,7 @@ class HRMModel:
                 nr, nc = r + dr, c + dc
                 if 0 <= nr < height and 0 <= nc < width:
                     if (nr, nc) not in visited:
-                        # Check if this cell is part of the path in output
+                        # Check if this cell is part of the solution path
                         if output_grid[nr][nc] in [1, 3] or (nr, nc) == target:
                             path.append((nr, nc))
                             visited.add((nr, nc))
@@ -296,9 +364,7 @@ class HRMModel:
                             break
             
             if not found:
-                logger.warning("HRM output path incomplete, falling back to BFS")
-                grid_2d = output_grid.tolist()
-                return self._bfs_solve(grid_2d, start, target, width, height)
+                return []  # Path incomplete
         
         return path
     
@@ -482,16 +548,23 @@ def main():
     
     parser = argparse.ArgumentParser(description='HRM Service for Jetson')
     parser.add_argument('--server', default=DEFAULT_SERVER, help='WebSocket server URL')
-    parser.add_argument('--model', default=HRM_MODEL_PATH, help='HRM model path or HuggingFace ID')
+    parser.add_argument('--model', default=HRM_MODEL_ID, help='HuggingFace model ID')
+    parser.add_argument('--hrm-path', default=HRM_REPO_PATH, help='Path to HRM repository')
     parser.add_argument('--test', action='store_true', help='Run connection test only')
     parser.add_argument('--bfs-only', action='store_true', help='Force BFS mode (no HRM)')
     args = parser.parse_args()
+    
+    # Update global config
+    global HRM_REPO_PATH, HRM_MODEL_ID
+    HRM_REPO_PATH = args.hrm_path
+    HRM_MODEL_ID = args.model
     
     logger.info("=" * 60)
     logger.info("  HRM Service - Jetson Orin Nano Super Dev Kit")
     logger.info("=" * 60)
     logger.info(f"Server: {args.server}")
     logger.info(f"Model: {args.model}")
+    logger.info(f"HRM Repo: {args.hrm_path}")
     
     service = HRMService(args.server)
     
