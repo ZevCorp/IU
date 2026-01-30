@@ -12,9 +12,18 @@
   "dependencies": {
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/face_mesh": "^0.4.1633559619",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "@types/react": "^19.2.9",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.182.0",
     "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.1.2",
     "gsap": "^3.12.5",
     "qrcode": "^1.5.4",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "three": "^0.182.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {

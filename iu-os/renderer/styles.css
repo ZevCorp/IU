@@ -1,0 +1,547 @@
+/**
+ * IÜ OS - Styles
+ * EXACT replica of iü.space web design
+ * Minimalist black/white with dark/light mode support
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+/* =====================================================
+   Design Tokens (From iü.space)
+   ===================================================== */
+
+:root {
+  /* Dark Theme (Default) */
+  --bg-primary: #0a0a0a;
+  --stroke-color: #ffffff;
+  --accent-color: #666666;
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --control-bg: rgba(255, 255, 255, 0.05);
+  --control-border: rgba(255, 255, 255, 0.1);
+  --control-hover: rgba(255, 255, 255, 0.1);
+  --control-active: rgba(255, 255, 255, 0.2);
+
+  /* Stroke properties */
+  --stroke-width: 2.5px;
+  --stroke-linecap: round;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 300ms ease;
+
+  /* Typography */
+  --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Light Theme */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --stroke-color: #0a0a0a;
+  --accent-color: #999999;
+  --text-primary: #0a0a0a;
+  --text-secondary: #666666;
+  --control-bg: rgba(0, 0, 0, 0.03);
+  --control-border: rgba(0, 0, 0, 0.1);
+  --control-hover: rgba(0, 0, 0, 0.05);
+  --control-active: rgba(0, 0, 0, 0.1);
+}
+
+/* =====================================================
+   Reset & Base
+   ===================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-primary);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color var(--transition-normal),
+    color var(--transition-normal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* =====================================================
+   App Container (Draggable)
+   ===================================================== */
+
+#app {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  background: var(--bg-primary);
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* =====================================================
+   Face Container (From iü.space)
+   ===================================================== */
+
+#face-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  perspective: 1200px;
+}
+
+#face-container:active {
+  cursor: grabbing;
+}
+
+#face-svg {
+  width: 100%;
+  height: 100%;
+  max-width: 300px;
+  max-height: 400px;
+}
+
+/* Face Stroke Styling - EXACT from iü.space */
+.face-stroke {
+  fill: none;
+  stroke: var(--stroke-color);
+  stroke-width: var(--stroke-width);
+  stroke-linecap: var(--stroke-linecap);
+  stroke-linejoin: round;
+  transition: stroke var(--transition-normal);
+}
+
+/* =====================================================
+   Thinking Label
+   ===================================================== */
+
+#thinking-label {
+  position: absolute;
+  top: 15%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 16px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 20px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  opacity: 1;
+  transition: opacity var(--transition-normal);
+  -webkit-app-region: no-drag;
+}
+
+#thinking-label.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.thinking-text {
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+.thinking-dots {
+  animation: thinking-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes thinking-pulse {
+
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* =====================================================
+   Controls Panel (Bottom)
+   ===================================================== */
+
+#controls-panel {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  max-width: 280px;
+  z-index: 1000;
+  -webkit-app-region: no-drag;
+}
+
+#controls-panel h3 {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  margin-bottom: -4px;
+}
+
+.button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Buttons - EXACT from iü.space */
+.state-btn,
+.theme-btn {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font-primary);
+  color: var(--text-primary);
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.state-btn:hover,
+.theme-btn:hover {
+  background: var(--control-hover);
+}
+
+.state-btn.active,
+.theme-btn.active {
+  background: var(--control-active);
+  border-color: var(--text-secondary);
+}
+
+/* Connect Button - Special styling */
+.connect-btn {
+  width: 100%;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-primary);
+  color: var(--text-primary);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(168, 85, 247, 0.2));
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.connect-btn:hover {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.3), rgba(168, 85, 247, 0.3));
+  border-color: rgba(99, 102, 241, 0.6);
+  transform: translateY(-1px);
+}
+
+/* =====================================================
+   Menu Toggle (Bottom Right)
+   ===================================================== */
+
+.menu-toggle {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--control-bg);
+  border: 1px solid var(--control-border);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+  -webkit-app-region: no-drag;
+}
+
+.menu-toggle:hover {
+  background: var(--control-hover);
+  transform: scale(1.05);
+}
+
+.menu-toggle:active {
+  transform: scale(0.95);
+}
+
+.menu-icon {
+  font-size: 16px;
+  color: var(--text-primary);
+  transition: transform var(--transition-normal);
+}
+
+.menu-toggle.active .menu-icon {
+  transform: rotate(90deg);
+}
+
+/* =====================================================
+   Collapsed State
+   ===================================================== */
+
+#controls-panel.collapsed {
+  transform: translateX(-50%) translateY(calc(100% + 48px));
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* =====================================================
+   Status Indicator
+   ===================================================== */
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.status-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-color);
+}
+
+.status-indicator.active {
+  background: #4ade80;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+/* =====================================================
+   Utility Classes
+   ===================================================== */
+
+.hidden {
+  display: none !important;
+}
+
+/* =====================================================
+   Scrollbar
+   ===================================================== */
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--control-border);
+  border-radius: 2px;
+}
+
+/* =====================================================
+   Top Transfer Button (Elegant)
+   ===================================================== */
+
+.transfer-btn-top {
+  position: fixed;
+  top: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 32px;
+  background: rgba(20, 20, 20, 0.8);
+  border: 1px solid var(--control-border);
+  border-radius: 30px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  cursor: pointer;
+  z-index: 1000;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  -webkit-app-region: no-drag;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] .transfer-btn-top {
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+}
+
+.transfer-btn-top:hover {
+  transform: translateX(-50%) translateY(2px) scale(1.02);
+  background: rgba(30, 30, 30, 0.9);
+  border-color: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="light"] .transfer-btn-top:hover {
+  background: rgba(250, 250, 250, 0.95);
+  border-color: rgba(0, 0, 0, 0.15);
+}
+
+.transfer-btn-top:active {
+  transform: translateX(-50%) scale(0.98);
+}
+
+.transfer-icon {
+  display: none;
+  /* Hide emoji */
+}
+
+.transfer-text {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.2px;
+  color: var(--text-primary);
+  opacity: 0.9;
+}
+
+/* Toast Message */
+#toast-message {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: rgba(10, 10, 10, 0.9);
+  color: white;
+  padding: 12px 24px;
+  border-radius: 30px;
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: none;
+  z-index: 2000;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+}
+
+[data-theme="light"] #toast-message {
+  background: rgba(255, 255, 255, 0.9);
+  color: #1a1a1a;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+}
+
+#toast-message.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* =====================================================
+   Conversation Mode
+   ===================================================== */
+.transfer-btn-top.active-conversation {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.1), 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.transfer-btn-top.active-conversation:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.transfer-btn-top.active-conversation .transfer-text {
+  color: #ffffff;
+  font-weight: 500;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+}
+
+/* Transcript Overlay */
+#transcript-container {
+  position: absolute;
+  top: 60%;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  width: 80%;
+  max-width: 420px;
+  padding: 24px 32px;
+  background: rgba(10, 10, 15, 0.4);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 40px 80px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  transition: opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1), transform 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0;
+  pointer-events: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100px;
+}
+
+#transcript-container:not(.hidden) {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+#transcript-text {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 19px;
+  line-height: 1.6;
+  text-align: center;
+  font-weight: 300;
+  letter-spacing: -0.2px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 6px;
+  row-gap: 4px;
+}
+
+/* Individual word fade animation */
+.word-fade {
+  display: inline-block;
+  opacity: 0;
+  filter: blur(8px);
+  transform: translateY(5px) scale(0.95);
+  animation: elegant-word-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes elegant-word-in {
+  to {
+    opacity: 1;
+    filter: blur(0);
+    transform: translateY(0) scale(1);
+  }
+}
+
+#transcript-container.hidden {
+  display: none;
+}

@@ -15,6 +15,7 @@ export interface SharedStateData {
     theme: 'dark' | 'light';
     activePreset: string;
     microExpressionsEnabled: boolean;
+    mainDeviceId: string | null;
 }
 
 type StateKey = keyof SharedStateData;
@@ -27,8 +28,9 @@ type RemoteChangeCallback<K extends StateKey> = (value: SharedStateData[K]) => v
 export class SharedState {
     private state: SharedStateData = {
         theme: 'light',
-        activePreset: 'neutral',
-        microExpressionsEnabled: true
+        activePreset: 'smile',
+        microExpressionsEnabled: true,
+        mainDeviceId: null
     };
 
     private remoteListeners: Map<StateKey, Set<RemoteChangeCallback<any>>> = new Map();

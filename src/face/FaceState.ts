@@ -148,24 +148,7 @@ export const PRESETS: Record<string, Partial<FaceState>> = {
         headTilt: 3  // Slight tilt into the smile
     },
 
-    /**
-     * ATTENTION - Curious, focused expression
-     * One eyebrow raised, eyes wider, slight head tilt
-     */
-    attention: {
-        eyeOpenness: 1.1,
-        eyeSquint: 0,
-        leftBrowHeight: 0.1,
-        rightBrowHeight: 0.5,  // One eyebrow raised
-        leftBrowCurve: 0.2,
-        rightBrowCurve: 0.5,
-        mouthCurve: 0.1,
-        mouthWidth: 0.95,
-        leftCornerHeight: 0,
-        rightCornerHeight: 0.1,
-        mouthOpenness: 0,
-        headTilt: -5  // Slight curious tilt
-    },
+
 
     /**
      * THINKING - Processing, contemplative expression

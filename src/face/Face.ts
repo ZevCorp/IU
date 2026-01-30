@@ -57,6 +57,10 @@ export class Face {
             this.applyState(state);
         });
 
+        // Set initial state to smile in the engine
+        // This ensures MicroExpressions (which use engine state) don't revert us to neutral
+        this.stateEngine.transitionToPreset('smile', { duration: 0 });
+
         // Initialize blink system
         this.blinkSystem = createBlinkSystem();
         this.blinkSystem.setBlinkCallback((openness) => {
@@ -82,7 +86,7 @@ export class Face {
         });
 
         // Initial state
-        this.currentCombinedState = createState();
+        this.currentCombinedState = createState({ ...PRESETS.smile });
 
         // Apply initial state
         this.applyState(this.currentCombinedState);

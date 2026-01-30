@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IÜ OS</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- QRCode library (local) -->
+  <script src="qrcode.min.js"></script>
+  <!-- MediaPipe Face Mesh & Camera -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div id="app">
+    <!-- Hidden Video Input for Vision -->
+    <video class="input_video" style="display: none;"></video>
+
+    <!-- Face Container - EXACT structure from iü.space -->
+    <div id="face-container">
+      <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
+        <g id="face-group" transform="translate(200, 250)">
+          <!-- Eyebrows -->
+          <g id="eyebrows-group">
+            <path id="left-eyebrow" class="face-stroke" />
+            <path id="right-eyebrow" class="face-stroke" />
+          </g>
+
+          <!-- Eyes (minimalist vertical lines) -->
+          <g id="eyes-group">
+            <g id="left-eye" class="eye-group">
+              <path id="left-eye-top" class="face-stroke" />
+              <path id="left-eye-line" class="face-stroke" />
+              <path id="left-eye-bottom" class="face-stroke" />
+            </g>
+            <g id="right-eye" class="eye-group">
+              <path id="right-eye-top" class="face-stroke" />
+              <path id="right-eye-line" class="face-stroke" />
+              <path id="right-eye-bottom" class="face-stroke" />
+            </g>
+          </g>
+
+          <!-- Mouth -->
+          <g id="mouth-group">
+            <path id="mouth" class="face-stroke" />
+          </g>
+        </g>
+      </svg>
+
+      <!-- Thinking Label -->
+      <div id="thinking-label" class="hidden">
+        <span class="thinking-text">Thinking</span>
+        <span class="thinking-dots">...</span>
+      </div>
+
+      <!-- Transcript Overlay -->
+      <div id="transcript-container" class="hidden">
+        <p id="transcript-text"></p>
+      </div>
+    </div>
+
+    <!-- Menu Toggle Button -->
+    <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
+      <span class="menu-icon">☰</span>
+    </button>
+
+    <button id="btn-transfer-top" class="transfer-btn-top">
+      <span class="transfer-text">Hablar</span>
+    </button>
+
+    <!-- Controls Panel -->
+    <div id="controls-panel" class="collapsed">
+      <h3>Position</h3>
+      <div class="button-group">
+        <button id="pos-left" class="pos-btn">Left</button>
+        <button id="pos-center" class="pos-btn">Center</button>
+        <button id="pos-right" class="pos-btn active">Right</button>
+      </div>
+
+      <h3>Expression</h3>
+      <div class="button-group">
+        <button id="btn-neutral" class="state-btn">Neutral</button>
+        <button id="btn-smile" class="state-btn active">Smile</button>
+        <button id="btn-thinking" class="state-btn">Thinking</button>
+        <button id="btn-wink" class="state-btn">Wink</button>
+      </div>
+
+      <h3>Theme</h3>
+      <div class="button-group">
+        <button id="btn-dark" class="theme-btn active">Dark</button>
+        <button id="btn-light" class="theme-btn">Light</button>
+      </div>
+
+      <h3>Connect</h3>
+      <div class="button-group">
+        <button id="btn-qr-share" class="connect-btn">📱 Share via QR</button>
+      </div>
+
+      <div class="status-row" id="connection-status">
+        <span class="status-indicator" id="sync-indicator"></span>
+        <span id="sync-status-text">Not connected</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sync Modules -->
+  <script src="sync/DeviceSync.js"></script>
+  <script src="sync/QRConnect.js"></script>
+  <script src="vision/VisionManager.js"></script>
+  <!-- Main App -->
+  <script src="app.js"></script>
+</body>
+
+</html>

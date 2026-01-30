@@ -13,6 +13,10 @@ import { getFaceTransfer } from './sync/FaceTransfer';
 import { initSharedState, getSharedState } from './sync/SharedState';
 import { getFaceDetector } from './detection/FaceDetector';
 import { getGazeController } from './detection/GazeController';
+import { ThinkingMode } from './face/experience/ThinkingMode';
+import { BrainClient } from './core/semantic/BrainClient';
+import { getGazeTrigger } from './systems/sensory/GazeTrigger';
+import { getAudioLoop } from './systems/sensory/AudioLoop';
 import './styles/main.css';
 
 // =====================================================
@@ -47,7 +51,41 @@ document.addEventListener('DOMContentLoaded', () => {
         // Set up face detection (camera-based gaze and wink)
         setupFaceDetection(face);
 
-        // Log available presets
+        // ============================================
+        // SEMANTIC BRAIN INTEGRATION (Phase 2)
+        // ============================================
+
+        // 1. Initialize Experience Layer
+        const thinkingMode = new ThinkingMode(face);
+
+        // 2. Initialize Neural Components
+        const brainClient = new BrainClient();
+        const gazeTrigger = getGazeTrigger();
+        const audioLoop = getAudioLoop();
+
+        // 3. Connect Sensory Trigger -> Brain -> Experience
+        gazeTrigger.onTrigger(async () => {
+            console.log('[Main] Semantic Triggered!');
+
+            // A. Start Thinking Experience
+            thinkingMode.startThinking();
+
+            // B. Get sensory data
+            const audioBlob = audioLoop.getAudioBuffer();
+
+            // C. Consult Brain
+            const options = await brainClient.processIntention(audioBlob);
+
+            if (options.length > 0) {
+                // D. Present options to user
+                thinkingMode.presentOptions(options);
+            } else {
+                // No result? Cancel
+                console.log('[Main] No intention found, cancelling.');
+                thinkingMode.stop();
+            }
+        });
+
         console.log('Available presets:', face.getPresets());
 
         // Listen for events (for debugging)
@@ -60,6 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('The face is now alive with micro-expressions.');
         console.log('📷 Click "Start Camera" for gaze-based transfer!');
         console.log('📱 Click "Scan QR" to connect your phone!');
+        console.log('🧠 SEMANTIC BRAIN READY: Look at camera to speak!');
 
     } catch (error) {
         console.error('❌ Failed to initialize face:', error);
@@ -74,7 +113,6 @@ function setupStateButtons(face: ReturnType<typeof initializeFace>): void {
     const buttons = {
         'btn-neutral': 'neutral',
         'btn-smile': 'smile',
-        'btn-attention': 'attention',
         'btn-thinking': 'thinking',
         'btn-wink': 'wink'
     };
@@ -169,21 +207,20 @@ function setupMenuToggle(): void {
 
     if (!toggleBtn || !controlsPanel) return;
 
-    let isCollapsed = false;
+    let isCollapsed = true;
     let isLandscape = window.matchMedia('(orientation: landscape) and (max-height: 500px)').matches;
+
+    // Start with panel hidden (force collapsed class)
+    controlsPanel.classList.add('collapsed');
+    toggleBtn.classList.remove('active'); // Ensure button is not active
 
     // Toggle menu visibility
     toggleBtn.addEventListener('click', () => {
         isCollapsed = !isCollapsed;
         toggleBtn.classList.toggle('active', !isCollapsed);
 
-        if (isLandscape) {
-            // In landscape, toggle force-visible class
-            controlsPanel.classList.toggle('force-visible', !isCollapsed);
-        } else {
-            // In portrait, toggle collapsed class
-            controlsPanel.classList.toggle('collapsed', isCollapsed);
-        }
+        // Toggle collapsed class (simple and robust)
+        controlsPanel.classList.toggle('collapsed', isCollapsed);
     });
 
     // Handle orientation change
@@ -200,8 +237,12 @@ function setupMenuToggle(): void {
         } else {
             // Leaving landscape - reset to normal state
             controlsPanel.classList.remove('force-visible');
-            controlsPanel.classList.remove('collapsed');
-            isCollapsed = false;
+            // Don't auto-expand! Keep it collapsed by default.
+            // checks if we are initializing (isCollapsed is true)
+            if (isCollapsed) {
+                controlsPanel.classList.add('collapsed');
+                toggleBtn.classList.remove('active');
+            }
         }
     };
 
@@ -270,6 +311,23 @@ function setupDeviceSync(_face: ReturnType<typeof initializeFace>): void {
     deviceSync.setServerUrl(serverToUse);
     deviceSync.setPublicServerUrl(renderUrl);
     deviceSync.setPublicAppUrl(window.location.origin);
+
+    // NOW connect (after all URLs are set)
+    deviceSync.connect();
+
+    // Listen for Face Requests (Summon)
+    deviceSync.setOnRequestFace((requestingDeviceId) => {
+        console.log(`[Main] Face summoned by ${requestingDeviceId}`);
+        // If we have the face visible, send it!
+        // We assume 'right' direction for now, or we could calculate relative position if we knew it
+        const faceTransfer = getFaceTransfer();
+        if (faceTransfer.isFaceVisible()) {
+            console.log('[Main] Sending face to summoner...');
+            faceTransfer.sendFace('right');
+        } else {
+            console.log('[Main] Cannot send face: not visible here.');
+        }
+    });
 
     // NOW connect (after all URLs are set)
     deviceSync.connect();

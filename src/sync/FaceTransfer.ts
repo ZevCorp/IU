@@ -98,6 +98,7 @@ export class FaceTransfer {
 
         // Mouse events
         this.faceContainer.addEventListener('mousedown', this.handlePointerDown.bind(this));
+        this.faceContainer.addEventListener('dblclick', this.handlePointerDouble.bind(this));
         window.addEventListener('mousemove', this.handlePointerMove.bind(this));
         window.addEventListener('mouseup', this.handlePointerUp.bind(this));
 
@@ -111,6 +112,11 @@ export class FaceTransfer {
         if (this.isTransferring || !this.faceVisible) return;
 
         this.startTracking(e.clientX, e.clientY);
+    }
+
+    private handlePointerDouble(): void {
+        console.log('[FaceTransfer] Double click detected - requesting face (summon)');
+        this.deviceSync.requestFace();
     }
 
     private handlePointerMove(e: MouseEvent): void {
@@ -248,7 +254,18 @@ export class FaceTransfer {
      * Send the face to another device
      */
     sendFace(direction: TransferDirection): void {
+        const connectedDevices = this.deviceSync.getConnectedDevices();
+        const hasPeers = connectedDevices.length > 0;
+
         if (!this.faceGroup || !this.getCurrentState) return;
+
+        // Check connection
+        if (!this.deviceSync.isConnected() || !hasPeers) {
+            console.log('[FaceTransfer] No peers connected. Bouncing back.');
+            this.bounceBack(direction);
+            this.showToast('No hay dispositivos conectados para transferir.');
+            return;
+        }
 
         this.isTransferring = true;
 
@@ -450,6 +467,44 @@ export class FaceTransfer {
     // =====================================================
     // Cleanup
     // =====================================================
+
+    /**
+     * Rebound animation when transfer fails
+     */
+    private bounceBack(direction: TransferDirection): void {
+        if (!this.faceGroup) return;
+
+        // Retrieve current state to preserve tilt if possible, 
+        // effectively we just want to return to center.
+        // The drag might have removed tilt, so we just reset to center.
+
+        // Elastic snap back to center
+        gsap.to(this.faceGroup, {
+            attr: { transform: 'translate(200, 250)' },
+            opacity: 1,
+            duration: 0.8,
+            ease: "elastic.out(1, 0.6)"
+        });
+    }
+
+    /**
+     * Show a toast message
+     */
+    private showToast(message: string): void {
+        let toast = document.getElementById('toast-message');
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast-message';
+            document.body.appendChild(toast);
+        }
+
+        toast.textContent = message;
+        toast.classList.add('visible');
+
+        setTimeout(() => {
+            toast.classList.remove('visible');
+        }, 3000);
+    }
 
     destroy(): void {
         if (this.faceContainer) {
