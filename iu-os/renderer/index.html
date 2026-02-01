@@ -20,6 +20,27 @@
     <!-- Hidden Video Input for Vision -->
     <video class="input_video" style="display: none;"></video>
 
+    <!-- Navigation HUD -->
+    <div id="nav-hud" class="hidden">
+      <span id="nav-hud-text">Face</span>
+    </div>
+
+    <!-- Neural Graph Canvas -->
+    <canvas id="neural-canvas" class="hidden"></canvas>
+
+    <!-- Checklist Overlay -->
+    <div id="checklist-container" class="hidden"></div>
+
+    <!-- Intent Carousel Overlay (includes Thinking label) -->
+    <div id="intent-carousel" class="hidden">
+      <div id="thinking-label">
+        <span class="thinking-text">thinking</span>
+      </div>
+      <div id="intent-track"></div>
+      <div id="intent-label"></div>
+      <div id="intent-details" class="hidden"></div>
+    </div>
+
     <!-- Face Container - EXACT structure from iü.space -->
     <div id="face-container">
       <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
@@ -50,12 +71,6 @@
           </g>
         </g>
       </svg>
-
-      <!-- Thinking Label -->
-      <div id="thinking-label" class="hidden">
-        <span class="thinking-text">Thinking</span>
-        <span class="thinking-dots">...</span>
-      </div>
 
       <!-- Transcript Overlay -->
       <div id="transcript-container" class="hidden">
@@ -95,6 +110,13 @@
         <button id="btn-light" class="theme-btn">Light</button>
       </div>
 
+      <h3>Mode</h3>
+      <div class="button-group mode-selector">
+        <button id="btn-simple-mode" class="mode-btn">
+          <span class="mode-icon">⚡</span> Simple Mode
+        </button>
+      </div>
+
       <h3>Connect</h3>
       <div class="button-group">
         <button id="btn-qr-share" class="connect-btn">📱 Share via QR</button>
@@ -111,6 +133,8 @@
   <script src="sync/DeviceSync.js"></script>
   <script src="sync/QRConnect.js"></script>
   <script src="vision/VisionManager.js"></script>
+  <script src="systems/AudioLoop.js"></script>
+  <script src="neural-graph.js"></script>
   <!-- Main App -->
   <script src="app.js"></script>
 </body>

@@ -309,4 +309,5 @@ class NeuralGraph {
     }
 }
 
-export default NeuralGraph;
+// export default NeuralGraph;
+window.NeuralGraph = NeuralGraph;

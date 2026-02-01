@@ -384,10 +384,19 @@ function setTheme(theme) {
 
 let face;
 let panelCollapsed = true;
+let isSimpleMode = false;
 let deviceSync = null;
 let qrConnect = null;
 let visionManager = null; // Vision
 let attentionDwellTimeout = null; // Dwell timer for deep attention
+let relaxTimeout = null; // Buffer for attention jitter
+
+// Navigation State
+let currentView = 'face'; // face | brain | settings
+const VIEWS = ['face', 'brain', 'settings'];
+let neuralGraph = null;
+let navHudTimeout = null;
+
 
 function init() {
     face = new Face();
@@ -395,6 +404,11 @@ function init() {
     // Initialize VisionManager
     if (typeof VisionManager !== 'undefined') {
         visionManager = new VisionManager();
+
+        // Initialize AudioLoop
+        if (typeof AudioLoop !== 'undefined') {
+            window.audioLoop = new AudioLoop();
+        }
 
         // --- AUTO-DETECT WINDOW POSITION ---
         // Check every 1s where the window is relative to the screen
@@ -468,6 +482,12 @@ function init() {
             }
 
             if (isAttentive) {
+                // Clear any pending relax timeout if user looks back
+                if (relaxTimeout) {
+                    clearTimeout(relaxTimeout);
+                    relaxTimeout = null;
+                }
+
                 // STAGE 1: MILD ATTENTION (Immediate)
                 if (face) {
                     face.setEyeColor('#ffffff'); // Stay WHITE for mild attention
@@ -476,27 +496,50 @@ function init() {
                         face.transitionTo('mild_attention');
                     }
 
-                    // Schedule STAGE 2: DEEP ATTENTION (Thinking/Green) after 1.5s
-                    attentionDwellTimeout = setTimeout(() => {
-                        console.log('🧠 DEEP ATTENTION ACTIVATED (Dwell Reached)');
+                    // Disable deep attention (gestures won't work in shallow attention)
+                    if (visionManager) {
+                        visionManager.setDeepAttention(false);
+                    }
+
+                    // Schedule STAGE 2: CONTEXTUAL INTENT (Thinking) after 1.5s
+                    attentionDwellTimeout = setTimeout(async () => {
+                        console.log('🧠 CONTEXTUAL INTENT ACTIVATED (Dwell Reached)');
                         if (face && conversationState === 'idle') {
-                            face.setEyeColor('#00ff88'); // Turn GREEN
+                            // Keep WHITE eyes in thinking mode
                             face.transitionTo('thinking');
+
+                            // Enable deep attention (gestures now active)
+                            if (visionManager) {
+                                visionManager.setDeepAttention(true);
+                            }
+
+                            // 🚀 TRIGGER CONTEXTUAL INTENT FLOW
+                            await triggerContextualIntent();
                         }
                         attentionDwellTimeout = null;
                     }, 1500);
                 }
             } else {
-                // USER LOOKED AWAY -> RELAX
-                if (face) {
-                    face.setEyeColor('#ffffff'); // White default (No more blue)
+                // USER LOOKED AWAY -> RELAX (Delayed to handle jitter)
+                if (relaxTimeout) clearTimeout(relaxTimeout);
 
-                    // Return to Smile and Center Eyes
-                    if (conversationState === 'idle') {
-                        face.transitionTo('smile');
-                        face.lookAt(0.5, 0.5);
+                relaxTimeout = setTimeout(() => {
+                    if (face) {
+                        hideIntentCarousel();
+
+                        // Disable deep attention (gestures inactive)
+                        if (visionManager) {
+                            visionManager.setDeepAttention(false);
+                        }
+
+                        // Return to Smile and Center Eyes
+                        if (conversationState === 'idle') {
+                            face.transitionTo('smile');
+                            face.lookAt(0.5, 0.5);
+                        }
                     }
-                }
+                    relaxTimeout = null;
+                }, 1000); // 1s buffer for blinks or fast head movements
             }
         });
 
@@ -504,6 +547,13 @@ function init() {
         visionManager.setOnGesture((gesture) => {
             if (gesture === 'call') {
                 console.log('📞 CALL GESTURE DETECTED (Gated)!');
+
+                // If carousel is active, ACTIVATE current intent
+                if (isCarouselActive) {
+                    activateCurrentIntent();
+                    return;
+                }
+
                 // Trigger conversation if not active
                 if (conversationState === 'idle') {
                     // Wink for the nod gesture
@@ -523,6 +573,7 @@ function init() {
                 }
             }
         });
+
     }
 
     // Position Buttons
@@ -645,6 +696,16 @@ function init() {
     document.getElementById('btn-dark').addEventListener('click', () => setTheme('dark'));
     document.getElementById('btn-light').addEventListener('click', () => setTheme('light'));
 
+    // Mode toggle
+    const simpleModeBtn = document.getElementById('btn-simple-mode');
+    if (simpleModeBtn) {
+        simpleModeBtn.addEventListener('click', () => {
+            isSimpleMode = !isSimpleMode;
+            simpleModeBtn.classList.toggle('active', isSimpleMode);
+            showToast(isSimpleMode ? '⚡ Modo Simple: Activado' : '⚡ Modo Estándar');
+        });
+    }
+
     // QR Share button
     const qrShareBtn = document.getElementById('btn-qr-share');
     if (qrShareBtn) {
@@ -677,33 +738,126 @@ function init() {
         console.error('[DEBUG] Could NOT find #btn-transfer-top in the DOM');
     }
 
-    // Trackpad Swipe Gesture (Two-finger)
+    // --- NAVIGATION HUD & VIEW SWITCHING ---
 
+    function showNavHud(view) {
+        const hud = document.getElementById('nav-hud');
+        const text = document.getElementById('nav-hud-text');
+        if (!hud || !text) return;
+
+        const labels = {
+            face: 'Ü Home',
+            brain: 'Neural Graph',
+            settings: 'Settings'
+        };
+
+        text.textContent = labels[view] || view;
+        hud.classList.remove('hidden');
+
+        if (navHudTimeout) clearTimeout(navHudTimeout);
+        navHudTimeout = setTimeout(() => {
+            hud.classList.add('hidden');
+        }, 1500);
+    }
+
+    function switchView(view) {
+        if (!VIEWS.includes(view)) return;
+        if (currentView === view) return;
+
+        currentView = view;
+        console.log(`🌐 [Navigation] Switching to: ${view.toUpperCase()}`);
+
+        // Update Body for CSS-based transitions
+        document.body.className = `view-${view}`;
+
+        // Manage Neural Graph
+        const canvas = document.getElementById('neural-canvas');
+        if (view === 'brain') {
+            canvas.classList.remove('hidden');
+            if (neuralGraph) neuralGraph.start();
+        } else {
+            if (neuralGraph) neuralGraph.stop();
+            setTimeout(() => {
+                if (currentView !== 'brain') canvas.classList.add('hidden');
+            }, 800);
+        }
+
+        // Manage Settings Panel
+        const panel = document.getElementById('controls-panel');
+        const menuToggle = document.getElementById('menu-toggle');
+        if (view === 'settings') {
+            panel.classList.remove('collapsed');
+            if (menuToggle) menuToggle.classList.add('active');
+            panelCollapsed = false;
+        } else {
+            panel.classList.add('collapsed');
+            if (menuToggle) menuToggle.classList.remove('active');
+            panelCollapsed = true;
+        }
+
+        showNavHud(view);
+    }
+
+    // Initialize View
+    document.body.className = 'view-face';
+
+    // Trackpad / Wheel Navigation (Cool & Fluid)
     let wheelTimeout;
     window.addEventListener('wheel', (e) => {
-        // Detect horizontal scroll (deltaX)
-        // Threshold: Must be a significant horizontal move with little vertical move
-        if (Math.abs(e.deltaX) > 50 && Math.abs(e.deltaY) < 20) {
+        // Horizontal: Intents / Transfer
+        if (Math.abs(e.deltaX) > 40 && Math.abs(e.deltaY) < 30) {
+            if (isCarouselActive && currentIntents.length > 0) {
+                if (e.deltaX > 0 && focusedIntentIndex < currentIntents.length - 1) {
+                    focusedIntentIndex++;
+                } else if (e.deltaX < 0 && focusedIntentIndex > 0) {
+                    focusedIntentIndex--;
+                }
+                updateCarouselVisuals();
+                return;
+            }
 
-            // Debounce to prevent multiple triggers
             if (!wheelTimeout) {
-                console.log('Gesture Detected: Transferring...');
                 performTransfer();
+                wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 1200);
+            }
+        }
+        // Vertical: Switch Views (Cool Navigation)
+        else if (Math.abs(e.deltaY) > 60 && Math.abs(e.deltaX) < 30) {
+            if (!wheelTimeout) {
+                const currentIndex = VIEWS.indexOf(currentView);
+                let nextIndex = currentIndex;
 
-                wheelTimeout = setTimeout(() => {
-                    wheelTimeout = null;
-                }, 1000);
+                if (e.deltaY > 0 && currentIndex < VIEWS.length - 1) {
+                    nextIndex++; // Scroll Down
+                } else if (e.deltaY < 0 && currentIndex > 0) {
+                    nextIndex--; // Scroll Up
+                }
+
+                if (nextIndex !== currentIndex) {
+                    switchView(VIEWS[nextIndex]);
+                    wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 800);
+                }
             }
         }
     });
 
-    // Double-click to SUMMON (Request) Face
-    document.body.addEventListener('dblclick', () => {
-        if (deviceSync && deviceSync.isConnected()) {
-            console.log('[App] Double-click: Summoning face...');
-            deviceSync.requestFace();
+    // Initialize Neural Graph
+    const neuralCanvas = document.getElementById('neural-canvas');
+    if (neuralCanvas && typeof NeuralGraph !== 'undefined') {
+        neuralCanvas.width = window.innerWidth;
+        neuralCanvas.height = window.innerHeight;
+        neuralGraph = new NeuralGraph(neuralCanvas);
+
+        // Populate with some initial nodes
+        for (let i = 0; i < 10; i++) {
+            neuralGraph.addNode(i, `Node ${i}`);
         }
-    });
+        for (let i = 0; i < 15; i++) {
+            const from = Math.floor(Math.random() * 10);
+            const to = Math.floor(Math.random() * 10);
+            if (from !== to) neuralGraph.addEdge(from, to);
+        }
+    }
 
     console.log('✅ IÜ OS ready');
 }
@@ -764,10 +918,10 @@ async function toggleConversation() {
     if (btn) btn.disabled = true;
 
     const action = conversationState === 'idle' ? 'start' : 'stop';
-    console.log(`🎤 [App] Toggling conversation to: ${action}`);
+    console.log(`🎤 [App] Toggling conversation to: ${action} (Mode: ${isSimpleMode ? 'simple' : 'standard'})`);
 
     try {
-        const result = await window.iuOS.conversationControl(action);
+        const result = await window.iuOS.conversationControl(action, { isSimpleMode });
         console.log('[App] Received from Backend:', result);
 
         if (result.success) {
@@ -793,6 +947,26 @@ function updateConversationUI(state) {
         // Stop state
         btn.innerHTML = '<span class="transfer-text">Terminar</span>';
         btn.classList.add('active-conversation');
+
+        // Show "Empezando conversación" in intent carousel
+        const container = document.getElementById('intent-carousel');
+        const track = document.getElementById('intent-track');
+        const label = document.getElementById('intent-label');
+        const details = document.getElementById('intent-details');
+
+        if (container && track && label) {
+            container.classList.remove('hidden');
+            isCarouselActive = false; // Not interactive during voice
+
+            track.innerHTML = '<div class="intent-item focus"><div class="intent-icon">🎙️</div></div>';
+            label.textContent = 'Empezando conversación';
+            if (details) details.classList.add('hidden');
+
+            // Hide after 3 seconds
+            setTimeout(() => {
+                container.classList.add('hidden');
+            }, 3000);
+        }
 
         // Ensure face is visible
         if (face) {
@@ -921,3 +1095,262 @@ if (window.iuOS && window.iuOS.onMemoryStatus) {
     });
 }
 */
+// Task Checklist Listener
+if (window.iuOS && window.iuOS.onTaskUpdate) {
+    window.iuOS.onTaskUpdate((tasks) => {
+        console.log('📋 [Tasks Update]:', tasks);
+        renderChecklist(tasks);
+    });
+}
+
+function renderChecklist(tasks) {
+    const container = document.getElementById('checklist-container');
+    if (!container) return;
+
+    if (!tasks || tasks.length === 0) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    container.classList.remove('hidden');
+    container.innerHTML = ''; // Clear current tasks
+
+    tasks.forEach(task => {
+        const item = document.createElement('div');
+        item.className = `checklist-item ${task.status === 'completed' ? 'completed' : ''}`;
+
+        item.innerHTML = `
+            <div class="check-icon"></div>
+            <span class="task-text">${task.text}</span>
+        `;
+
+        container.appendChild(item);
+    });
+
+    // Auto-hide after some time if all tasks are completed? 
+    // Or keep it visible as long as there are tasks.
+}
+
+// =====================================================
+// Contextual Intent Logic
+// =====================================================
+
+let isCarouselActive = false;
+let currentIntents = [];
+let focusedIntentIndex = 0;
+
+// Cache for predictions to avoid re-fetching on quick re-engagement
+let cachedPredictions = null;
+let cachedPredictionsTime = 0;
+const PREDICTION_CACHE_TTL = 10000; // 10 seconds
+
+async function triggerContextualIntent() {
+    console.log('🚀 [Intent] Starting Contextual Intent flow...');
+    const container = document.getElementById('intent-carousel');
+    const track = document.getElementById('intent-track');
+    const label = document.getElementById('intent-label');
+    const details = document.getElementById('intent-details');
+
+    if (!container || !track || !label) return;
+
+    // Check if we have valid cached predictions
+    const now = Date.now();
+    const cacheValid = cachedPredictions && (now - cachedPredictionsTime) < PREDICTION_CACHE_TTL;
+
+    if (cacheValid) {
+        console.log('🎯 [Intent] Using cached predictions (quick re-engagement)');
+        isCarouselActive = true;
+        container.classList.remove('hidden');
+        renderIntentCarousel(cachedPredictions);
+        return;
+    }
+
+    // 1. Show Initial Intent: "Quieres hablar?" IMMEDIATELY
+    isCarouselActive = true;
+    container.classList.remove('hidden');
+
+    // Set initial intent
+    currentIntents = [
+        { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 }
+    ];
+    focusedIntentIndex = 0;
+
+    track.innerHTML = '<div class="intent-item focus"><div class="intent-icon">🗣️</div></div>';
+    label.textContent = '¿Quieres hablar?';
+    if (details) details.textContent = 'Iniciar conversación de voz';
+
+    // 2. Capture Context in parallel
+    let audioBlob = null;
+    if (window.audioLoop && window.audioLoop.hasAudio()) {
+        audioBlob = window.audioLoop.getAudioBuffer();
+        if (audioBlob) {
+            console.log(`[Intent] Audio blob captured: ${audioBlob.size} bytes`);
+        }
+    } else {
+        console.log('[Intent] No audio available yet');
+    }
+
+    // Capture tasks (if any)
+    const currentTasks = [];
+
+    try {
+        // 3. Request Predictions from Backend (in background)
+        // Only send audio if blob exists and has valid size (>100 bytes to be safe)
+        const audioBase64 = (audioBlob && audioBlob.size > 100) ? await blobToBase64(audioBlob) : null;
+
+        const result = await window.iuOS.getIntentPredictions({
+            audio: audioBase64,
+            tasks: currentTasks,
+            isSimpleMode: isSimpleMode
+        });
+
+        if (result.success && result.predictions && result.predictions.length > 0) {
+            // Prepend "Quieres hablar?" to the predictions
+            const allIntents = [
+                { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 },
+                ...result.predictions.map(p => ({
+                    category: p.category,
+                    label: p.label,
+                    detail: p.detail || '',
+                    probability: p.probability
+                }))
+            ];
+
+            // Cache the predictions
+            cachedPredictions = allIntents;
+            cachedPredictionsTime = Date.now();
+            console.log('💾 [Intent] Predictions cached');
+
+            renderIntentCarousel(allIntents);
+        }
+        // If no predictions or failed, keep only "Quieres hablar?"
+    } catch (e) {
+        console.error('❌ [Intent] Flow failed:', e);
+        // Keep showing "Quieres hablar?" even if LLM fails
+    }
+}
+
+function renderIntentCarousel(predictions) {
+    const track = document.getElementById('intent-track');
+    const label = document.getElementById('intent-label');
+    const details = document.getElementById('intent-details');
+    if (!track || !label) return;
+
+    currentIntents = predictions;
+    focusedIntentIndex = 0; // Start with first item (Quieres hablar?)
+
+    track.innerHTML = '';
+    predictions.forEach((intent, index) => {
+        const item = document.createElement('div');
+        item.className = `intent-item ${index === focusedIntentIndex ? 'focus' : ''}`;
+
+        const icons = {
+            'pago': '💰',
+            'mensaje': '💬',
+            'llamada': '📞',
+            'tarea': '📋',
+            'musica': '🎵',
+            'clima': '☁️',
+            'luz': '💡',
+            'ayuda': '🗣️'
+        };
+        const icon = icons[intent.category] || '✨';
+
+        item.innerHTML = `<div class="intent-icon">${icon}</div>`;
+        track.appendChild(item);
+    });
+
+    updateCarouselVisuals();
+
+    // Start auto-rotation every 5 seconds
+    startCarouselRotation();
+}
+
+let carouselRotationInterval = null;
+
+function startCarouselRotation() {
+    // Clear existing interval
+    if (carouselRotationInterval) {
+        clearInterval(carouselRotationInterval);
+    }
+
+    // Rotate to next intent every 5 seconds
+    carouselRotationInterval = setInterval(() => {
+        if (currentIntents.length > 1 && isCarouselActive) {
+            focusedIntentIndex = (focusedIntentIndex + 1) % currentIntents.length;
+            updateCarouselVisuals();
+        }
+    }, 5000);
+}
+
+function stopCarouselRotation() {
+    if (carouselRotationInterval) {
+        clearInterval(carouselRotationInterval);
+        carouselRotationInterval = null;
+    }
+}
+
+function updateCarouselVisuals() {
+    const track = document.getElementById('intent-track');
+    const label = document.getElementById('intent-label');
+    const details = document.getElementById('intent-details');
+    const items = track.querySelectorAll('.intent-item');
+
+    items.forEach((item, index) => {
+        item.classList.toggle('focus', index === focusedIntentIndex);
+    });
+
+    if (currentIntents[focusedIntentIndex]) {
+        const focused = currentIntents[focusedIntentIndex];
+        label.textContent = focused.label;
+        if (details && focused.detail) {
+            details.textContent = focused.detail;
+            details.classList.remove('hidden');
+        } else if (details) {
+            details.classList.add('hidden');
+        }
+    }
+}
+
+function hideIntentCarousel() {
+    isCarouselActive = false;
+    const container = document.getElementById('intent-carousel');
+    if (container) container.classList.add('hidden');
+    if (typeof stopCarouselRotation === 'function') {
+        stopCarouselRotation();
+    }
+}
+
+function activateCurrentIntent() {
+    const intent = currentIntents[focusedIntentIndex];
+    if (!intent) return;
+
+    console.log('🎯 [Intent] ACTIVATING:', intent.label);
+
+    // Special handling for "Quieres hablar?" - trigger voice conversation
+    if (intent.label === '¿Quieres hablar?') {
+        hideIntentCarousel();
+        setTimeout(() => {
+            toggleConversation();
+        }, 300);
+        return;
+    }
+
+    // For other intents, show toast (simulated for now)
+    showToast(`✅ Ejecutando: ${intent.label}`);
+    if (face) face.bounce();
+
+    setTimeout(() => {
+        hideIntentCarousel();
+        if (face) face.transitionTo('smile');
+    }, 1500);
+}
+
+function blobToBase64(blob) {
+    return new Promise((resolve, _) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+    });
+}
+

@@ -25,9 +25,12 @@ contextBridge.exposeInMainWorld('iuOS', {
     }),
 
     // Conversation Control
-    conversationControl: (action) => ipcRenderer.invoke('conversation-control', action),
+    conversationControl: (action, options) => ipcRenderer.invoke('conversation-control', action, options),
+    getIntentPredictions: (data) => ipcRenderer.invoke('get-intent-predictions', data),
     onConversationText: (callback) => ipcRenderer.on('conversation-text', (event, text) => callback(text)),
     onMemoryStatus: (callback) => ipcRenderer.on('memory-status', (event, status) => callback(status)),
+    onTaskUpdate: (callback) => ipcRenderer.on('task-update', (event, tasks) => callback(tasks)),
 });
+
 
 console.log('✅ IÜ OS preload ready');

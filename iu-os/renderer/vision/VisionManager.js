@@ -17,6 +17,7 @@ class VisionManager {
         // State
         this.state = {
             isAttentive: false,   // True if looking at the correct zone
+            inDeepAttention: false, // True only when in thinking mode (dwell reached)
             isGestureActive: false,
             currentZone: 'center', // left, center, right
             targetZone: 'right',   // Where this app window is located
@@ -163,8 +164,8 @@ class VisionManager {
         // Keep last 300ms
         this.state.pitchHistory = this.state.pitchHistory.filter(h => now - h.t < 300);
 
-        // Analyze Nod
-        if (this.state.isAttentive) {
+        // Analyze Nod - ONLY when in DEEP ATTENTION (thinking mode)
+        if (this.state.isAttentive && this.state.inDeepAttention) {
             // Check for "Sharp Down then Up" or just "Sharp Down" movement
             // Velocity = (CurrentPitch - OldPitch)
             // Look for a large rapid change
@@ -186,7 +187,7 @@ class VisionManager {
 
                 if (isNoddingDown) {
                     if (!this.state.isGestureActive) {
-                        console.log(`📉 NOD DETECTED! Velocity: ${velocity.toFixed(1)}`);
+                        console.log(`📉 NOD DETECTED (Deep Attention)! Velocity: ${velocity.toFixed(1)}`);
                         this.state.isGestureActive = true;
                         this.triggerGesture('call');
                         // Cooldown
@@ -197,6 +198,10 @@ class VisionManager {
                     if (Math.abs(velocity) < 1.5) this.state.isGestureActive = false;
                 }
             }
+        } else if (this.state.isAttentive && !this.state.inDeepAttention) {
+            // Shallow attention - gestures are disabled
+            // Reset gesture state to prevent stale activations
+            this.state.isGestureActive = false;
         }
 
         // Send Data to UI
@@ -233,6 +238,10 @@ class VisionManager {
     setOnAttentionChange(cb) { this.onAttentionChange = cb; }
     setOnGesture(cb) { this.onGesture = cb; }
     setOnFaceUpdate(cb) { this.onFaceUpdate = cb; }
+    setDeepAttention(isDeep) {
+        this.state.inDeepAttention = isDeep;
+        console.log(`🧠 Deep Attention: ${isDeep ? 'ENABLED' : 'DISABLED'} (Gestures ${isDeep ? 'active' : 'inactive'})`);
+    }
 }
 
 // Export

@@ -5,12 +5,31 @@
 
 const { app, BrowserWindow, screen, ipcMain, systemPreferences } = require('electron');
 const path = require('path');
-// const memoryService = require('./MemoryService'); // Temporarily disabled RAG memory system
+const fs = require('fs');
+const OpenAI = require('openai');
+require('dotenv').config();
+
+// Fix for OpenAI File/Blob upload in Node environments without globals
+if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefined') {
+    const { File, Blob } = require('node:buffer');
+    globalThis.File = globalThis.File || File;
+    globalThis.Blob = globalThis.Blob || Blob;
+}
+
+// Initialize OpenAI
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 
 let mainWindow = null;
 
 // Sidebar width
 const SIDEBAR_WIDTH = 300;
+
+// System Prompt for personality and task formatting
+const SYSTEM_PROMPT = `Seras U, el asistente capaz de controlar dispositivos, Iphone, Android, Ipad, y hasta tu computador, una IA integrada enfocada en minimizar el uso de tus dispositivos. Yo los uso para que tu puedas dedicarte a Vivir de verdad. Se libre de la tecnologia. Tu personalidad: Serio, eficaz, Poderoso, Colaborador, Atento.
+
+SOLO RESPONDE 'Hola! que tal?'.`;
+
 
 async function requestCameraAccess() {
     if (process.platform === 'darwin') {
@@ -161,8 +180,9 @@ async function setupChatGPT() {
     }
 }
 
-ipcMain.handle('conversation-control', async (event, action) => {
-    console.log(`🎤 IPC received: conversation-control -> ${action}`);
+ipcMain.handle('conversation-control', async (event, action, options = {}) => {
+    console.log(`🎤 IPC received: conversation-control -> ${action}`, options);
+    const { isSimpleMode } = options;
 
     // Recovery logic for closed/navigated pages
     if (!chatPage || chatPage.isClosed()) {
@@ -183,7 +203,7 @@ ipcMain.handle('conversation-control', async (event, action) => {
 
     try {
         if (action === 'start') {
-            console.log('🔍 Searching for "Start Voice" button...');
+            console.log('🔍 Starting voice conversation FIRST, then injecting prompt...');
 
             // Exact selectors provided by the user
             const selectors = [
@@ -193,22 +213,54 @@ ipcMain.handle('conversation-control', async (event, action) => {
             ];
 
             let startBtn = null;
-            for (const sel of selectors) {
-                try {
-                    const locator = chatPage.locator(sel);
-                    if (await locator.count() > 0) {
-                        console.log(`✅ Found button with selector: ${sel}`);
-                        startBtn = locator.first();
-                        break;
-                    }
-                } catch (e) {
-                    console.log(`Selector ${sel} failed or not found.`);
+            let attempts = 0;
+            const maxAttempts = 10; // Wait up to 5 seconds (500ms * 10)
+
+            while (attempts < maxAttempts) {
+                console.log(`🔍 Searching for "Start Voice" button (Attempt ${attempts + 1})...`);
+                for (const sel of selectors) {
+                    try {
+                        const locator = chatPage.locator(sel);
+                        if (await locator.count() > 0 && await locator.isVisible()) {
+                            console.log(`✅ Found button with selector: ${sel}`);
+                            startBtn = locator.first();
+                            break;
+                        }
+                    } catch (e) { }
                 }
+
+                if (startBtn) break;
+
+                attempts++;
+                await chatPage.waitForTimeout(500); // Wait between polls
             }
 
             if (startBtn) {
+                // 1. FIRST: Click "Start Voice"
                 await startBtn.click();
                 console.log('🖱️ Clicked "Start Voice" successfully');
+
+                // Wait for voice UI to initialize
+                await chatPage.waitForTimeout(1500);
+
+                // 2. THEN: Inject System Prompt DURING voice conversation
+                try {
+                    const composer = chatPage.locator('#prompt-textarea');
+                    if (await composer.count() > 0) {
+                        let promptToInject = SYSTEM_PROMPT;
+                        if (isSimpleMode) {
+                            promptToInject += "\n[MODO SIMPLE ACTIVADO: Responde de forma ultra-corta, exacta y sin relleno.]";
+                        }
+
+                        console.log('✍️ Injecting System Prompt DURING voice conversation...');
+                        await composer.fill(promptToInject);
+                        await chatPage.keyboard.press('Enter');
+
+                        console.log('✅ System prompt sent during active voice conversation');
+                    }
+                } catch (e) {
+                    console.warn('⚠️ Could not inject System Prompt during voice:', e);
+                }
 
                 // Start monitoring for transcription text
                 startTextMonitoring();
@@ -237,6 +289,80 @@ ipcMain.handle('conversation-control', async (event, action) => {
         return { success: false, error: e.message };
     }
 });
+
+// ============================================
+// Contextual Intent Prediction
+// ============================================
+ipcMain.handle('get-intent-predictions', async (event, data) => {
+    console.log('🧠 [Main] Received request for intent predictions...');
+    const { audio, tasks } = data;
+    let transcript = "";
+
+    try {
+        if (audio) {
+            // 1. Decode Base64 to Buffer
+            // Handle data URLs with optional codec info like "audio/webm;codecs=opus"
+            const base64Data = audio.replace(/^data:audio\/[^;]+[^,]*,/, "");
+            const buffer = Buffer.from(base64Data, 'base64');
+
+            console.log(`🎤 [Audio] Decoded buffer: ${buffer.length} bytes`);
+
+            // Validate buffer size (minimum 1KB for valid audio)
+            if (buffer.length < 1000) {
+                console.warn(`⚠️ [Audio] Buffer too small (${buffer.length} bytes), skipping transcription`);
+            } else {
+                // 2. Save temporary file for Whisper with proper .webm extension
+                const tempFile = path.join(app.getPath('temp'), `audio_${Date.now()}.webm`);
+                fs.writeFileSync(tempFile, buffer);
+
+                console.log(`🎤 [Audio] Saved temp file: ${tempFile} (${buffer.length} bytes)`);
+
+                // 3. Transcribe with Whisper
+                const transcription = await openai.audio.transcriptions.create({
+                    file: fs.createReadStream(tempFile),
+                    model: "whisper-1",
+                });
+                transcript = transcription.text;
+                console.log('🎤 [Transcription]:', transcript);
+
+                // Cleanup
+                fs.unlinkSync(tempFile);
+            }
+        }
+
+        // 4. Reasoning with ChatGPT
+        const response = await openai.chat.completions.create({
+            model: "gpt-4-turbo-preview",
+            messages: [
+                {
+                    role: "system",
+                    content: `Analiza el contexto del usuario (audio reciente y tareas) para predecir qué intención tiene al mirar fijamente a la IA.
+                    Responde ÚNICAMENTE con un JSON en este formato:
+                    {
+                      "predictions": [
+                        { "category": "pago|mensaje|llamada|tarea|musica|clima|luz|ayuda", "label": "Descripción corta", "probability": 0.95 },
+                        ...
+                      ]
+                    }
+                    Devuelve exactamente 3 predicciones ordenadas por importancia.`
+                },
+                {
+                    role: "user",
+                    content: `Audio reciente: "${transcript}"\nTareas actuales: ${JSON.stringify(tasks)}`
+                }
+            ],
+            response_format: { type: "json_object" }
+        });
+
+        const predictions = JSON.parse(response.choices[0].message.content).predictions;
+        return { success: true, predictions };
+
+    } catch (e) {
+        console.error('❌ [Intent Prediction] Failed:', e);
+        return { success: false, error: e.message };
+    }
+});
+
 
 let textMonitoringInterval = null;
 let lastExtractedText = '';
@@ -328,6 +454,18 @@ function startTextMonitoring() {
 
                 if (mainWindow) {
                     mainWindow.webContents.send('conversation-text', cleanText);
+                }
+
+                // Task Extraction (Regex for JSON blocks)
+                const jsonMatch = cleanText.match(/```json\n([\s\S]*?)\n```/);
+                if (jsonMatch && jsonMatch[1]) {
+                    try {
+                        const taskData = JSON.parse(jsonMatch[1]);
+                        if (taskData && taskData.tasks && mainWindow) {
+                            console.log('📋 [Tasks] Found new task list in transcription');
+                            mainWindow.webContents.send('task-update', taskData.tasks);
+                        }
+                    } catch (e) { }
                 }
 
                 /* 
