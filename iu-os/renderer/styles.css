@@ -683,10 +683,22 @@ body {
 
 #intent-track {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  /* Firefox */
+  padding: 4px 0;
+}
+
+#intent-track::-webkit-scrollbar {
+  display: none;
+  /* Chrome, Safari */
 }
 
 .intent-item {

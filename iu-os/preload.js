@@ -27,9 +27,15 @@ contextBridge.exposeInMainWorld('iuOS', {
     // Conversation Control
     conversationControl: (action, options) => ipcRenderer.invoke('conversation-control', action, options),
     getIntentPredictions: (data) => ipcRenderer.invoke('get-intent-predictions', data),
+    activateThinkingMode: () => ipcRenderer.invoke('activate-thinking-mode'),
+
+    // Event Listeners
     onConversationText: (callback) => ipcRenderer.on('conversation-text', (event, text) => callback(text)),
     onMemoryStatus: (callback) => ipcRenderer.on('memory-status', (event, status) => callback(status)),
     onTaskUpdate: (callback) => ipcRenderer.on('task-update', (event, tasks) => callback(tasks)),
+    onSystemReady: (callback) => ipcRenderer.on('system-ready', () => callback()),
+    onExplicitPredictions: (callback) => ipcRenderer.on('explicit-predictions', (event, predictions) => callback(predictions)),
+    onVoiceStateChanged: (callback) => ipcRenderer.on('voice-state-changed', (event, state) => callback(state)),
 });
 
 

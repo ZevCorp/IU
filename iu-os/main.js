@@ -175,8 +175,45 @@ async function setupChatGPT() {
 
         console.log('🤖 ChatGPT window opened. Please login if needed.');
 
+        // Wait for page to be ready, then inject system prompt
+        await injectSystemPromptOnStartup();
+
     } catch (error) {
         console.error('❌ Failed to setup ChatGPT:', error);
+    }
+}
+
+// Inject system prompt as text message on startup (not during voice)
+async function injectSystemPromptOnStartup() {
+    if (!chatPage) return;
+
+    try {
+        // Wait for composer to be ready (max 30s for login)
+        console.log('⏳ Waiting for ChatGPT to be ready...');
+        await chatPage.waitForSelector('#prompt-textarea', { timeout: 30000 });
+
+        // Small delay to ensure page is interactive
+        await chatPage.waitForTimeout(2000);
+
+        const composer = chatPage.locator('#prompt-textarea');
+        if (await composer.count() > 0) {
+            console.log('✍️ Injecting System Prompt on startup...');
+            await composer.fill(SYSTEM_PROMPT);
+            await chatPage.keyboard.press('Enter');
+
+            // Wait for response
+            await chatPage.waitForTimeout(3000);
+            console.log('✅ System prompt injected on startup');
+
+            // Start voice state monitoring
+            startVoiceStateMonitoring();
+
+            if (mainWindow) {
+                mainWindow.webContents.send('system-ready');
+            }
+        }
+    } catch (e) {
+        console.warn('⚠️ Could not inject System Prompt on startup:', e.message);
     }
 }
 
@@ -236,31 +273,14 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
             }
 
             if (startBtn) {
-                // 1. FIRST: Click "Start Voice"
+                // Click "Start Voice"
                 await startBtn.click();
                 console.log('🖱️ Clicked "Start Voice" successfully');
 
                 // Wait for voice UI to initialize
                 await chatPage.waitForTimeout(1500);
 
-                // 2. THEN: Inject System Prompt DURING voice conversation
-                try {
-                    const composer = chatPage.locator('#prompt-textarea');
-                    if (await composer.count() > 0) {
-                        let promptToInject = SYSTEM_PROMPT;
-                        if (isSimpleMode) {
-                            promptToInject += "\n[MODO SIMPLE ACTIVADO: Responde de forma ultra-corta, exacta y sin relleno.]";
-                        }
-
-                        console.log('✍️ Injecting System Prompt DURING voice conversation...');
-                        await composer.fill(promptToInject);
-                        await chatPage.keyboard.press('Enter');
-
-                        console.log('✅ System prompt sent during active voice conversation');
-                    }
-                } catch (e) {
-                    console.warn('⚠️ Could not inject System Prompt during voice:', e);
-                }
+                // System prompt already injected on startup, no need to inject here
 
                 // Start monitoring for transcription text
                 startTextMonitoring();
@@ -289,9 +309,229 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
         return { success: false, error: e.message };
     }
 });
+// ============================================
+// Thinking Mode Activation (Explicit Suggestions)
+// ============================================
+let userVoiceMonitoringInterval = null;
+let lastUserText = '';
+
+ipcMain.handle('activate-thinking-mode', async (event) => {
+    console.log('🧠 [Thinking] Activating thinking mode...');
+
+    if (!chatPage || chatPage.isClosed()) {
+        return { success: false, error: 'ChatGPT not ready' };
+    }
+
+    try {
+        // 1. Send context message as text
+        const composer = chatPage.locator('#prompt-textarea');
+        if (await composer.count() > 0) {
+            console.log('✍️ Sending context: "El usuario podría querer algo a continuación"');
+            await composer.fill('El usuario podría querer algo a continuación.');
+            await chatPage.keyboard.press('Enter');
+        }
+
+        // 2. Wait for ChatGPT to respond (voice button only appears after response)
+        console.log('⏳ Waiting for ChatGPT to respond...');
+        try {
+            // Wait for assistant response to appear (max 15s)
+            await chatPage.waitForSelector(
+                '[data-message-author-role="assistant"]',
+                { timeout: 15000, state: 'attached' }
+            );
+            console.log('✅ ChatGPT responded');
+
+            // Small delay for UI to stabilize
+            await chatPage.waitForTimeout(500);
+        } catch (e) {
+            console.warn('⚠️ ChatGPT response timeout, continuing anyway');
+        }
+
+        // 3. Activate voice mode (if not already active)
+        try {
+            // First check if voice is already active
+            const stopBtn = await chatPage.locator('button[aria-label="End Voice"]').count();
+            if (stopBtn > 0) {
+                console.log('🎙️ Voice already active');
+            } else {
+                // Wait for voice button to appear (max 10s)
+                console.log('⏳ Waiting for voice button...');
+                const voiceBtn = await chatPage.waitForSelector(
+                    'button[aria-label="Use microphone"], button[aria-label="Start Voice"]',
+                    { timeout: 10000, state: 'visible' }
+                ).catch(() => null);
+
+                if (voiceBtn) {
+                    await voiceBtn.click();
+                    console.log('🎙️ Voice mode activated');
+                    await chatPage.waitForTimeout(1500);
+                } else {
+                    console.log('⚠️ Voice button not found, continuing without voice');
+                }
+            }
+        } catch (voiceErr) {
+            console.warn('⚠️ Could not activate voice:', voiceErr.message);
+        }
+
+        // 3. Start monitoring for user voice transcription (explicit suggestions)
+        startUserVoiceMonitoring();
+
+        // 4. Also start regular text monitoring for assistant responses
+        startTextMonitoring();
+
+        return { success: true };
+
+    } catch (e) {
+        console.error('❌ [Thinking] Activation failed:', e);
+        return { success: false, error: e.message };
+    }
+});
+
+// Monitor user's voice transcription (for explicit intent suggestions)
+function startUserVoiceMonitoring() {
+    if (userVoiceMonitoringInterval) return;
+
+    console.log('👂 [Explicit] Starting user voice monitoring...');
+    lastUserText = '';
+
+    userVoiceMonitoringInterval = setInterval(async () => {
+        if (!chatPage || chatPage.isClosed()) return;
+
+        try {
+            // Extract the latest user message transcription
+            const userText = await chatPage.evaluate(() => {
+                const userMessages = document.querySelectorAll('[data-message-author-role="user"]');
+                if (userMessages.length === 0) return '';
+
+                const lastMessage = userMessages[userMessages.length - 1];
+                // Look for transcription in whitespace-pre-wrap div or general text
+                const preWrap = lastMessage.querySelector('.whitespace-pre-wrap');
+                if (preWrap) return preWrap.innerText;
+
+                const markdown = lastMessage.querySelector('.markdown');
+                return markdown ? markdown.innerText : lastMessage.innerText;
+            });
+
+            const cleanText = userText.trim();
+
+            // If we found new user text, send to classifier for explicit suggestions
+            if (cleanText && cleanText !== lastUserText && cleanText.length > 5) {
+                lastUserText = cleanText;
+                console.log('🗣️ [Explicit] User said:', cleanText.substring(0, 50) + '...');
+
+                // Use classifier to generate explicit suggestions
+                const predictions = await classifyExplicitIntent(cleanText);
+
+                if (predictions && predictions.length > 0 && mainWindow) {
+                    console.log('🎯 [Explicit] Sending predictions to renderer');
+                    mainWindow.webContents.send('explicit-predictions', predictions);
+                }
+            }
+        } catch (e) {
+            // Silently fail polling
+        }
+    }, 500);
+}
+
+function stopUserVoiceMonitoring() {
+    if (userVoiceMonitoringInterval) {
+        clearInterval(userVoiceMonitoringInterval);
+        userVoiceMonitoringInterval = null;
+        lastUserText = '';
+        console.log('🔇 [Explicit] Stopped user voice monitoring');
+    }
+}
+
+// Classify explicit intent from user's spoken text
+async function classifyExplicitIntent(userText) {
+    try {
+        const response = await openai.chat.completions.create({
+            model: "gpt-5-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: `El usuario acaba de decir algo en voz alta. Analiza su intención explícita.
+                    Responde ÚNICAMENTE con un JSON:
+                    {
+                      "predictions": [
+                        { "category": "pago|mensaje|llamada|tarea|musica|clima|luz|ayuda", "label": "Descripción corta", "probability": 0.95, "explicit": true }
+                      ]
+                    }
+                    Devuelve SOLO las intenciones que el usuario mencionó explícitamente. Máximo 3.`
+                },
+                {
+                    role: "user",
+                    content: `El usuario dijo: "${userText}"`
+                }
+            ],
+            response_format: { type: "json_object" }
+        });
+
+        return JSON.parse(response.choices[0].message.content).predictions;
+    } catch (e) {
+        console.error('❌ [Explicit] Classification failed:', e);
+        return [];
+    }
+}
 
 // ============================================
-// Contextual Intent Prediction
+// Voice State Monitoring (Constant Listener)
+// ============================================
+let voiceStateInterval = null;
+let currentVoiceState = 'unknown'; // 'active' | 'inactive' | 'unknown'
+
+function startVoiceStateMonitoring() {
+    if (voiceStateInterval) return;
+
+    console.log('🎙️ [VoiceState] Starting constant monitoring...');
+
+    voiceStateInterval = setInterval(async () => {
+        if (!chatPage || chatPage.isClosed()) return;
+
+        try {
+            const state = await chatPage.evaluate(() => {
+                // If "Start Voice" button exists -> voice is inactive
+                if (document.querySelector('button[aria-label="Start Voice"]')) return 'inactive';
+                // If "End Voice" or "Starting Voice" (Cancel) exists -> voice is active
+                if (document.querySelector('button[aria-label="End Voice"]')) return 'active';
+                if (document.querySelector('button[aria-label="Starting Voice"]')) return 'active';
+                // If send button exists but no Start Voice -> might still be in voice mode
+                const sendBtn = document.querySelector('#composer-submit-button');
+                const startVoice = document.querySelector('button[aria-label="Start Voice"]');
+                if (sendBtn && !startVoice) return 'active';
+                return 'unknown';
+            });
+
+            if (state !== currentVoiceState && state !== 'unknown') {
+                currentVoiceState = state;
+                console.log(`🎙️ [VoiceState] Changed to: ${state}`);
+                if (mainWindow) {
+                    mainWindow.webContents.send('voice-state-changed', state);
+                }
+            }
+        } catch (e) {
+            // Silently fail
+        }
+    }, 500);
+}
+
+function stopVoiceStateMonitoring() {
+    if (voiceStateInterval) {
+        clearInterval(voiceStateInterval);
+        voiceStateInterval = null;
+        currentVoiceState = 'unknown';
+        console.log('🔇 [VoiceState] Stopped monitoring');
+    }
+}
+
+// Start voice state monitoring when ChatGPT is ready
+ipcMain.handle('start-voice-monitoring', () => {
+    startVoiceStateMonitoring();
+    return { success: true };
+});
+
+// ============================================
+// Contextual Intent Prediction (Implicit Suggestions)
 // ============================================
 ipcMain.handle('get-intent-predictions', async (event, data) => {
     console.log('🧠 [Main] Received request for intent predictions...');
@@ -330,9 +570,9 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
             }
         }
 
-        // 4. Reasoning with ChatGPT
+        // 4. Reasoning with GPT-5 Mini Classifier
         const response = await openai.chat.completions.create({
-            model: "gpt-4-turbo-preview",
+            model: "gpt-5-mini",
             messages: [
                 {
                     role: "system",

@@ -1186,7 +1186,14 @@ async function triggerContextualIntent() {
     label.textContent = '¿Quieres hablar?';
     if (details) details.textContent = 'Iniciar conversación de voz';
 
-    // Capture audio
+    // PARALLEL: Start both implicit and explicit suggestion flows
+
+    // 1. Activate thinking mode (sends context + starts voice + monitors user speech)
+    window.iuOS.activateThinkingMode().catch(e => {
+        console.warn('⚠️ [Intent] Thinking mode activation failed:', e);
+    });
+
+    // 2. Get implicit suggestions from pre-recorded audio
     let audioBlob = null;
     if (window.audioLoop && window.audioLoop.hasAudio()) {
         audioBlob = window.audioLoop.getAudioBuffer();
@@ -1360,3 +1367,113 @@ function blobToBase64(blob) {
     });
 }
 
+// =====================================================
+// Explicit Intent Predictions (from user voice)
+// =====================================================
+
+// Insert explicit predictions at the START of carousel (after "Quieres hablar")
+function appendExplicitPredictions(predictions) {
+    if (!predictions || predictions.length === 0) return;
+    if (!isCarouselActive) return;
+
+    console.log('🎯 [Explicit] Inserting', predictions.length, 'explicit predictions at START');
+
+    const track = document.getElementById('intent-track');
+    if (!track) return;
+
+    const icons = {
+        'pago': '💰',
+        'mensaje': '💬',
+        'llamada': '📞',
+        'tarea': '📋',
+        'musica': '🎵',
+        'clima': '☁️',
+        'luz': '💡',
+        'ayuda': '🆘',
+        'comida': '🍔',
+        'transporte': '🚗'
+    };
+
+    // Filter out duplicates
+    const newPredictions = predictions.filter(pred =>
+        !currentIntents.some(i => i.label === pred.label)
+    );
+
+    if (newPredictions.length === 0) return;
+
+    // Insert at position 1 (after "Quieres hablar" which is at 0)
+    const insertPosition = Math.min(1, currentIntents.length);
+
+    newPredictions.forEach((pred, index) => {
+        // Add to currentIntents at the beginning (after quieres hablar)
+        currentIntents.splice(insertPosition + index, 0, {
+            category: pred.category,
+            label: pred.label,
+            detail: pred.detail || '',
+            probability: pred.probability,
+            explicit: true
+        });
+    });
+
+    // Re-render the entire track with new order
+    track.innerHTML = '';
+    currentIntents.forEach((intent, index) => {
+        const item = document.createElement('div');
+        item.className = 'intent-item' + (intent.explicit ? ' explicit' : '') + (index === insertPosition ? ' focus' : '');
+
+        const icon = document.createElement('div');
+        icon.className = 'intent-icon';
+        icon.textContent = icons[intent.category] || (intent.label === '¿Quieres hablar?' ? '🗣️' : '✨');
+
+        item.appendChild(icon);
+        track.appendChild(item);
+    });
+
+    // Focus on the first new prediction
+    focusedIntentIndex = insertPosition;
+    updateCarouselVisuals();
+
+    // Restart carousel rotation
+    startCarouselRotation();
+
+    // Update cache
+    cachedPredictions = currentIntents.filter(i => i.label !== '¿Quieres hablar?');
+
+    console.log('📊 [Explicit] Carousel now has', currentIntents.length, 'intents, focused on index', focusedIntentIndex);
+}
+
+// Listen for explicit predictions from main process
+if (window.iuOS && window.iuOS.onExplicitPredictions) {
+    window.iuOS.onExplicitPredictions((predictions) => {
+        console.log('📥 [Explicit] Received predictions from main:', predictions);
+        appendExplicitPredictions(predictions);
+    });
+}
+
+// Listen for system ready notification
+if (window.iuOS && window.iuOS.onSystemReady) {
+    window.iuOS.onSystemReady(() => {
+        console.log('✅ System prompt injected, ChatGPT ready');
+        showToast('U está listo');
+    });
+}
+
+// Listen for voice state changes to update the talk button
+if (window.iuOS && window.iuOS.onVoiceStateChanged) {
+    window.iuOS.onVoiceStateChanged((state) => {
+        console.log('🎙️ [VoiceState] Received state:', state);
+        const btn = document.getElementById('talk-btn');
+        if (!btn) return;
+
+        const textSpan = btn.querySelector('.transfer-text');
+        if (state === 'active') {
+            isConversationActive = true;
+            btn.classList.add('active-conversation');
+            if (textSpan) textSpan.textContent = 'Terminar';
+        } else if (state === 'inactive') {
+            isConversationActive = false;
+            btn.classList.remove('active-conversation');
+            if (textSpan) textSpan.textContent = 'Hablar';
+        }
+    });
+}
