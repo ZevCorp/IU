@@ -1,7 +1,7 @@
 /**
  * Audio Loop & Buffer (Simplified for Electron)
- * Records audio continuously in a rolling buffer (max 40s)
- * Uses restart strategy to ensure valid webm headers.
+ * Records audio continuously, always keeping ~30s available.
+ * Saves previous cycle's audio to ensure continuity.
  */
 
 class AudioLoop {
@@ -9,12 +9,14 @@ class AudioLoop {
         this.mediaRecorder = null;
         this.audioChunks = [];
         this.isRecording = false;
-        this.maxDurationMs = 40000; // 40 seconds
-        this.restartIntervalMs = 30000; // Restart every 30s to keep headers fresh
+        this.restartIntervalMs = 30000; // 30 seconds per cycle
         this.restartTimer = null;
         this.stream = null;
 
-        // Auto-start for simplicity in Electron app
+        // Keep previous cycle's blob for continuity
+        this.previousBlob = null;
+
+        // Auto-start
         this.start();
     }
 
@@ -27,10 +29,9 @@ class AudioLoop {
 
             this._startRecorder();
 
-            // Restart recorder periodically to ensure fresh headers
+            // Restart recorder every 30s, saving the previous blob
             this.restartTimer = setInterval(() => {
-                console.log('[AudioLoop] Restarting recorder for fresh headers...');
-                this._restartRecorder();
+                this._saveAndRestart();
             }, this.restartIntervalMs);
 
         } catch (error) {
@@ -41,11 +42,9 @@ class AudioLoop {
     _startRecorder() {
         if (!this.stream) return;
 
-        // Specify MIME type explicitly to ensure webm format
         const mimeType = 'audio/webm;codecs=opus';
 
         if (!MediaRecorder.isTypeSupported(mimeType)) {
-            console.warn('[AudioLoop] webm not supported, using default');
             this.mediaRecorder = new MediaRecorder(this.stream);
         } else {
             this.mediaRecorder = new MediaRecorder(this.stream, { mimeType });
@@ -59,16 +58,24 @@ class AudioLoop {
             }
         };
 
-        this.mediaRecorder.start(1000); // Collect chunks every 1s
+        this.mediaRecorder.start(1000);
         this.isRecording = true;
-        console.log('[AudioLoop] Started recording with MIME:', this.mediaRecorder.mimeType);
+        console.log('[AudioLoop] Started recording');
     }
 
-    _restartRecorder() {
+    _saveAndRestart() {
+        // Save current chunks as blob before restarting
+        if (this.audioChunks.length > 0) {
+            const mimeType = this.mediaRecorder ? this.mediaRecorder.mimeType : 'audio/webm;codecs=opus';
+            this.previousBlob = new Blob(this.audioChunks, { type: mimeType });
+            console.log(`[AudioLoop] Saved previous blob: ${this.previousBlob.size} bytes`);
+        }
+
+        // Stop and restart
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             this.mediaRecorder.stop();
         }
-        // Small delay to ensure clean stop
+
         setTimeout(() => {
             this._startRecorder();
         }, 100);
@@ -93,26 +100,40 @@ class AudioLoop {
 
         this.isRecording = false;
         this.audioChunks = [];
+        this.previousBlob = null;
         console.log('[AudioLoop] Stopped recording');
     }
 
     hasAudio() {
-        return this.audioChunks.length > 0;
+        return this.audioChunks.length > 0 || this.previousBlob !== null;
     }
 
     getAudioBuffer() {
-        if (this.audioChunks.length === 0) {
-            console.warn('[AudioLoop] No audio chunks available');
-            return null;
+        const mimeType = this.mediaRecorder ? this.mediaRecorder.mimeType : 'audio/webm;codecs=opus';
+
+        // If current chunks have at least 15s (15 chunks), use them
+        if (this.audioChunks.length >= 15) {
+            const blob = new Blob(this.audioChunks, { type: mimeType });
+            console.log(`[AudioLoop] Using current buffer: ${this.audioChunks.length}s, ${blob.size} bytes`);
+            return blob;
         }
 
-        // Create blob with explicit MIME type
-        const mimeType = this.mediaRecorder ? this.mediaRecorder.mimeType : 'audio/webm;codecs=opus';
-        const blob = new Blob(this.audioChunks, { type: mimeType });
-        console.log(`[AudioLoop] Created blob with ${this.audioChunks.length} chunks, size: ${blob.size} bytes, type: ${mimeType}`);
-        return blob;
+        // Otherwise use the previous cycle's blob if available
+        if (this.previousBlob) {
+            console.log(`[AudioLoop] Using previous cycle: ${this.previousBlob.size} bytes`);
+            return this.previousBlob;
+        }
+
+        // Fallback: use whatever we have
+        if (this.audioChunks.length > 0) {
+            const blob = new Blob(this.audioChunks, { type: mimeType });
+            console.log(`[AudioLoop] Using short buffer: ${this.audioChunks.length}s, ${blob.size} bytes`);
+            return blob;
+        }
+
+        console.warn('[AudioLoop] No audio available');
+        return null;
     }
 }
 
-// Export for window use
 window.AudioLoop = AudioLoop;

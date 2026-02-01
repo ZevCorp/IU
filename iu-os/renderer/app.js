@@ -84,6 +84,13 @@ function generateMouthPath(centerX, centerY, width, curve, leftCorner, rightCorn
 }
 
 // =====================================================
+// Intent Prediction Cache (Global for access in attention handler)
+// =====================================================
+let cachedPredictions = null;        // The actual predictions (without "quieres hablar")
+let lastLookedAwayTime = 0;          // Timestamp when user last looked away
+const PREDICTION_CACHE_TTL = 15000;  // 15 seconds since looked away
+
+// =====================================================
 // Face State
 // =====================================================
 
@@ -513,7 +520,7 @@ function init() {
                                 visionManager.setDeepAttention(true);
                             }
 
-                            // 🚀 TRIGGER CONTEXTUAL INTENT FLOW
+                            // 🚀 TRIGGER CONTEXTUAL INTENT FLOW (cache is handled inside)
                             await triggerContextualIntent();
                         }
                         attentionDwellTimeout = null;
@@ -524,6 +531,9 @@ function init() {
                 if (relaxTimeout) clearTimeout(relaxTimeout);
 
                 relaxTimeout = setTimeout(() => {
+                    // Record when user looked away (for cache timing)
+                    lastLookedAwayTime = Date.now();
+
                     if (face) {
                         hideIntentCarousel();
 
@@ -1139,10 +1149,7 @@ let isCarouselActive = false;
 let currentIntents = [];
 let focusedIntentIndex = 0;
 
-// Cache for predictions to avoid re-fetching on quick re-engagement
-let cachedPredictions = null;
-let cachedPredictionsTime = 0;
-const PREDICTION_CACHE_TTL = 10000; // 10 seconds
+// Note: cachedPredictions, lastLookedAwayTime, PREDICTION_CACHE_TTL are defined at top of file
 
 async function triggerContextualIntent() {
     console.log('🚀 [Intent] Starting Contextual Intent flow...');
@@ -1153,23 +1160,23 @@ async function triggerContextualIntent() {
 
     if (!container || !track || !label) return;
 
-    // Check if we have valid cached predictions
-    const now = Date.now();
-    const cacheValid = cachedPredictions && (now - cachedPredictionsTime) < PREDICTION_CACHE_TTL;
+    // CACHE CHECK: if user looked away less than 15s ago and we have predictions
+    const timeSinceLookedAway = Date.now() - lastLookedAwayTime;
+    const hasValidCache = cachedPredictions && cachedPredictions.length > 0 && timeSinceLookedAway < PREDICTION_CACHE_TTL;
 
-    if (cacheValid) {
-        console.log('🎯 [Intent] Using cached predictions (quick re-engagement)');
+    if (hasValidCache) {
+        console.log(`🎯 [Intent] Using cache (looked away ${Math.round(timeSinceLookedAway / 1000)}s ago)`);
         isCarouselActive = true;
         container.classList.remove('hidden');
+        // Show cached predictions directly (no "quieres hablar" first)
         renderIntentCarousel(cachedPredictions);
         return;
     }
 
-    // 1. Show Initial Intent: "Quieres hablar?" IMMEDIATELY
+    // FRESH REQUEST: Show "Quieres hablar?" while fetching
     isCarouselActive = true;
     container.classList.remove('hidden');
 
-    // Set initial intent
     currentIntents = [
         { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 }
     ];
@@ -1179,54 +1186,53 @@ async function triggerContextualIntent() {
     label.textContent = '¿Quieres hablar?';
     if (details) details.textContent = 'Iniciar conversación de voz';
 
-    // 2. Capture Context in parallel
+    // Capture audio
     let audioBlob = null;
     if (window.audioLoop && window.audioLoop.hasAudio()) {
         audioBlob = window.audioLoop.getAudioBuffer();
         if (audioBlob) {
             console.log(`[Intent] Audio blob captured: ${audioBlob.size} bytes`);
         }
-    } else {
-        console.log('[Intent] No audio available yet');
     }
 
-    // Capture tasks (if any)
-    const currentTasks = [];
-
     try {
-        // 3. Request Predictions from Backend (in background)
-        // Only send audio if blob exists and has valid size (>100 bytes to be safe)
         const audioBase64 = (audioBlob && audioBlob.size > 100) ? await blobToBase64(audioBlob) : null;
 
         const result = await window.iuOS.getIntentPredictions({
             audio: audioBase64,
-            tasks: currentTasks,
+            tasks: [],
             isSimpleMode: isSimpleMode
         });
 
         if (result.success && result.predictions && result.predictions.length > 0) {
-            // Prepend "Quieres hablar?" to the predictions
-            const allIntents = [
-                { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 },
-                ...result.predictions.map(p => ({
-                    category: p.category,
-                    label: p.label,
-                    detail: p.detail || '',
-                    probability: p.probability
-                }))
-            ];
+            // Map predictions (these are the REAL predictions, no "quieres hablar")
+            const realPredictions = result.predictions.map(p => ({
+                category: p.category,
+                label: p.label,
+                detail: p.detail || '',
+                probability: p.probability
+            }));
 
-            // Cache the predictions
-            cachedPredictions = allIntents;
-            cachedPredictionsTime = Date.now();
+            // Cache ONLY the real predictions (for next time)
+            cachedPredictions = realPredictions;
             console.log('💾 [Intent] Predictions cached');
 
-            renderIntentCarousel(allIntents);
+            // For display, prepend "quieres hablar" but jump to first real one
+            const displayIntents = [
+                { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 },
+                ...realPredictions
+            ];
+
+            renderIntentCarousel(displayIntents);
+
+            // Jump to first real prediction since user already waited
+            if (displayIntents.length > 1) {
+                focusedIntentIndex = 1;
+                updateCarouselVisuals();
+            }
         }
-        // If no predictions or failed, keep only "Quieres hablar?"
     } catch (e) {
         console.error('❌ [Intent] Flow failed:', e);
-        // Keep showing "Quieres hablar?" even if LLM fails
     }
 }
 
