@@ -1189,27 +1189,14 @@ async function triggerContextualIntent() {
     const thinkingLabel = document.getElementById('thinking-label');
     if (thinkingLabel) thinkingLabel.textContent = 'Pensando...';
 
-    currentIntents = [
-        { category: 'ayuda', label: '¿Quieres hablar?', detail: '', probability: 1.0, isDefault: true, isGray: true }
-    ];
+    // No default options - just show "Pensando..." until predictions arrive
+    currentIntents = [];
     focusedIntentIndex = 0;
-
-    track.innerHTML = ''; // No icon for default option
-    label.textContent = '¿Quieres hablar?';
-    label.classList.add('gray-hint'); // Apply gray styling
+    track.innerHTML = '';
+    label.textContent = '';
     if (details) details.textContent = '';
 
-    // Hide "Quieres hablar?" after 5 seconds if no predictions arrived
-    hideDefaultTimeout = setTimeout(() => {
-        if (isThinkingMode && currentIntents.length === 1 && currentIntents[0].isDefault) {
-            console.log('⏱️ [Intent] Hiding default option after 5s');
-            track.innerHTML = ''; // Clear default, keep "Pensando..."
-            label.textContent = '';
-            if (details) details.textContent = '';
-        }
-    }, 5000);
-
-    // Activate thinking mode in backend (but don't auto-start voice)
+    // Activate thinking mode in backend
     window.iuOS.activateThinkingMode().catch(e => {
         console.warn('⚠️ [Intent] Thinking mode activation failed:', e);
     });
@@ -1404,15 +1391,6 @@ function activateCurrentIntent() {
     if (!intent) return;
 
     console.log('🎯 [Intent] ACTIVATING:', intent.label);
-
-    // Special handling for "Quieres hablar?" - trigger voice conversation
-    if (intent.label === '¿Quieres hablar?') {
-        hideIntentCarousel();
-        setTimeout(() => {
-            toggleConversation();
-        }, 300);
-        return;
-    }
 
     // For other intents, show toast (simulated for now)
     showToast(`✅ Ejecutando: ${intent.label}`);
