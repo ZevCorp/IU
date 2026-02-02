@@ -968,7 +968,7 @@ function updateConversationUI(state) {
             container.classList.remove('hidden');
             isCarouselActive = false; // Not interactive during voice
 
-            track.innerHTML = '<div class="intent-item focus"><div class="intent-icon">🎙️</div></div>';
+            track.innerHTML = ''; // No icon for this message
             label.textContent = 'Empezando conversación';
             if (details) details.classList.add('hidden');
 
@@ -1190,13 +1190,14 @@ async function triggerContextualIntent() {
     if (thinkingLabel) thinkingLabel.textContent = 'Pensando...';
 
     currentIntents = [
-        { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0, isDefault: true }
+        { category: 'ayuda', label: '¿Quieres hablar?', detail: '', probability: 1.0, isDefault: true, isGray: true }
     ];
     focusedIntentIndex = 0;
 
-    track.innerHTML = '<div class="intent-item focus"><div class="intent-icon">🗣️</div></div>';
+    track.innerHTML = ''; // No icon for default option
     label.textContent = '¿Quieres hablar?';
-    if (details) details.textContent = 'Iniciar conversación de voz';
+    label.classList.add('gray-hint'); // Apply gray styling
+    if (details) details.textContent = '';
 
     // Hide "Quieres hablar?" after 5 seconds if no predictions arrived
     hideDefaultTimeout = setTimeout(() => {
@@ -1238,6 +1239,9 @@ async function triggerContextualIntent() {
             // Exit thinking mode after receiving predictions
             isThinkingMode = false;
             if (thinkingLabel) thinkingLabel.textContent = '';
+
+            // Remove gray styling now that we have real predictions
+            if (label) label.classList.remove('gray-hint');
 
             const realPredictions = result.predictions.map(p => ({
                 category: p.category,

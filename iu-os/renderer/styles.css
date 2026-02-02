@@ -749,6 +749,11 @@ body {
   transform: translateY(0);
 }
 
+#intent-label.gray-hint {
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 300;
+}
+
 #intent-details {
   font-size: 10px;
   font-weight: 400;

@@ -280,7 +280,14 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
                 // Wait for voice UI to initialize
                 await chatPage.waitForTimeout(1500);
 
-                // System prompt already injected on startup, no need to inject here
+                // Send greeting message as text
+                console.log('✍️ Sending greeting context...');
+                const composer = chatPage.locator('#prompt-textarea');
+                if (await composer.count() > 0) {
+                    await composer.fill('El usuario podría querer algo a continuación. Acabo de iniciar el chat de voz, saludalo!');
+                    await chatPage.keyboard.press('Enter');
+                    console.log('✅ Greeting context sent');
+                }
 
                 // Start monitoring for transcription text
                 startTextMonitoring();
@@ -323,34 +330,13 @@ ipcMain.handle('activate-thinking-mode', async (event) => {
     }
 
     try {
-        // 1. Send context message as text
-        const composer = chatPage.locator('#prompt-textarea');
-        if (await composer.count() > 0) {
-            console.log('✍️ Sending context: "El usuario podría querer algo a continuación"');
-            await composer.fill('El usuario podría querer algo a continuación.');
-            await chatPage.keyboard.press('Enter');
-        }
+        // NOTE: No auto-message sent on dwell. User will manually start voice.
+        // Only start monitoring for voice and text.
 
-        // 2. Wait for ChatGPT to respond
-        console.log('⏳ Waiting for ChatGPT to respond...');
-        try {
-            await chatPage.waitForSelector(
-                '[data-message-author-role="assistant"]',
-                { timeout: 15000, state: 'attached' }
-            );
-            console.log('✅ ChatGPT responded');
-            await chatPage.waitForTimeout(500);
-        } catch (e) {
-            console.warn('⚠️ ChatGPT response timeout, continuing anyway');
-        }
-
-        // NOTE: Auto voice activation disabled - user will manually start voice via button
-        // Voice state monitoring is still active to detect when user activates voice
-
-        // 3. Start monitoring for user voice transcription (explicit suggestions)
+        // Start monitoring for user voice transcription (explicit suggestions)
         startUserVoiceMonitoring();
 
-        // 4. Also start regular text monitoring for assistant responses
+        // Also start regular text monitoring for assistant responses
         startTextMonitoring();
 
         return { success: true };
