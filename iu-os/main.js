@@ -331,47 +331,21 @@ ipcMain.handle('activate-thinking-mode', async (event) => {
             await chatPage.keyboard.press('Enter');
         }
 
-        // 2. Wait for ChatGPT to respond (voice button only appears after response)
+        // 2. Wait for ChatGPT to respond
         console.log('⏳ Waiting for ChatGPT to respond...');
         try {
-            // Wait for assistant response to appear (max 15s)
             await chatPage.waitForSelector(
                 '[data-message-author-role="assistant"]',
                 { timeout: 15000, state: 'attached' }
             );
             console.log('✅ ChatGPT responded');
-
-            // Small delay for UI to stabilize
             await chatPage.waitForTimeout(500);
         } catch (e) {
             console.warn('⚠️ ChatGPT response timeout, continuing anyway');
         }
 
-        // 3. Activate voice mode (if not already active)
-        try {
-            // First check if voice is already active
-            const stopBtn = await chatPage.locator('button[aria-label="End Voice"]').count();
-            if (stopBtn > 0) {
-                console.log('🎙️ Voice already active');
-            } else {
-                // Wait for voice button to appear (max 10s)
-                console.log('⏳ Waiting for voice button...');
-                const voiceBtn = await chatPage.waitForSelector(
-                    'button[aria-label="Use microphone"], button[aria-label="Start Voice"]',
-                    { timeout: 10000, state: 'visible' }
-                ).catch(() => null);
-
-                if (voiceBtn) {
-                    await voiceBtn.click();
-                    console.log('🎙️ Voice mode activated');
-                    await chatPage.waitForTimeout(1500);
-                } else {
-                    console.log('⚠️ Voice button not found, continuing without voice');
-                }
-            }
-        } catch (voiceErr) {
-            console.warn('⚠️ Could not activate voice:', voiceErr.message);
-        }
+        // NOTE: Auto voice activation disabled - user will manually start voice via button
+        // Voice state monitoring is still active to detect when user activates voice
 
         // 3. Start monitoring for user voice transcription (explicit suggestions)
         startUserVoiceMonitoring();

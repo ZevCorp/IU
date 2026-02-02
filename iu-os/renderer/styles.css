@@ -628,18 +628,14 @@ body {
 #intent-carousel {
   position: absolute;
   top: 18%;
-  left: 50%;
-  transform: translateX(-50%) translateY(10px);
-  width: auto;
-  max-width: 320px;
-  min-width: 200px;
+  left: 0;
+  right: 0;
+  transform: translateY(10px);
+  width: 100%;
   padding: 12px 20px;
-  background: rgba(10, 10, 15, 0.4);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+  background: transparent;
+  border: none;
+  box-shadow: none;
   z-index: 500;
   transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
     transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
@@ -653,12 +649,12 @@ body {
 
 #intent-carousel:not(.hidden) {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateY(0);
 }
 
 #intent-carousel.hidden {
   opacity: 0;
-  transform: translateX(-50%) translateY(10px);
+  transform: translateY(10px);
 }
 
 /* Thinking Label - Part of the carousel */
@@ -668,31 +664,30 @@ body {
   left: auto;
   transform: none;
   padding: 0;
-  margin: 0;
+  margin: 0 0 8px 0;
   background: transparent;
   border: none;
   border-radius: 0;
-  font-size: 9px;
-  color: rgba(255, 255, 255, 0.5);
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.95);
   opacity: 1;
-  text-transform: uppercase;
-  letter-spacing: 2px;
-  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0.5px;
+  font-weight: 300;
 }
 
 
 #intent-track {
   display: flex;
-  gap: 12px;
+  gap: 16px;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: center;
   width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
-  /* Firefox */
   padding: 4px 0;
 }
 

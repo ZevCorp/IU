@@ -1146,8 +1146,11 @@ function renderChecklist(tasks) {
 // =====================================================
 
 let isCarouselActive = false;
+let isThinkingMode = false; // Persists until predictions arrive
 let currentIntents = [];
 let focusedIntentIndex = 0;
+let hideDefaultTimeout = null; // 5s timer to hide "Quieres hablar?"
+let hideCarouselTimeout = null; // 10s timer to hide carousel after last item
 
 // Note: cachedPredictions, lastLookedAwayTime, PREDICTION_CACHE_TTL are defined at top of file
 
@@ -1173,12 +1176,21 @@ async function triggerContextualIntent() {
         return;
     }
 
-    // FRESH REQUEST: Show "Quieres hablar?" while fetching
+    // FRESH REQUEST: Enter thinking mode
     isCarouselActive = true;
+    isThinkingMode = true;
     container.classList.remove('hidden');
 
+    // Clear any existing timers
+    if (hideDefaultTimeout) clearTimeout(hideDefaultTimeout);
+    if (hideCarouselTimeout) clearTimeout(hideCarouselTimeout);
+
+    // Update thinking label
+    const thinkingLabel = document.getElementById('thinking-label');
+    if (thinkingLabel) thinkingLabel.textContent = 'Pensando...';
+
     currentIntents = [
-        { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 }
+        { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0, isDefault: true }
     ];
     focusedIntentIndex = 0;
 
@@ -1186,14 +1198,22 @@ async function triggerContextualIntent() {
     label.textContent = '¿Quieres hablar?';
     if (details) details.textContent = 'Iniciar conversación de voz';
 
-    // PARALLEL: Start both implicit and explicit suggestion flows
+    // Hide "Quieres hablar?" after 5 seconds if no predictions arrived
+    hideDefaultTimeout = setTimeout(() => {
+        if (isThinkingMode && currentIntents.length === 1 && currentIntents[0].isDefault) {
+            console.log('⏱️ [Intent] Hiding default option after 5s');
+            track.innerHTML = ''; // Clear default, keep "Pensando..."
+            label.textContent = '';
+            if (details) details.textContent = '';
+        }
+    }, 5000);
 
-    // 1. Activate thinking mode (sends context + starts voice + monitors user speech)
+    // Activate thinking mode in backend (but don't auto-start voice)
     window.iuOS.activateThinkingMode().catch(e => {
         console.warn('⚠️ [Intent] Thinking mode activation failed:', e);
     });
 
-    // 2. Get implicit suggestions from pre-recorded audio
+    // Get implicit suggestions from pre-recorded audio
     let audioBlob = null;
     if (window.audioLoop && window.audioLoop.hasAudio()) {
         audioBlob = window.audioLoop.getAudioBuffer();
@@ -1212,7 +1232,13 @@ async function triggerContextualIntent() {
         });
 
         if (result.success && result.predictions && result.predictions.length > 0) {
-            // Map predictions (these are the REAL predictions, no "quieres hablar")
+            // Clear the 5s hide timer since we got predictions
+            if (hideDefaultTimeout) clearTimeout(hideDefaultTimeout);
+
+            // Exit thinking mode after receiving predictions
+            isThinkingMode = false;
+            if (thinkingLabel) thinkingLabel.textContent = '';
+
             const realPredictions = result.predictions.map(p => ({
                 category: p.category,
                 label: p.label,
@@ -1220,27 +1246,34 @@ async function triggerContextualIntent() {
                 probability: p.probability
             }));
 
-            // Cache ONLY the real predictions (for next time)
             cachedPredictions = realPredictions;
             console.log('💾 [Intent] Predictions cached');
 
-            // For display, prepend "quieres hablar" but jump to first real one
-            const displayIntents = [
-                { category: 'ayuda', label: '¿Quieres hablar?', detail: 'Iniciar conversación de voz', probability: 1.0 },
-                ...realPredictions
-            ];
+            // Show predictions (no "quieres hablar" prepended)
+            renderIntentCarousel(realPredictions);
+            focusedIntentIndex = 0;
+            updateCarouselVisuals();
 
-            renderIntentCarousel(displayIntents);
-
-            // Jump to first real prediction since user already waited
-            if (displayIntents.length > 1) {
-                focusedIntentIndex = 1;
-                updateCarouselVisuals();
-            }
+            // Schedule hide after 10s on last item
+            scheduleCarouselHide();
+        } else {
+            // No predictions, hide after a bit
+            isThinkingMode = false;
+            if (thinkingLabel) thinkingLabel.textContent = '';
+            hideCarouselTimeout = setTimeout(() => {
+                hideIntentCarousel();
+            }, 3000);
         }
     } catch (e) {
         console.error('❌ [Intent] Flow failed:', e);
+        isThinkingMode = false;
     }
+}
+
+// Schedule carousel to hide 10s after reaching the last item
+function scheduleCarouselHide() {
+    // Will be called when rotation reaches last item
+    // Implemented in startCarouselRotation
 }
 
 function renderIntentCarousel(predictions) {
@@ -1282,9 +1315,12 @@ function renderIntentCarousel(predictions) {
 let carouselRotationInterval = null;
 
 function startCarouselRotation() {
-    // Clear existing interval
+    // Clear existing intervals/timeouts
     if (carouselRotationInterval) {
         clearInterval(carouselRotationInterval);
+    }
+    if (hideCarouselTimeout) {
+        clearTimeout(hideCarouselTimeout);
     }
 
     // Rotate to next intent every 5 seconds
@@ -1292,6 +1328,21 @@ function startCarouselRotation() {
         if (currentIntents.length > 1 && isCarouselActive) {
             focusedIntentIndex = (focusedIntentIndex + 1) % currentIntents.length;
             updateCarouselVisuals();
+
+            // If we reached the last item, wait 10s then hide
+            if (focusedIntentIndex === currentIntents.length - 1) {
+                console.log('⏱️ [Carousel] Reached last item, will hide in 10s');
+                hideCarouselTimeout = setTimeout(() => {
+                    console.log('⏱️ [Carousel] Hiding after 10s on last item');
+                    hideIntentCarousel();
+                }, 10000);
+            }
+        } else if (currentIntents.length === 1 && isCarouselActive) {
+            // Only one item, hide after 10s
+            hideCarouselTimeout = setTimeout(() => {
+                hideIntentCarousel();
+            }, 10000);
+            clearInterval(carouselRotationInterval);
         }
     }, 5000);
 }
@@ -1327,11 +1378,21 @@ function updateCarouselVisuals() {
 
 function hideIntentCarousel() {
     isCarouselActive = false;
-    const container = document.getElementById('intent-carousel');
-    if (container) container.classList.add('hidden');
+    isThinkingMode = false;
+
+    // Clear all timers
+    if (hideDefaultTimeout) clearTimeout(hideDefaultTimeout);
+    if (hideCarouselTimeout) clearTimeout(hideCarouselTimeout);
     if (typeof stopCarouselRotation === 'function') {
         stopCarouselRotation();
     }
+
+    const container = document.getElementById('intent-carousel');
+    if (container) container.classList.add('hidden');
+
+    // Clear thinking label
+    const thinkingLabel = document.getElementById('thinking-label');
+    if (thinkingLabel) thinkingLabel.textContent = '';
 }
 
 function activateCurrentIntent() {
@@ -1462,7 +1523,7 @@ if (window.iuOS && window.iuOS.onSystemReady) {
 if (window.iuOS && window.iuOS.onVoiceStateChanged) {
     window.iuOS.onVoiceStateChanged((state) => {
         console.log('🎙️ [VoiceState] Received state:', state);
-        const btn = document.getElementById('talk-btn');
+        const btn = document.getElementById('btn-transfer-top');
         if (!btn) return;
 
         const textSpan = btn.querySelector('.transfer-text');
