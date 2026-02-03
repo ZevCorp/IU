@@ -261,7 +261,18 @@ async function injectSystemPromptOnStartup() {
         if (await composer.count() > 0) {
             console.log('✍️ Injecting System Prompt on startup...');
             await composer.fill(SYSTEM_PROMPT);
-            await chatPage.keyboard.press('Enter');
+
+            // Use send button click instead of Enter (more reliable cross-platform)
+            await chatPage.waitForTimeout(500);
+            const sendBtn = chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
+            if (await sendBtn.count() > 0 && await sendBtn.isEnabled()) {
+                await sendBtn.click();
+                console.log('🖱️ Clicked send button');
+            } else {
+                // Fallback to Enter key
+                await chatPage.keyboard.press('Enter');
+                console.log('⌨️ Pressed Enter key');
+            }
 
             // Wait for response
             await chatPage.waitForTimeout(3000);
@@ -304,11 +315,12 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
         if (action === 'start') {
             console.log('🔍 Starting voice conversation FIRST, then injecting prompt...');
 
-            // Exact selectors provided by the user
+            // Language-independent selectors (aria-labels change by locale)
             const selectors = [
-                'button[aria-label="Start Voice"]',
                 'button[data-testid="composer-speech-button"]',
-                'button:has-text("Use Voice")'
+                'button[aria-label="Start Voice"]',
+                'button[aria-label="Iniciar voz"]',
+                'button:has(use[href*="f8aa74"])'  // SVG icon reference
             ];
 
             let startBtn = null;
@@ -347,7 +359,15 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
                 const composer = chatPage.locator('#prompt-textarea');
                 if (await composer.count() > 0) {
                     await composer.fill('El usuario podría querer algo a continuación. Acabo de iniciar el chat de voz, saludalo!');
-                    await chatPage.keyboard.press('Enter');
+
+                    // Use send button click instead of Enter
+                    await chatPage.waitForTimeout(300);
+                    const sendBtn = chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
+                    if (await sendBtn.count() > 0 && await sendBtn.isEnabled()) {
+                        await sendBtn.click();
+                    } else {
+                        await chatPage.keyboard.press('Enter');
+                    }
                     console.log('✅ Greeting context sent');
                 }
 
@@ -364,10 +384,24 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
             console.log('🔍 Stopping voice conversation...');
             stopTextMonitoring();
 
-            const stopBtn = chatPage.locator('button[aria-label="End Voice"]');
-            if (await stopBtn.count() > 0) {
-                await stopBtn.first().click();
-            } else {
+            // Language-independent stop selectors
+            const stopSelectors = [
+                'button[aria-label="End Voice"]',
+                'button[aria-label="Terminar voz"]',
+                'button[aria-label="Finalizar voz"]'
+            ];
+
+            let stopped = false;
+            for (const sel of stopSelectors) {
+                const stopBtn = chatPage.locator(sel);
+                if (await stopBtn.count() > 0) {
+                    await stopBtn.first().click();
+                    stopped = true;
+                    break;
+                }
+            }
+
+            if (!stopped) {
                 await chatPage.keyboard.press('Escape');
             }
             return { success: true, state: 'idle' };
@@ -512,15 +546,29 @@ function startVoiceStateMonitoring() {
 
         try {
             const state = await chatPage.evaluate(() => {
-                // If "Start Voice" button exists -> voice is inactive
-                if (document.querySelector('button[aria-label="Start Voice"]')) return 'inactive';
-                // If "End Voice" or "Starting Voice" (Cancel) exists -> voice is active
-                if (document.querySelector('button[aria-label="End Voice"]')) return 'active';
-                if (document.querySelector('button[aria-label="Starting Voice"]')) return 'active';
-                // If send button exists but no Start Voice -> might still be in voice mode
+                // Language-independent: check for voice buttons in EN/ES
+                const startVoiceEN = document.querySelector('button[aria-label="Start Voice"]');
+                const startVoiceES = document.querySelector('button[aria-label="Iniciar voz"]');
+                const startVoiceTestId = document.querySelector('button[data-testid="composer-speech-button"]');
+
+                const endVoiceEN = document.querySelector('button[aria-label="End Voice"]');
+                const endVoiceES = document.querySelector('button[aria-label="Terminar voz"]');
+                const endVoiceES2 = document.querySelector('button[aria-label="Finalizar voz"]');
+
+                const startingVoiceEN = document.querySelector('button[aria-label="Starting Voice"]');
+                const startingVoiceES = document.querySelector('button[aria-label="Iniciando voz"]');
+
+                // If any "Start Voice" button exists -> voice is inactive
+                if (startVoiceEN || startVoiceES || startVoiceTestId) return 'inactive';
+
+                // If any "End Voice" or "Starting Voice" exists -> voice is active
+                if (endVoiceEN || endVoiceES || endVoiceES2) return 'active';
+                if (startingVoiceEN || startingVoiceES) return 'active';
+
+                // Fallback: If send button exists but no Start Voice -> might still be in voice mode
                 const sendBtn = document.querySelector('#composer-submit-button');
-                const startVoice = document.querySelector('button[aria-label="Start Voice"]');
-                if (sendBtn && !startVoice) return 'active';
+                if (sendBtn && !startVoiceEN && !startVoiceES && !startVoiceTestId) return 'active';
+
                 return 'unknown';
             });
 
@@ -662,14 +710,22 @@ async function injectMemoryContext(match) {
         // Wait for composer to be visible
         const composer = chatPage.locator('#prompt-textarea');
         await composer.fill(contextMsg);
-        await chatPage.keyboard.press('Enter');
+
+        // Use send button click instead of Enter
+        await chatPage.waitForTimeout(300);
+        const sendBtn = chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
+        if (await sendBtn.count() > 0 && await sendBtn.isEnabled()) {
+            await sendBtn.click();
+        } else {
+            await chatPage.keyboard.press('Enter');
+        }
 
         // Wait for message to be sent
         await chatPage.waitForTimeout(2000);
 
         // 4. RESUME Voice
         console.log('🧠 [Memory] Resuming voice conversation...');
-        const startBtn = chatPage.locator('button[aria-label="Start Voice"], button[data-testid="composer-speech-button"]').first();
+        const startBtn = chatPage.locator('button[data-testid="composer-speech-button"], button[aria-label="Start Voice"], button[aria-label="Iniciar voz"]').first();
         if (await startBtn.count() > 0) {
             await startBtn.click();
         }
