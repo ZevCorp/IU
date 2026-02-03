@@ -23,7 +23,7 @@ node --version
 
 :: Install npm dependencies
 echo.
-echo [1/3] Installing npm dependencies...
+echo [1/4] Installing npm dependencies...
 call npm install
 
 if %ERRORLEVEL% NEQ 0 (
@@ -34,7 +34,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 :: Install Playwright browser
 echo.
-echo [2/3] Installing Playwright Chromium browser...
+echo [2/4] Installing Playwright Chromium browser...
 call npx playwright install chromium
 
 if %ERRORLEVEL% NEQ 0 (
@@ -43,15 +43,44 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-:: Success
+:: Configure OpenAI API Key
 echo.
 echo ====================================
-echo    Setup Complete!
+echo [3/4] OpenAI API Key Configuration
 echo ====================================
 echo.
-echo [3/3] To run the app:
+
+:: Check if .env already exists with OPENAI_API_KEY
+if exist .env (
+    findstr /C:"OPENAI_API_KEY" .env >nul 2>nul
+    if %ERRORLEVEL% EQU 0 (
+        echo [OK] .env file already contains OPENAI_API_KEY
+        goto :run_app
+    )
+)
+
+echo To use voice features, you need an OpenAI API key.
+echo Get yours at: https://platform.openai.com/api-keys
 echo.
-echo    npm run dev
+set /p OPENAI_KEY="Enter your OpenAI API Key (or press Enter to skip): "
+
+if not "%OPENAI_KEY%"=="" (
+    :: Create or append to .env file
+    echo OPENAI_API_KEY=%OPENAI_KEY%>> .env
+    echo.
+    echo [OK] API Key saved to .env file
+) else (
+    echo [SKIP] No API key provided. Voice features may not work.
+)
+
+:run_app
+:: Run the app
 echo.
 echo ====================================
-pause
+echo [4/4] Starting IU OS...
+echo ====================================
+echo.
+echo Press Ctrl+C to stop the app.
+echo.
+
+call npm run dev
