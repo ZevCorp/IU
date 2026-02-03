@@ -29,6 +29,9 @@ contextBridge.exposeInMainWorld('iuOS', {
     getIntentPredictions: (data) => ipcRenderer.invoke('get-intent-predictions', data),
     activateThinkingMode: () => ipcRenderer.invoke('activate-thinking-mode'),
 
+    // Screen Context (macOS Accessibility)
+    getScreenContext: (gazeDirection) => ipcRenderer.invoke('get-screen-context', gazeDirection),
+
     // Event Listeners
     onConversationText: (callback) => ipcRenderer.on('conversation-text', (event, text) => callback(text)),
     onMemoryStatus: (callback) => ipcRenderer.on('memory-status', (event, status) => callback(status)),

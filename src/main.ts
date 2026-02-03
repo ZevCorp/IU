@@ -511,6 +511,15 @@ function setupFaceDetection(face: ReturnType<typeof initializeFace>): void {
                     }, 300);
                 });
 
+                // Connect center gaze to summon face here
+                gazeController.setOnSummon(() => {
+                    console.log(`[FaceDetection] Summoning face via gaze`);
+                    if (!faceTransfer.isFaceVisible()) {
+                        // Request face from other devices
+                        getDeviceSync().requestFace();
+                    }
+                });
+
                 cameraActive = true;
                 cameraBtn.textContent = '📷 Stop Camera';
                 updateCameraStatus(true);
@@ -539,7 +548,7 @@ function setupFaceDetection(face: ReturnType<typeof initializeFace>): void {
 
         if (active) {
             indicator?.classList.add('connected');
-            if (text) text.textContent = 'Camera active - look left/right to transfer';
+            if (text) text.textContent = 'Mirando a la cámara = llamar rostro';
         } else {
             indicator?.classList.remove('connected');
             if (text) text.textContent = message || 'Camera off';
@@ -584,6 +593,19 @@ declare global {
         faceEventBus: typeof faceEventBus;
         deviceSync: ReturnType<typeof getDeviceSync>;
         qrConnect: ReturnType<typeof getQRConnect>;
+        iuOS?: {
+            getScreenContext: (direction: string) => Promise<{
+                app: string | null;
+                window: string | null;
+                gazeDirection: string;
+                snapshot: Array<{
+                    id: string;
+                    type: string;
+                    label: string | null;
+                    bbox: { x: number; y: number; w: number; h: number };
+                }>;
+            }>;
+        };
     }
 }
 

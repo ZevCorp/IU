@@ -20,11 +20,13 @@ class VisionManager {
             inDeepAttention: false, // True only when in thinking mode (dwell reached)
             isGestureActive: false,
             currentZone: 'center', // left, center, right
+            lastCapturedZone: null, // For screen context capture
             targetZone: 'right',   // Where this app window is located
             headPose: { yaw: 0, pitch: 0, roll: 0 },
             gaze: { x: 0.5, y: 0.5 },
             lastEyebrowTime: 0,
-            prevEyebrowRaised: false
+            prevEyebrowRaised: false,
+            screenContext: null    // Last captured screen context
         };
 
         // Configuration
@@ -143,6 +145,12 @@ class VisionManager {
 
         this.state.currentZone = detectedZone;
 
+        // --- Screen Context Capture (when looking away from U) ---
+        if (detectedZone !== 'center' && detectedZone !== this.state.lastCapturedZone) {
+            this.state.lastCapturedZone = detectedZone;
+            this.captureScreenContext(detectedZone);
+        }
+
         // --- 2. Attention ---
         const isLookingAtWindow = (detectedZone === this.state.targetZone);
         this.updateAttention(isLookingAtWindow);
@@ -241,6 +249,34 @@ class VisionManager {
     setDeepAttention(isDeep) {
         this.state.inDeepAttention = isDeep;
         console.log(`🧠 Deep Attention: ${isDeep ? 'ENABLED' : 'DISABLED'} (Gestures ${isDeep ? 'active' : 'inactive'})`);
+    }
+
+    // Screen Context Capture
+    async captureScreenContext(zone) {
+        try {
+            if (window.iuOS && window.iuOS.getScreenContext) {
+                const context = await window.iuOS.getScreenContext(zone);
+                if (context && context.snapshot) {
+                    this.state.screenContext = context;
+                    console.log(`📄 [Context] Captured ${context.snapshot.length} elements from ${context.app || 'unknown'} (zone: ${zone})`);
+
+                    // Log first few elements for debugging
+                    if (context.snapshot.length > 0) {
+                        const sample = context.snapshot.slice(0, 3).map(el =>
+                            `[${el.type}] "${el.label?.substring(0, 30) || 'no label'}"`
+                        ).join(', ');
+                        console.log(`   📋 Sample: ${sample}`);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[VisionManager] Failed to capture screen context:', e);
+        }
+    }
+
+    // Get current screen context (for dwell suggestions)
+    getScreenContext() {
+        return this.state.screenContext;
     }
 }
 

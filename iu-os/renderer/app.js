@@ -586,24 +586,66 @@ function init() {
 
     }
 
-    // Position Buttons
-    const setPosition = (pos) => {
-        document.querySelectorAll('.pos-btn').forEach(btn => {
-            btn.classList.toggle('active', btn.id === `pos-${pos}`);
-        });
-        if (visionManager) {
-            visionManager.setWindowPosition(pos);
-            showToast(`Posición: ${pos.toUpperCase()}`);
+    // =====================================================
+    // Device Role Toggles (PC / Sensors)
+    // =====================================================
+    let localRole = null; // 'pc' | 'sensors' | null
+
+    const rolePC = document.getElementById('role-pc');
+    const roleSensors = document.getElementById('role-sensors');
+
+    function setRole(role) {
+        // Toggle: if already active, deactivate
+        if (localRole === role) {
+            localRole = null;
+            console.log('[App] Role deactivated');
+        } else {
+            localRole = role;
+            console.log(`[App] Role set to: ${role}`);
         }
-    };
 
-    const posLeft = document.getElementById('pos-left');
-    const posCenter = document.getElementById('pos-center');
-    const posRight = document.getElementById('pos-right');
+        // Update UI
+        if (rolePC) rolePC.classList.toggle('active', localRole === 'pc');
+        if (roleSensors) roleSensors.classList.toggle('active', localRole === 'sensors');
 
-    if (posLeft) posLeft.addEventListener('click', () => setPosition('left'));
-    if (posCenter) posCenter.addEventListener('click', () => setPosition('center'));
-    if (posRight) posRight.addEventListener('click', () => setPosition('right'));
+        // Sync with other devices
+        if (deviceSync) {
+            deviceSync.setDeviceRole(localRole);
+        }
+
+        // Apply role behavior
+        applyRoleBehavior();
+    }
+
+    function applyRoleBehavior() {
+        if (localRole === 'sensors') {
+            // Activate VisionManager and AudioLoop
+            if (visionManager) {
+                visionManager.start();
+                console.log('[App] 🎥 Sensors ACTIVATED (camera/audio)');
+            }
+            showToast('🎙️ Sensores activados');
+        } else if (localRole === 'pc') {
+            // PC role: Playwright is controlled by main process
+            // Optionally stop sensors if they were running
+            if (visionManager) {
+                visionManager.stop();
+                console.log('[App] 🖥️ PC Mode - Sensors OFF');
+            }
+            showToast('🖥️ Control de PC activado');
+        } else {
+            // No role selected - default behavior
+            console.log('[App] No role selected - default mode');
+        }
+    }
+
+    if (rolePC) {
+        rolePC.addEventListener('click', () => setRole('pc'));
+    }
+    if (roleSensors) {
+        roleSensors.addEventListener('click', () => setRole('sensors'));
+    }
+
 
     // Initialize DeviceSync
     if (typeof getDeviceSync === 'function') {
@@ -617,6 +659,12 @@ function init() {
         // Connect to Render server
         deviceSync.connect().then((success) => {
             console.log('[App] DeviceSync connection:', success ? 'success' : 'failed');
+        });
+
+        // Listen for remote role changes
+        deviceSync.setOnRoleChange((deviceId, role, allRoles) => {
+            console.log(`[App] Remote device ${deviceId} changed role to: ${role}`);
+            // Could show indicator of remote roles if needed
         });
 
         // Listen for incoming faces

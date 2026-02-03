@@ -873,3 +873,61 @@ body {
 .view-brain #app {
   background: radial-gradient(circle at center, #0a0a1a 0%, #050505 100%);
 }
+
+/* =====================================================
+   Role Toggle Buttons - ChatGPT Style
+   ===================================================== */
+
+.role-toggles {
+  display: flex;
+  gap: 8px;
+}
+
+.role-toggle {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 16px;
+  background: transparent;
+  border: 1px solid var(--control-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  -webkit-app-region: no-drag;
+}
+
+.role-toggle:hover {
+  background: var(--control-hover);
+  border-color: var(--text-secondary);
+}
+
+.role-toggle.active {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.2), inset 0 0 20px rgba(99, 102, 241, 0.05);
+}
+
+.role-icon {
+  font-size: 20px;
+  transition: transform 0.3s ease;
+}
+
+.role-toggle.active .role-icon {
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.5));
+}
+
+.role-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: color 0.3s ease;
+}
+
+.role-toggle.active .role-label {
+  color: var(--text-primary);
+}

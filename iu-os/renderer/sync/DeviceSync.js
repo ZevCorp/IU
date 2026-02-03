@@ -24,6 +24,11 @@ class DeviceSync {
         this.onConnectionChange = null;
         this.onFaceReceived = null;
         this.onSharedStateChange = null;
+        this.onRoleChange = null;
+
+        // Device role: 'pc' | 'sensors' | null
+        this.deviceRole = null;
+        this.remoteRoles = new Map(); // deviceId -> role
     }
 
     getOrCreateDeviceId() {
@@ -165,6 +170,9 @@ class DeviceSync {
             case 'request_face':
                 this.handleRequestFace(message);
                 break;
+            case 'role_change':
+                this.handleRoleChange(message);
+                break;
         }
     }
 
@@ -291,6 +299,53 @@ class DeviceSync {
 
     setOnRequestFace(callback) {
         this.onRequestFace = callback;
+    }
+
+    // ============================================
+    // Device Role Management (PC / Sensors)
+    // ============================================
+
+    setDeviceRole(role) {
+        this.deviceRole = role;
+        this.sendMessage({
+            type: 'role_change',
+            deviceId: this.deviceId,
+            payload: { role },
+            timestamp: Date.now()
+        });
+        console.log(`[DeviceSync] Set local role to: ${role || 'none'}`);
+    }
+
+    handleRoleChange(message) {
+        const payload = message.payload || {};
+        const remoteRole = payload.role;
+
+        this.remoteRoles.set(message.deviceId, remoteRole);
+        console.log(`[DeviceSync] Device ${message.deviceId} changed role to: ${remoteRole || 'none'}`);
+
+        if (this.onRoleChange) {
+            this.onRoleChange(message.deviceId, remoteRole, this.getRemoteRoles());
+        }
+    }
+
+    setOnRoleChange(callback) {
+        this.onRoleChange = callback;
+    }
+
+    getDeviceRole() {
+        return this.deviceRole;
+    }
+
+    getRemoteRoles() {
+        return Object.fromEntries(this.remoteRoles);
+    }
+
+    // Check if any device has a specific role
+    hasRemoteRole(role) {
+        for (const [deviceId, deviceRole] of this.remoteRoles) {
+            if (deviceRole === role) return true;
+        }
+        return false;
     }
 }
 

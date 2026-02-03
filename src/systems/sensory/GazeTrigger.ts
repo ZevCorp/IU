@@ -4,8 +4,21 @@
  * This is a specialized layer on top of FaceDetector.
  */
 
-import { getFaceDetector, FaceDetector } from '../../detection/FaceDetector';
+import { getFaceDetector, FaceDetector, GazeDirection } from '../../detection/FaceDetector';
 import { getRoleManager, DeviceRole } from '../../sync/roles/RoleManager';
+
+// Screen context type from AX Reader
+interface ScreenContext {
+    app: string | null;
+    window: string | null;
+    gazeDirection: string;  // 'left' | 'center' | 'right'
+    snapshot: Array<{
+        id: string;
+        type: string;
+        label: string | null;
+        bbox: { x: number; y: number; w: number; h: number };
+    }>;
+}
 
 export class GazeTrigger {
     private faceDetector: FaceDetector;
@@ -16,6 +29,11 @@ export class GazeTrigger {
     private gazeStartTime = 0;
     private isGazing = false;
     private enabled = false;
+
+    // Screen context tracking
+    private lastGazeSection: GazeDirection = 'center';
+    private screenContext: ScreenContext | null = null;
+    private onContextCallback: ((context: ScreenContext) => void) | null = null;
 
     constructor() {
         this.faceDetector = getFaceDetector();
@@ -41,6 +59,18 @@ export class GazeTrigger {
 
         this.faceDetector.onDetection((state) => {
             if (!this.enabled) return;
+
+            // Track gaze section changes for screen context
+            if (state.faceDetected && state.gazeDirection !== this.lastGazeSection) {
+                const prevSection = this.lastGazeSection;
+                this.lastGazeSection = state.gazeDirection;
+
+                // When user looks away from center, capture what they're seeing
+                if (state.gazeDirection !== 'center') {
+                    this.requestScreenContext(state.gazeDirection);
+                    console.log(`[GazeTrigger] 👁️ Section changed: ${prevSection} → ${state.gazeDirection}`);
+                }
+            }
 
             // Check if looking at "center" (Camera)
             if (state.faceDetected && state.gazeDirection === 'center') {
@@ -83,6 +113,42 @@ export class GazeTrigger {
 
     public onTrigger(callback: () => void) {
         this.onTriggerCallback = callback;
+    }
+
+    /**
+     * Subscribe to screen context updates
+     */
+    public onScreenContext(callback: (context: ScreenContext) => void) {
+        this.onContextCallback = callback;
+    }
+
+    /**
+     * Get the current screen context (if captured)
+     */
+    public getScreenContext(): ScreenContext | null {
+        return this.screenContext;
+    }
+
+    /**
+     * Request screen context from the main process
+     */
+    private async requestScreenContext(direction: GazeDirection) {
+        try {
+            // @ts-ignore - iuOS is exposed via preload
+            if (typeof window !== 'undefined' && window.iuOS?.getScreenContext) {
+                const context = await window.iuOS.getScreenContext(direction);
+                if (context && context.snapshot) {
+                    this.screenContext = context;
+                    console.log(`[GazeTrigger] 📄 Captured ${context.snapshot.length} elements from ${context.app}`);
+
+                    if (this.onContextCallback) {
+                        this.onContextCallback(context);
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[GazeTrigger] Failed to get screen context:', e);
+        }
     }
 }
 

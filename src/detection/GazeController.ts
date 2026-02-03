@@ -32,6 +32,7 @@ const DEFAULT_CONFIG: GazeControllerConfig = {
 
 type TransferCallback = (direction: 'left' | 'right') => void;
 type WinkCallback = (side: 'left' | 'right') => void;
+type SummonCallback = () => void;
 
 // =====================================================
 // GazeController Class
@@ -53,6 +54,7 @@ export class GazeController {
     // Callbacks
     private onTransfer: TransferCallback | null = null;
     private onWink: WinkCallback | null = null;
+    private onSummon: SummonCallback | null = null;
 
     // State
     private enabled: boolean = false;
@@ -100,6 +102,13 @@ export class GazeController {
     }
 
     /**
+     * Set callback for summoning face (looking at center/camera)
+     */
+    setOnSummon(callback: SummonCallback): void {
+        this.onSummon = callback;
+    }
+
+    /**
      * Check if enabled
      */
     isEnabled(): boolean {
@@ -132,7 +141,16 @@ export class GazeController {
             // Gaze changed - reset timer
             this.currentGaze = gaze;
             this.gazeStartTime = now;
-        } else if (gaze !== 'center') {
+        } else if (gaze === 'center') {
+            // Looking at camera/center - check if held long enough to summon
+            const holdDuration = now - this.gazeStartTime;
+
+            if (holdDuration >= this.config.gazeHoldDuration) {
+                this.triggerSummon();
+                this.lastTransferTime = now;
+                this.resetGazeTracking();
+            }
+        } else {
             // Same non-center gaze - check if held long enough
             const holdDuration = now - this.gazeStartTime;
 
@@ -182,6 +200,13 @@ export class GazeController {
         console.log(`[GazeController] Wink detected: ${side}`);
         if (this.onWink) {
             this.onWink(side);
+        }
+    }
+
+    private triggerSummon(): void {
+        console.log(`[GazeController] Summon triggered (looking at camera)`);
+        if (this.onSummon) {
+            this.onSummon();
         }
     }
 }

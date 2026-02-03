@@ -6,6 +6,7 @@
 const { app, BrowserWindow, screen, ipcMain, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { exec } = require('child_process');
 const OpenAI = require('openai');
 require('dotenv').config();
 
@@ -74,7 +75,9 @@ function createWindow() {
     });
 
     // Keep window always on top
-    mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    if (process.platform === 'darwin') {
+        mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
     mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
 
     mainWindow.loadFile('renderer/index.html');
@@ -132,6 +135,65 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
+});
+
+// ============================================
+// Screen Context Capture (macOS Accessibility)
+// ============================================
+
+let lastScreenContext = null;
+let lastContextTime = 0;
+const CONTEXT_CACHE_MS = 5000; // Cache context for 5 seconds
+
+async function captureScreenContext() {
+    // Windows: AX Tree not supported
+    if (process.platform !== 'darwin') {
+        return { app: null, snapshot: [], error: 'AX not supported on Windows' };
+    }
+
+    // Check cache
+    const now = Date.now();
+    if (lastScreenContext && (now - lastContextTime) < CONTEXT_CACHE_MS) {
+        console.log('📄 [Context] Using cached context');
+        return lastScreenContext;
+    }
+
+    return new Promise((resolve) => {
+        const scriptPath = path.join(__dirname, 'ax-reader.sh');
+        exec(`"${scriptPath}"`, { timeout: 5000 }, (err, stdout, stderr) => {
+            if (err) {
+                console.error('❌ [Context] AX capture failed:', err.message);
+                return resolve({ app: null, snapshot: [], error: err.message });
+            }
+            try {
+                const result = JSON.parse(stdout);
+                console.log(`📄 [Context] Captured ${result.snapshot?.length || 0} elements from ${result.app || 'unknown'}`);
+                lastScreenContext = result;
+                lastContextTime = now;
+                resolve(result);
+            } catch (e) {
+                console.error('❌ [Context] Parse error:', e.message);
+                resolve({ app: null, snapshot: [], error: e.message });
+            }
+        });
+    });
+}
+
+ipcMain.handle('get-screen-context', async (event, gazeDirection) => {
+    const context = await captureScreenContext();
+
+    if (!context.snapshot || context.snapshot.length === 0) {
+        return { app: context.app, window: context.window, snapshot: [], error: context.error };
+    }
+
+    console.log(`👁️ [Context] Returning ${context.snapshot.length} elements for gaze: ${gazeDirection}`);
+
+    return {
+        app: context.app,
+        window: context.window,
+        gazeDirection,
+        snapshot: context.snapshot
+    };
 });
 
 // ============================================
