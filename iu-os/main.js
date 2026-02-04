@@ -10,6 +10,13 @@ const { exec } = require('child_process');
 const OpenAI = require('openai');
 require('dotenv').config();
 
+// Auto-updater for automatic updates from GitHub Releases
+const { autoUpdater } = require('electron-updater');
+
+// Configure auto-updater
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
+
 // Fix for OpenAI File/Blob upload in Node environments without globals
 if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefined') {
     const { File, Blob } = require('node:buffer');
@@ -124,11 +131,60 @@ app.whenReady().then(async () => {
 
     createWindow();
 
+    // Check for updates (only in production)
+    if (app.isPackaged) {
+        autoUpdater.checkForUpdates().catch(err => {
+            console.log('Auto-update check failed:', err.message);
+        });
+    }
+
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {
             createWindow();
         }
     });
+});
+
+// Auto-updater events
+autoUpdater.on('update-available', (info) => {
+    console.log('🔄 Update available:', info.version);
+    if (mainWindow) {
+        mainWindow.webContents.send('update-available', info);
+    }
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+    console.log('✅ Update downloaded:', info.version);
+    if (mainWindow) {
+        mainWindow.webContents.send('update-downloaded', info);
+    }
+});
+
+autoUpdater.on('error', (err) => {
+    console.error('❌ Auto-update error:', err.message);
+});
+
+// IPC handlers for updates
+ipcMain.handle('check-for-updates', async () => {
+    try {
+        const result = await autoUpdater.checkForUpdates();
+        return { available: !!result.updateInfo, version: result.updateInfo?.version };
+    } catch (err) {
+        return { available: false, error: err.message };
+    }
+});
+
+ipcMain.handle('download-update', async () => {
+    try {
+        await autoUpdater.downloadUpdate();
+        return { success: true };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
+ipcMain.handle('install-update', () => {
+    autoUpdater.quitAndInstall(false, true);
 });
 
 app.on('window-all-closed', () => {

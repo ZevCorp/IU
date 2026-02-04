@@ -39,6 +39,13 @@ contextBridge.exposeInMainWorld('iuOS', {
     onSystemReady: (callback) => ipcRenderer.on('system-ready', () => callback()),
     onExplicitPredictions: (callback) => ipcRenderer.on('explicit-predictions', (event, predictions) => callback(predictions)),
     onVoiceStateChanged: (callback) => ipcRenderer.on('voice-state-changed', (event, state) => callback(state)),
+
+    // Auto-updater APIs
+    checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+    downloadUpdate: () => ipcRenderer.invoke('download-update'),
+    installUpdate: () => ipcRenderer.invoke('install-update'),
+    onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (event, info) => callback(info)),
+    onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, info) => callback(info)),
 });
 
 
