@@ -181,6 +181,46 @@ try {
     Write-Host "      Could not create shortcut (non-critical)" -ForegroundColor DarkGray
 }
 
+# Step 5: API Key Configuration
+Write-Host ""
+Write-Host "=====================================" -ForegroundColor Cyan
+Write-Host "   OpenAI API Key Setup" -ForegroundColor Cyan
+Write-Host "=====================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "IU needs an OpenAI API key for voice features." -ForegroundColor White
+Write-Host "Get yours at: https://platform.openai.com/api-keys" -ForegroundColor Yellow
+Write-Host ""
+
+$EnvPath = "$InstallDir\\.env"
+$ExistingKey = ""
+
+# Check if .env already exists
+if (Test-Path $EnvPath) {
+    $content = Get-Content $EnvPath -Raw
+    if ($content -match "OPENAI_API_KEY=(.+)") {
+        $ExistingKey = $matches[1].Trim()
+        Write-Host "Existing API key found: $($ExistingKey.Substring(0,10))..." -ForegroundColor Green
+        $useExisting = Read-Host "Use this key? (Y/n)"
+        if ($useExisting -ne "n" -and $useExisting -ne "N") {
+            Write-Host "Using existing API key." -ForegroundColor Green
+        } else {
+            $ExistingKey = ""
+        }
+    }
+}
+
+if (-not $ExistingKey) {
+    $ApiKey = Read-Host "Enter your OpenAI API Key (starts with sk-)"
+    
+    if ($ApiKey -and $ApiKey.StartsWith("sk-")) {
+        "OPENAI_API_KEY=$ApiKey" | Out-File -FilePath $EnvPath -Encoding UTF8
+        Write-Host "API Key saved!" -ForegroundColor Green
+    } else {
+        Write-Host "No valid API key provided. Voice features will be disabled." -ForegroundColor Yellow
+        Write-Host "You can add it later by editing: $EnvPath" -ForegroundColor DarkGray
+    }
+}
+
 Write-Host ""
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host "   Installation Complete!" -ForegroundColor Green

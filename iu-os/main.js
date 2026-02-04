@@ -7,8 +7,38 @@ const { app, BrowserWindow, screen, ipcMain, systemPreferences } = require('elec
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
-const OpenAI = require('openai');
-require('dotenv').config();
+
+// Load .env from multiple locations (dev and production)
+const envPaths = [
+    path.join(__dirname, '.env'),                           // Dev: project root
+    path.join(process.resourcesPath || '', '.env'),         // Packaged: resources
+    path.join(app.getPath('userData'), '.env'),             // User data folder
+    path.join(path.dirname(process.execPath), '.env'),      // Same folder as exe
+];
+
+let envLoaded = false;
+for (const envPath of envPaths) {
+    if (fs.existsSync(envPath)) {
+        require('dotenv').config({ path: envPath });
+        console.log(`📁 Loaded .env from: ${envPath}`);
+        envLoaded = true;
+        break;
+    }
+}
+
+if (!envLoaded) {
+    console.log('⚠️ No .env file found. Some features may be disabled.');
+}
+
+// Initialize OpenAI (handle missing API key gracefully)
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+    const OpenAI = require('openai');
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    console.log('✅ OpenAI initialized');
+} else {
+    console.log('⚠️ OPENAI_API_KEY not set. Voice features disabled.');
+}
 
 // Auto-updater for automatic updates from GitHub Releases
 const { autoUpdater } = require('electron-updater');
@@ -23,9 +53,6 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
     globalThis.File = globalThis.File || File;
     globalThis.Blob = globalThis.Blob || Blob;
 }
-
-// Initialize OpenAI
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 
 let mainWindow = null;
