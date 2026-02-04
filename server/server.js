@@ -168,6 +168,21 @@ try {
 
 Write-Host "[4/4] Installing..." -ForegroundColor Yellow
 $ExePath = "$InstallDir\\$AppName.exe"
+
+# Close existing IU process if running
+$proc = Get-Process -Name "IU" -ErrorAction SilentlyContinue
+if ($proc) {
+    Write-Host "      Closing existing IU process..." -ForegroundColor DarkGray
+    Stop-Process -Name "IU" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+# Remove old exe if exists
+if (Test-Path $ExePath) {
+    Remove-Item -Path $ExePath -Force -ErrorAction SilentlyContinue
+}
+
+# Move new exe
 Move-Item -Path $TempFile -Destination $ExePath -Force
 Write-Host "      Installed to: $ExePath" -ForegroundColor Green
 
