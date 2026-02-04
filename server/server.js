@@ -106,8 +106,6 @@ const httpServer = http.createServer((req, res) => {
         const installScript = `# IU OS - Windows Installer
 # Usage: irm https://iu.space/install | iex
 
-$ErrorActionPreference = 'Stop'
-
 Write-Host ""
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host "   IU OS - Installer" -ForegroundColor Cyan
@@ -121,17 +119,28 @@ $InstallDir = "$env:LOCALAPPDATA\\Programs\\$AppName"
 
 Write-Host "[1/4] Fetching latest release..." -ForegroundColor Yellow
 try {
-    $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/latest"
+    $Release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Owner/$Repo/releases/latest" -ErrorAction Stop
     $Version = $Release.tag_name
     Write-Host "      Found version: $Version" -ForegroundColor Green
 } catch {
+    Write-Host ""
     Write-Host "[ERROR] Could not fetch release info." -ForegroundColor Red
+    Write-Host "        Make sure there is a release at:" -ForegroundColor Red
+    Write-Host "        https://github.com/$Owner/$Repo/releases" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "        Error: $_" -ForegroundColor DarkGray
+    Write-Host ""
+    Read-Host "Press Enter to exit"
     exit 1
 }
 
 $Asset = $Release.assets | Where-Object { $_.name -like "*Windows.exe" } | Select-Object -First 1
 if (-not $Asset) {
-    Write-Host "[ERROR] No Windows release found." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "[ERROR] No Windows .exe found in the release." -ForegroundColor Red
+    Write-Host "        Please upload IU-x.x.x-Windows.exe to the release." -ForegroundColor Yellow
+    Write-Host ""
+    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -150,7 +159,10 @@ try {
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempFile -UseBasicParsing
     Write-Host "      Downloaded successfully" -ForegroundColor Green
 } catch {
+    Write-Host ""
     Write-Host "[ERROR] Download failed: $_" -ForegroundColor Red
+    Write-Host ""
+    Read-Host "Press Enter to exit"
     exit 1
 }
 
@@ -159,11 +171,15 @@ $ExePath = "$InstallDir\\$AppName.exe"
 Move-Item -Path $TempFile -Destination $ExePath -Force
 Write-Host "      Installed to: $ExePath" -ForegroundColor Green
 
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\\Desktop\\$AppName.lnk")
-$Shortcut.TargetPath = $ExePath
-$Shortcut.Save()
-Write-Host "      Desktop shortcut created" -ForegroundColor Green
+try {
+    $WshShell = New-Object -ComObject WScript.Shell
+    $Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\\Desktop\\$AppName.lnk")
+    $Shortcut.TargetPath = $ExePath
+    $Shortcut.Save()
+    Write-Host "      Desktop shortcut created" -ForegroundColor Green
+} catch {
+    Write-Host "      Could not create shortcut (non-critical)" -ForegroundColor DarkGray
+}
 
 Write-Host ""
 Write-Host "=====================================" -ForegroundColor Cyan
