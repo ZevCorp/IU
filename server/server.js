@@ -134,11 +134,11 @@ try {
     exit 1
 }
 
-$Asset = $Release.assets | Where-Object { $_.name -like "*Windows.exe" } | Select-Object -First 1
+$Asset = $Release.assets | Where-Object { $_.name -like "*.exe" } | Select-Object -First 1
 if (-not $Asset) {
     Write-Host ""
-    Write-Host "[ERROR] No Windows .exe found in the release." -ForegroundColor Red
-    Write-Host "        Please upload IU-x.x.x-Windows.exe to the release." -ForegroundColor Yellow
+    Write-Host "[ERROR] No .exe found in the release." -ForegroundColor Red
+    Write-Host "        Please upload IU.OS.exe to the release." -ForegroundColor Yellow
     Write-Host ""
     Read-Host "Press Enter to exit"
     exit 1
