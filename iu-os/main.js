@@ -62,6 +62,7 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
 
 
 let mainWindow = null;
+let chatWindow = null;
 
 // Sidebar width
 const SIDEBAR_WIDTH = 300;
@@ -139,6 +140,142 @@ function createWindow() {
     console.log('✅ Window created');
 }
 
+// ============================================
+// Chat Window (Direct text to GPT-5-Mini)
+// ============================================
+
+function createChatWindow() {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.focus();
+        return;
+    }
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+
+    chatWindow = new BrowserWindow({
+        width: SIDEBAR_WIDTH,
+        height: height,
+        x: width - SIDEBAR_WIDTH * 2 - 4,
+        y: 0,
+        frame: false,
+        transparent: false,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: true,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        hasShadow: true,
+        backgroundColor: '#e7e7e7',
+        roundedCorners: true,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload-chat.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+        }
+    });
+
+    if (process.platform === 'darwin') {
+        chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
+    chatWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+
+    chatWindow.loadFile('renderer/chat.html');
+
+    chatWindow.on('closed', () => {
+        chatWindow = null;
+    });
+
+    console.log('💬 Chat window created');
+}
+
+// Chat window IPC
+ipcMain.on('chat-close', () => {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.close();
+    }
+});
+
+ipcMain.on('chat-send-message', async (event, text) => {
+    console.log('💬 [Chat] User sent:', text.substring(0, 60));
+
+    if (!openai) {
+        if (chatWindow && !chatWindow.isDestroyed()) {
+            chatWindow.webContents.send('chat-response', { error: 'OpenAI no inicializado' });
+        }
+        return;
+    }
+
+    try {
+        // Send to GPT-5-Mini with action planning capability
+        const response = await openai.chat.completions.create({
+            model: "gpt-4.1-mini",
+            messages: [
+                {
+                    role: "system",
+                    content: `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
+
+Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que harás y llama la función execute_screen_action.
+
+Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
+Responde en español.`
+                },
+                {
+                    role: "user",
+                    content: text
+                }
+            ],
+            tools: actionPlanner ? actionPlanner.tools : undefined,
+            tool_choice: "auto"
+        });
+
+        const message = response.choices[0].message;
+        const reply = message.content || '';
+
+        // Check for function call (action)
+        if (message.tool_calls && message.tool_calls.length > 0) {
+            const call = message.tool_calls[0];
+            if (call.function.name === 'execute_screen_action') {
+                const args = JSON.parse(call.function.arguments);
+                console.log('🎯 [Chat] Action planned:', args.goal);
+
+                // Send reply + action to chat window
+                if (chatWindow && !chatWindow.isDestroyed()) {
+                    chatWindow.webContents.send('chat-response', {
+                        reply: reply || `Entendido. Voy a ${args.goal.toLowerCase()}.`,
+                        action: args
+                    });
+                }
+
+                // Send confirmation to main window
+                if (mainWindow) {
+                    mainWindow.webContents.send('action-confirm-request', {
+                        goal: args.goal,
+                        app: args.app,
+                        stepsHint: args.steps_hint,
+                        source: 'explicit'
+                    });
+                }
+
+                return;
+            }
+        }
+
+        // Regular reply (no action)
+        if (chatWindow && !chatWindow.isDestroyed()) {
+            chatWindow.webContents.send('chat-response', { reply });
+        }
+
+    } catch (e) {
+        console.error('❌ [Chat] Failed:', e.message);
+        if (chatWindow && !chatWindow.isDestroyed()) {
+            chatWindow.webContents.send('chat-response', { error: e.message });
+        }
+    }
+});
+
 // IPC Handlers
 ipcMain.handle('get-screen-size', () => {
     const { width, height } = screen.getPrimaryDisplay().workAreaSize;
@@ -155,6 +292,16 @@ ipcMain.on('request-attention', () => {
     if (mainWindow) {
         mainWindow.flashFrame(true);
     }
+});
+
+// Open/toggle chat window from main window
+ipcMain.handle('toggle-chat-window', () => {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.close();
+    } else {
+        createChatWindow();
+    }
+    return { success: true };
 });
 
 // App lifecycle

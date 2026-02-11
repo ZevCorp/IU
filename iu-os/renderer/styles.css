@@ -275,6 +275,49 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Chat Toggle Button (top-right corner) */
+.chat-toggle-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  cursor: pointer;
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  -webkit-app-region: no-drag;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.chat-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.9);
+  transform: scale(1.08);
+}
+
+.chat-toggle-btn:active {
+  transform: scale(0.92);
+}
+
+[data-theme="light"] .chat-toggle-btn {
+  background: rgba(0, 0, 0, 0.05);
+  border-color: rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="light"] .chat-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.1);
+  color: rgba(0, 0, 0, 0.7);
+}
+
 .menu-toggle:hover {
   background: var(--control-hover);
   transform: scale(1.05);

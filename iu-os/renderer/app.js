@@ -794,6 +794,16 @@ function init() {
         }
     }
 
+    // Chat toggle button (top-right)
+    const chatToggleBtn = document.getElementById('btn-chat-toggle');
+    if (chatToggleBtn) {
+        chatToggleBtn.addEventListener('click', () => {
+            if (window.iuOS && window.iuOS.toggleChatWindow) {
+                window.iuOS.toggleChatWindow();
+            }
+        });
+    }
+
     // Menu toggle
     const menuToggle = document.getElementById('menu-toggle');
     const controlsPanel = document.getElementById('controls-panel');

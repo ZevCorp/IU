@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('iuOS', {
     onExplicitPredictions: (callback) => ipcRenderer.on('explicit-predictions', (event, predictions) => callback(predictions)),
     onVoiceStateChanged: (callback) => ipcRenderer.on('voice-state-changed', (event, state) => callback(state)),
 
+    // Chat Window
+    toggleChatWindow: () => ipcRenderer.invoke('toggle-chat-window'),
+
     // Action System
     executeExplicitAction: (userText) => ipcRenderer.invoke('execute-explicit-action', userText),
     executeImplicitAction: (contextText, suggestion) => ipcRenderer.invoke('execute-implicit-action', contextText, suggestion),
