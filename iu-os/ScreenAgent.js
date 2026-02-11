@@ -54,6 +54,7 @@ class ScreenAgent {
 
             let iteration = 0;
             let goalReached = false;
+            const actionHistory = []; // Track what we've done so far
 
             while (iteration < this.maxIterations && !goalReached) {
                 iteration++;
@@ -90,11 +91,21 @@ class ScreenAgent {
                 }
 
                 // Step 4: GPT-5-Mini chooses which affordance to interact with
-                const action = await this._chooseAction(analysis.affordances, goal, stepsHint, iteration);
+                const action = await this._chooseAction(analysis.affordances, goal, stepsHint, iteration, actionHistory);
                 if (!action) {
                     console.error('❌ [ScreenAgent] Action choice failed');
                     break;
                 }
+
+                // Track this action in history
+                actionHistory.push({
+                    iteration,
+                    action: action.action,
+                    label: action.label,
+                    text: action.text || null,
+                    x: action.x,
+                    y: action.y
+                });
 
                 // Step 5: Execute the action (click or type)
                 this._notify('action-status', { phase: 'acting', action: action.label });
@@ -277,32 +288,46 @@ IMPORTANTE:
     /**
      * GPT-5-Mini chooses which affordance to click/interact with.
      */
-    async _chooseAction(affordances, goal, stepsHint, iteration) {
+    async _chooseAction(affordances, goal, stepsHint, iteration, actionHistory = []) {
         try {
+            // Build history summary for context
+            let historyText = 'Ninguna (primera iteración)';
+            if (actionHistory.length > 0) {
+                historyText = actionHistory.map(h => {
+                    if (h.action === 'type') return `  ${h.iteration}. TYPE "${h.text}" en "${h.label}"`;
+                    return `  ${h.iteration}. CLICK en "${h.label}" (${h.x}, ${h.y})`;
+                }).join('\n');
+            }
+
             const response = await this.openai.chat.completions.create({
                 model: "gpt-4.1-mini",
                 messages: [
                     {
                         role: "system",
                         content: `Eres un agente que decide qué acción tomar en una interfaz gráfica.
-Recibes una lista de affordances (elementos clickeables) con sus coordenadas.
-Tu trabajo es elegir UNO y decidir qué hacer con él (click o type).
+Recibes una lista de affordances (elementos interactuables) con sus coordenadas.
+Tu trabajo es elegir UNO y decidir qué hacer: click o type.
+
+REGLAS CRÍTICAS:
+1. Si ya hiciste CLICK en un campo de texto/input/búsqueda en la iteración anterior, la siguiente acción DEBE ser TYPE con el texto necesario. NO vuelvas a hacer click en el mismo campo.
+2. Cuando la acción es "type", DEBES incluir el campo "text" con el texto a escribir.
+3. NUNCA hagas click en el mismo elemento dos veces seguidas. Si ya lo clickeaste, avanza al siguiente paso.
+4. Piensa paso a paso: revisa el historial de acciones y decide qué te acerca más al objetivo.
 
 Responde ÚNICAMENTE con JSON:
 {
   "affordance_id": 1,
   "label": "Nombre del elemento elegido",
   "action": "click" | "type",
-  "text": "texto a escribir (solo si action es type)",
+  "text": "texto a escribir (OBLIGATORIO si action es type)",
   "x": 500,
   "y": 300,
   "reasoning": "Por qué elegí este elemento",
   "wait_after": 1000
 }
 
-- wait_after: milisegundos a esperar después de la acción (1000 por defecto, 2000 si es una carga de página).
-- Si necesitas escribir texto en un campo, primero haz click en el campo, y en la siguiente iteración escribe.
-- Piensa paso a paso: ¿qué acción me acerca más al objetivo?`
+- wait_after: ms a esperar (1000 default, 2000 si carga página).
+- Para escribir en un campo: action="type", text="lo que quieres escribir", x e y del campo.`
                     },
                     {
                         role: "user",
@@ -310,10 +335,13 @@ Responde ÚNICAMENTE con JSON:
 Pasos sugeridos: "${stepsHint}"
 Iteración actual: ${iteration}
 
+Historial de acciones previas:
+${historyText}
+
 Affordances disponibles:
 ${JSON.stringify(affordances, null, 2)}
 
-¿Qué elemento elijo y qué hago?`
+¿Qué elemento elijo y qué hago? Recuerda: si ya hice click en un input, ahora debo escribir (type).`
                     }
                 ],
                 response_format: { type: "json_object" },
