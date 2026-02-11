@@ -140,10 +140,18 @@ En cada turno recibirás un screenshot de la pantalla con una cuadrícula de coo
 REGLAS:
 1. Llama UNA función por turno. Analiza la pantalla y decide la MEJOR acción siguiente.
 2. Para escribir en un campo: primero CLICK en el campo (un turno), luego TYPE_TEXT (siguiente turno).
-3. NUNCA hagas click en el mismo lugar dos veces seguidas. Si ya clickeaste algo, avanza al siguiente paso.
+3. NUNCA hagas click en el mismo lugar dos veces seguidas sin razón. Pero SÍ reintenta si la acción anterior NO tuvo efecto visible.
 4. Si el objetivo ya se cumplió visualmente, llama goal_reached.
 5. Sé preciso con las coordenadas. Usa la cuadrícula como referencia.
-6. Después de escribir texto, usa key_press con "enter" si necesitas enviar/confirmar.`
+6. Después de escribir texto, usa key_press con "enter" si necesitas enviar/confirmar.
+
+VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
+- ANTES de avanzar al siguiente paso, VERIFICA en el screenshot actual que tu acción ANTERIOR realmente tuvo efecto.
+- Si hiciste CLICK en un chat/contacto: verifica que la conversación se abrió (debe verse el historial de mensajes y el campo de texto).
+- Si hiciste CLICK en un campo de texto: verifica que el cursor está activo en ese campo.
+- Si hiciste TYPE_TEXT: verifica que el texto aparece escrito en el campo.
+- Si la acción anterior NO tuvo el efecto esperado (la pantalla se ve igual o diferente a lo esperado), REPITE la acción con coordenadas corregidas o intenta una alternativa.
+- NUNCA asumas que una acción funcionó. SIEMPRE confirma visualmente en el screenshot.`
                 }
             ];
 
