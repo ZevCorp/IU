@@ -92,7 +92,7 @@ class ScreenAgent {
                 }
 
                 // Step 4: GPT-5-Mini chooses which affordance to interact with
-                const action = await this._chooseAction(analysis.affordances, goal, stepsHint, iteration, actionHistory);
+                const action = await this._chooseAction(analysis.affordances, goal, stepsHint, iteration, actionHistory, analysis.current_state);
                 if (!action) {
                     console.error('❌ [ScreenAgent] Action choice failed');
                     break;
@@ -293,7 +293,7 @@ IMPORTANTE:
     /**
      * GPT-5-Mini chooses which affordance to click/interact with.
      */
-    async _chooseAction(affordances, goal, stepsHint, iteration, actionHistory = []) {
+    async _chooseAction(affordances, goal, stepsHint, iteration, actionHistory = [], currentState = '') {
         try {
             // Build history summary for context
             let historyText = 'Ninguna (primera iteración)';
@@ -310,14 +310,20 @@ IMPORTANTE:
                     {
                         role: "system",
                         content: `Eres un agente que decide qué acción tomar en una interfaz gráfica.
-Recibes una lista de affordances (elementos interactuables) con sus coordenadas.
-Tu trabajo es elegir UNO y decidir qué hacer: click o type.
+Recibes:
+- El ESTADO ACTUAL de la pantalla (descripción de lo que se ve)
+- Una lista de affordances (elementos interactuables) con sus coordenadas
+- El historial de acciones que ya realizaste
+
+Tu trabajo es elegir UNA acción que te acerque al objetivo.
 
 REGLAS CRÍTICAS:
-1. Si ya hiciste CLICK en un campo de texto/input/búsqueda en la iteración anterior, la siguiente acción DEBE ser TYPE con el texto necesario. NO vuelvas a hacer click en el mismo campo.
-2. Cuando la acción es "type", DEBES incluir el campo "text" con el texto a escribir.
-3. NUNCA hagas click en el mismo elemento dos veces seguidas. Si ya lo clickeaste, avanza al siguiente paso.
-4. Piensa paso a paso: revisa el historial de acciones y decide qué te acerca más al objetivo.
+1. LEE EL ESTADO ACTUAL primero. Si el objetivo ya está parcialmente logrado (ej: el chat correcto ya está abierto), NO repitas pasos ya completados. Avanza al SIGUIENTE paso lógico.
+2. Si ya hiciste CLICK en un campo de texto/input/búsqueda en la iteración anterior, la siguiente acción DEBE ser TYPE con el texto necesario.
+3. Cuando la acción es "type", DEBES incluir el campo "text" con el texto a escribir.
+4. NUNCA hagas click en el mismo elemento dos veces seguidas.
+5. Si el chat/conversación correcta ya está abierta, busca el campo de mensaje y escribe directamente. NO busques el contacto de nuevo.
+6. Piensa paso a paso: ¿qué paso me falta para completar el objetivo?
 
 Responde ÚNICAMENTE con JSON:
 {
@@ -340,13 +346,16 @@ Responde ÚNICAMENTE con JSON:
 Pasos sugeridos: "${stepsHint}"
 Iteración actual: ${iteration}
 
-Historial de acciones previas:
+📄 ESTADO ACTUAL DE LA PANTALLA:
+${currentState}
+
+📋 Historial de acciones previas:
 ${historyText}
 
-Affordances disponibles:
+🎯 Affordances disponibles:
 ${JSON.stringify(affordances, null, 2)}
 
-¿Qué elemento elijo y qué hago? Recuerda: si ya hice click en un input, ahora debo escribir (type).`
+Basándote en el ESTADO ACTUAL, ¿qué acción tomo ahora para avanzar hacia el objetivo? No repitas pasos ya logrados.`
                     }
                 ],
                 response_format: { type: "json_object" },
