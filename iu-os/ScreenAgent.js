@@ -9,18 +9,18 @@ const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
 
-// Function calling tools for the unified model
+// Function calling tools for the unified model — normalized coordinates (0-1)
 const ACTION_TOOLS = [
     {
         type: "function",
         function: {
             name: "click",
-            description: "Click on a UI element at the given pixel coordinates. Use this to press buttons, select items, open menus, focus input fields, etc.",
+            description: "Click on a UI element. Provide the CENTER of the element using normalized coordinates (0.0 to 1.0), where (0,0) is top-left and (1,1) is bottom-right of the screen.",
             parameters: {
                 type: "object",
                 properties: {
-                    x: { type: "number", description: "X coordinate in pixels (use the grid overlay for precision)" },
-                    y: { type: "number", description: "Y coordinate in pixels (use the grid overlay for precision)" },
+                    x: { type: "number", description: "Normalized X coordinate (0.0 = left edge, 1.0 = right edge). Must be between 0 and 1." },
+                    y: { type: "number", description: "Normalized Y coordinate (0.0 = top edge, 1.0 = bottom edge). Must be between 0 and 1." },
                     label: { type: "string", description: "Short description of what you're clicking" },
                     reasoning: { type: "string", description: "Why this click advances the goal" }
                 },
@@ -84,6 +84,8 @@ class ScreenAgent {
         this.maxIterations = 15;
         this.nutjs = null;
         this.debugDir = path.join(require('os').homedir(), 'u_debug');
+        this.screenWidth = 0;
+        this.screenHeight = 0;
     }
 
     /**
@@ -121,6 +123,11 @@ class ScreenAgent {
             let goalReached = false;
             const actionHistory = [];
 
+            // Store screen dimensions for denormalization
+            const primaryDisplay = screen.getPrimaryDisplay();
+            this.screenWidth = primaryDisplay.size.width;
+            this.screenHeight = primaryDisplay.size.height;
+
             // Conversation history for the model (persists across iterations)
             const messages = [
                 {
@@ -131,18 +138,22 @@ OBJETIVO: "${goal}"
 APP: "${app}"
 PASOS SUGERIDOS: "${stepsHint}"
 
-En cada turno recibirás un screenshot de la pantalla con una cuadrícula de coordenadas superpuesta:
-- Líneas rojas cada 100px, etiquetas amarillas cada 200px
-- Borde superior: coordenadas X (0, 200, 400, ...)
-- Borde izquierdo: coordenadas Y (200, 400, ...)
-- Usa la cuadrícula para estimar coordenadas PRECISAS de los elementos.
+COORDENADAS NORMALIZADAS:
+En cada turno recibirás un screenshot LIMPIO de la pantalla (sin cuadrícula).
+Para indicar posiciones, usa coordenadas NORMALIZADAS de 0.0 a 1.0:
+- x=0.0 es el borde izquierdo, x=1.0 es el borde derecho
+- y=0.0 es el borde superior, y=1.0 es el borde inferior
+- El CENTRO de la pantalla es (0.5, 0.5)
+- Ejemplo: un botón en la esquina superior derecha sería aprox (0.9, 0.05)
+- Ejemplo: un campo de texto centrado horizontalmente a 3/4 de altura sería (0.5, 0.75)
+Estima la posición del CENTRO del elemento que quieres clickear.
 
 REGLAS:
 1. Llama UNA función por turno. Analiza la pantalla y decide la MEJOR acción siguiente.
 2. Para escribir en un campo: primero CLICK en el campo (un turno), luego TYPE_TEXT (siguiente turno).
 3. NUNCA hagas click en el mismo lugar dos veces seguidas sin razón. Pero SÍ reintenta si la acción anterior NO tuvo efecto visible.
 4. Si el objetivo ya se cumplió visualmente, llama goal_reached.
-5. Sé preciso con las coordenadas. Usa la cuadrícula como referencia.
+5. Sé preciso con las coordenadas normalizadas. Piensa en proporciones relativas de la pantalla.
 6. Después de escribir texto, usa key_press con "enter" si necesitas enviar/confirmar.
 
 VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
@@ -230,16 +241,22 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
                     break;
                 }
 
-                // Track action
+                // Denormalize click coordinates for logging
                 let summary = '';
-                if (fnName === 'click') summary = `CLICK "${args.label}" en (${args.x}, ${args.y})`;
+                if (fnName === 'click') {
+                    const px = Math.round(args.x * this.screenWidth);
+                    const py = Math.round(args.y * this.screenHeight);
+                    summary = `CLICK "${args.label}" en (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`;
+                }
                 else if (fnName === 'type_text') summary = `TYPE "${args.text}" en "${args.label}"`;
                 else if (fnName === 'key_press') summary = `KEY ${args.key} — ${args.label}`;
                 actionHistory.push({ iteration, summary });
 
-                // Save debug screenshot
+                // Save debug screenshot with denormalized click point
                 if (fnName === 'click') {
-                    await this._saveDebugScreenshot(screenshotBase64, { x: args.x, y: args.y, label: args.label }, iteration);
+                    const px = Math.round(args.x * this.screenWidth);
+                    const py = Math.round(args.y * this.screenHeight);
+                    await this._saveDebugScreenshot(screenshotBase64, { x: px, y: py, label: args.label }, iteration);
                 }
 
                 // Execute the action
@@ -339,23 +356,20 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
             fs.unlinkSync(tmpPath);
 
             // Retina displays: screencapture produces 2x images.
-            // Downscale to logical resolution so grid coordinates match nut-js click coordinates.
+            // Downscale to logical resolution for cleaner image and smaller payload.
             const primaryDisplay = screen.getPrimaryDisplay();
             const scaleFactor = primaryDisplay.scaleFactor || 1;
             const displaySize = primaryDisplay.size; // logical size
             let imgBuffer = rawBuffer;
             if (scaleFactor > 1) {
                 const meta = await sharp(rawBuffer).metadata();
-                // Use actual display logical size (not image/scaleFactor) for perfect calibration
                 imgBuffer = await sharp(rawBuffer).resize(displaySize.width, displaySize.height).png().toBuffer();
                 console.log(`📐 [ScreenAgent] Downscaled ${meta.width}x${meta.height} → ${displaySize.width}x${displaySize.height} (display logical size)`);
             }
 
-            // Overlay coordinate grid for precise GPT-4V targeting
-            const gridBuffer = await this._overlayGrid(imgBuffer);
-
-            const base64 = gridBuffer.toString('base64');
-            console.log(`📸 [ScreenAgent] Screenshot taken (${Math.round(gridBuffer.length / 1024)}KB, grid overlay applied)`);
+            // No grid overlay — clean image + normalized coordinates (0-1)
+            const base64 = imgBuffer.toString('base64');
+            console.log(`📸 [ScreenAgent] Screenshot taken (${Math.round(imgBuffer.length / 1024)}KB, clean — no grid)`);
             return base64;
 
         } catch (e) {
@@ -370,14 +384,18 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
 
     /**
      * Execute a tool call from the unified model.
+     * Click coordinates are normalized (0-1) and denormalized to pixel coords here.
      */
     async _executeTool(fnName, args) {
         try {
             const { mouse, keyboard, Button, Key, Point } = await this._getNutJS();
 
             if (fnName === 'click') {
-                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at (${args.x}, ${args.y})`);
-                await mouse.setPosition(new Point(args.x, args.y));
+                // Denormalize from 0-1 to pixel coordinates
+                const px = Math.round(args.x * this.screenWidth);
+                const py = Math.round(args.y * this.screenHeight);
+                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
+                await mouse.setPosition(new Point(px, py));
                 await this._wait(100);
                 await mouse.click(Button.LEFT);
 
@@ -439,51 +457,6 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
         } catch (e) {
             console.warn('⚠️ [ScreenAgent] Debug screenshot failed:', e.message);
         }
-    }
-
-    /**
-     * Overlay a coordinate grid on the screenshot so GPT-4V can accurately locate pixel positions.
-     * Draws lines every 100px, labels every 200px on edges.
-     */
-    async _overlayGrid(pngBuffer) {
-        const meta = await sharp(pngBuffer).metadata();
-        const w = meta.width;
-        const h = meta.height;
-        const step = 100;
-
-        // Build SVG overlay with grid lines + coordinate labels
-        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">`;
-
-        // Vertical lines + top labels (label every 200px, line every 100px)
-        for (let x = 0; x <= w; x += step) {
-            const isMajor = x % 200 === 0;
-            svg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(255,0,0,${isMajor ? '0.4' : '0.2'})" stroke-width="${isMajor ? 1 : 0.5}"/>`;
-            if (isMajor) {
-                svg += `<rect x="${x + 1}" y="1" width="${String(x).length * 8 + 6}" height="14" fill="rgba(0,0,0,0.7)" rx="2"/>`;
-                svg += `<text x="${x + 4}" y="12" font-family="Helvetica" font-size="10" font-weight="bold" fill="#ff0" letter-spacing="0">${x}</text>`;
-            }
-        }
-
-        // Horizontal lines + left labels (label every 200px, line every 100px)
-        for (let y = 0; y <= h; y += step) {
-            const isMajor = y % 200 === 0;
-            svg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="rgba(255,0,0,${isMajor ? '0.4' : '0.2'})" stroke-width="${isMajor ? 1 : 0.5}"/>`;
-            if (isMajor && y > 0) {
-                svg += `<rect x="1" y="${y + 1}" width="${String(y).length * 8 + 6}" height="14" fill="rgba(0,0,0,0.7)" rx="2"/>`;
-                svg += `<text x="4" y="${y + 12}" font-family="Helvetica" font-size="10" font-weight="bold" fill="#ff0" letter-spacing="0">${y}</text>`;
-            }
-        }
-
-        svg += `</svg>`;
-
-        const gridOverlay = Buffer.from(svg);
-
-        const result = await sharp(pngBuffer)
-            .composite([{ input: gridOverlay, top: 0, left: 0 }])
-            .png()
-            .toBuffer();
-
-        return result;
     }
 
     /**
