@@ -1,13 +1,80 @@
 /**
  * ScreenAgent.js
- * Visual action loop: screenshot → GPT-4V (mark affordances) → GPT-5-Mini (choose click) → execute click → repeat
- * "El sistema no sabe hacer nada, pero lo puede hacer todo"
+ * Unified visual action loop: screenshot → GPT-4.1-mini (vision + function calling) → execute → repeat
+ * Single model sees the screen, reasons, and calls tools (click/type/done) in one shot.
  */
 
 const { screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
+
+// Function calling tools for the unified model
+const ACTION_TOOLS = [
+    {
+        type: "function",
+        function: {
+            name: "click",
+            description: "Click on a UI element at the given pixel coordinates. Use this to press buttons, select items, open menus, focus input fields, etc.",
+            parameters: {
+                type: "object",
+                properties: {
+                    x: { type: "number", description: "X coordinate in pixels (use the grid overlay for precision)" },
+                    y: { type: "number", description: "Y coordinate in pixels (use the grid overlay for precision)" },
+                    label: { type: "string", description: "Short description of what you're clicking" },
+                    reasoning: { type: "string", description: "Why this click advances the goal" }
+                },
+                required: ["x", "y", "label", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "type_text",
+            description: "Type text into the currently focused input field. IMPORTANT: You must click on the input field FIRST in a previous iteration before typing. Do NOT click and type in the same iteration.",
+            parameters: {
+                type: "object",
+                properties: {
+                    text: { type: "string", description: "The text to type" },
+                    label: { type: "string", description: "Short description of what field you're typing into" },
+                    reasoning: { type: "string", description: "Why typing this text advances the goal" }
+                },
+                required: ["text", "label", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "key_press",
+            description: "Press a special key (Enter, Tab, Escape, etc). Use after typing to submit, or to navigate.",
+            parameters: {
+                type: "object",
+                properties: {
+                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right"], description: "The key to press" },
+                    label: { type: "string", description: "Short description of why pressing this key" },
+                    reasoning: { type: "string", description: "Why this key press advances the goal" }
+                },
+                required: ["key", "label", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "goal_reached",
+            description: "Call this when the objective has been fully completed. Only call when you can visually confirm the goal is done.",
+            parameters: {
+                type: "object",
+                properties: {
+                    summary: { type: "string", description: "Brief summary of what was accomplished" }
+                },
+                required: ["summary"]
+            }
+        }
+    }
+];
 
 class ScreenAgent {
     constructor(openai, mainWindow) {
@@ -25,7 +92,6 @@ class ScreenAgent {
     async _getNutJS() {
         if (!this.nutjs) {
             const { mouse, keyboard, screen: nutScreen, Button, Key, Point } = require('@nut-tree-fork/nut-js');
-            // Configure nut-js
             mouse.config.autoDelayMs = 100;
             keyboard.config.autoDelayMs = 50;
             this.nutjs = { mouse, keyboard, screen: nutScreen, Button, Key, Point };
@@ -34,7 +100,7 @@ class ScreenAgent {
     }
 
     /**
-     * Main action loop. Runs until goal is reached or max iterations.
+     * Main action loop. Single GPT-4.1-mini call per iteration: sees screen + calls tools.
      */
     async executeAction(goal, app, stepsHint) {
         if (this.isRunning) {
@@ -45,78 +111,138 @@ class ScreenAgent {
         this.isRunning = true;
         console.log(`🖥️ [ScreenAgent] Starting action loop: "${goal}" in ${app}`);
 
-        // Notify renderer: U looks at screen
         this._notify('action-status', { phase: 'starting', goal, app });
 
         try {
-            // Step 1: Open the app
             await this._openApp(app);
             await this._wait(1500);
 
             let iteration = 0;
             let goalReached = false;
-            const actionHistory = []; // Track what we've done so far
+            const actionHistory = [];
+
+            // Conversation history for the model (persists across iterations)
+            const messages = [
+                {
+                    role: "system",
+                    content: `Eres un agente de automatización de interfaces gráficas. Controlas el mouse y teclado de una Mac.
+
+OBJETIVO: "${goal}"
+APP: "${app}"
+PASOS SUGERIDOS: "${stepsHint}"
+
+En cada turno recibirás un screenshot de la pantalla con una cuadrícula de coordenadas superpuesta:
+- Líneas rojas cada 100px, etiquetas amarillas cada 200px
+- Borde superior: coordenadas X (0, 200, 400, ...)
+- Borde izquierdo: coordenadas Y (200, 400, ...)
+- Usa la cuadrícula para estimar coordenadas PRECISAS de los elementos.
+
+REGLAS:
+1. Llama UNA función por turno. Analiza la pantalla y decide la MEJOR acción siguiente.
+2. Para escribir en un campo: primero CLICK en el campo (un turno), luego TYPE_TEXT (siguiente turno).
+3. NUNCA hagas click en el mismo lugar dos veces seguidas. Si ya clickeaste algo, avanza al siguiente paso.
+4. Si el objetivo ya se cumplió visualmente, llama goal_reached.
+5. Sé preciso con las coordenadas. Usa la cuadrícula como referencia.
+6. Después de escribir texto, usa key_press con "enter" si necesitas enviar/confirmar.`
+                }
+            ];
 
             while (iteration < this.maxIterations && !goalReached) {
                 iteration++;
                 console.log(`🔄 [ScreenAgent] Iteration ${iteration}/${this.maxIterations}`);
-
-                // Notify renderer: looking at screen
                 this._notify('action-status', { phase: 'analyzing', iteration });
 
-                // Step 2: Take screenshot (hide U window first)
+                // Take screenshot
                 const screenshotBase64 = await this._takeScreenshot();
                 if (!screenshotBase64) {
                     console.error('❌ [ScreenAgent] Screenshot failed');
                     break;
                 }
 
-                // Step 3: GPT-4V analyzes screenshot, marks affordances
-                const analysis = await this._analyzeScreen(screenshotBase64, goal, app, stepsHint);
-                if (!analysis) {
-                    console.error('❌ [ScreenAgent] Screen analysis failed');
+                // Build history hint
+                let historyHint = '';
+                if (actionHistory.length > 0) {
+                    historyHint = '\n\nAcciones realizadas hasta ahora:\n' + actionHistory.map(h => `  ${h.iteration}. ${h.summary}`).join('\n');
+                }
+
+                // Add screenshot as user message
+                messages.push({
+                    role: "user",
+                    content: [
+                        {
+                            type: "image_url",
+                            image_url: {
+                                url: `data:image/png;base64,${screenshotBase64}`,
+                                detail: "high"
+                            }
+                        },
+                        {
+                            type: "text",
+                            text: `Iteración ${iteration}/${this.maxIterations}. Analiza la pantalla y ejecuta la siguiente acción para lograr: "${goal}"${historyHint}`
+                        }
+                    ]
+                });
+
+                // Single GPT-4.1-mini call with vision + function calling
+                const response = await this.openai.chat.completions.create({
+                    model: "gpt-4.1-mini",
+                    messages,
+                    tools: ACTION_TOOLS,
+                    tool_choice: "required",
+                    max_tokens: 500
+                });
+
+                const choice = response.choices[0];
+                const toolCall = choice.message.tool_calls?.[0];
+
+                if (!toolCall) {
+                    console.warn('⚠️ [ScreenAgent] No tool call returned');
                     break;
                 }
 
-                // Check if goal is reached
-                if (analysis.goal_reached) {
+                // Add assistant response to conversation
+                messages.push(choice.message);
+
+                const fnName = toolCall.function.name;
+                const args = JSON.parse(toolCall.function.arguments);
+                console.log(`🎯 [ScreenAgent] ${fnName}: ${JSON.stringify(args)}`);
+
+                // Add tool result to conversation
+                messages.push({
+                    role: "tool",
+                    tool_call_id: toolCall.id,
+                    content: "OK"
+                });
+
+                // Handle goal_reached
+                if (fnName === 'goal_reached') {
                     goalReached = true;
-                    console.log('✅ [ScreenAgent] Goal reached!');
+                    console.log(`✅ [ScreenAgent] Goal reached: ${args.summary}`);
                     this._notify('action-status', { phase: 'completed', goal });
                     break;
                 }
 
-                if (!analysis.affordances || analysis.affordances.length === 0) {
-                    console.warn('⚠️ [ScreenAgent] No affordances found');
-                    break;
+                // Track action
+                let summary = '';
+                if (fnName === 'click') summary = `CLICK "${args.label}" en (${args.x}, ${args.y})`;
+                else if (fnName === 'type_text') summary = `TYPE "${args.text}" en "${args.label}"`;
+                else if (fnName === 'key_press') summary = `KEY ${args.key} — ${args.label}`;
+                actionHistory.push({ iteration, summary });
+
+                // Save debug screenshot
+                if (fnName === 'click') {
+                    await this._saveDebugScreenshot(screenshotBase64, { x: args.x, y: args.y, label: args.label }, iteration);
                 }
 
-                // Step 4: GPT-5-Mini chooses which affordance to interact with
-                const action = await this._chooseAction(analysis.affordances, goal, stepsHint, iteration, actionHistory, analysis.current_state);
-                if (!action) {
-                    console.error('❌ [ScreenAgent] Action choice failed');
-                    break;
-                }
+                // Execute the action
+                this._notify('action-status', { phase: 'acting', action: summary });
+                await this._executeTool(fnName, args);
 
-                // Track this action in history
-                actionHistory.push({
-                    iteration,
-                    action: action.action,
-                    label: action.label,
-                    text: action.text || null,
-                    x: action.x,
-                    y: action.y
-                });
+                // Wait for UI to update
+                await this._wait(fnName === 'click' ? 1000 : 800);
 
-                // Save debug screenshot with crosshair at click point
-                await this._saveDebugScreenshot(screenshotBase64, action, iteration);
-
-                // Step 5: Execute the action (click or type)
-                this._notify('action-status', { phase: 'acting', action: action.label });
-                await this._executeAction(action);
-
-                // Wait for UI to update after action
-                await this._wait(action.wait_after || 1000);
+                // Trim old image messages to save tokens (keep last 3 screenshots)
+                this._trimMessages(messages);
             }
 
             if (!goalReached) {
@@ -132,9 +258,28 @@ class ScreenAgent {
             return { success: false, error: e.message };
         } finally {
             this.isRunning = false;
-            // Show U window again
             if (this.mainWindow && !this.mainWindow.isDestroyed()) {
                 this.mainWindow.show();
+            }
+        }
+    }
+
+    /**
+     * Trim conversation to keep only the last N screenshot messages (save tokens).
+     */
+    _trimMessages(messages) {
+        const maxScreenshots = 3;
+        let screenshotCount = 0;
+        // Count from end, mark old screenshots for removal
+        for (let i = messages.length - 1; i >= 1; i--) { // skip system at 0
+            const msg = messages[i];
+            if (msg.role === 'user' && Array.isArray(msg.content) && msg.content.some(c => c.type === 'image_url')) {
+                screenshotCount++;
+                if (screenshotCount > maxScreenshots) {
+                    // Replace image with text summary to save tokens
+                    const textPart = msg.content.find(c => c.type === 'text');
+                    messages[i] = { role: "user", content: textPart?.text || '[screenshot removed]' };
+                }
             }
         }
     }
@@ -216,193 +361,40 @@ class ScreenAgent {
     }
 
     /**
-     * Send screenshot to GPT-4V to identify clickable affordances and their coordinates.
+     * Execute a tool call from the unified model.
      */
-    async _analyzeScreen(screenshotBase64, goal, app, stepsHint) {
-        try {
-            const response = await this.openai.chat.completions.create({
-                model: "gpt-4.1",
-                messages: [
-                    {
-                        role: "system",
-                        content: `Eres un analizador de interfaces gráficas. Tu trabajo es:
-1. Mirar el screenshot de la pantalla del usuario.
-2. Identificar TODOS los elementos clickeables visibles (botones, links, iconos, campos de texto, tabs, etc.) — estos son "affordances".
-3. Para cada affordance, dar: label descriptivo, tipo (button/link/input/icon/tab/menu), coordenadas x,y del centro del elemento en píxeles.
-4. Determinar si el objetivo del usuario YA se cumplió mirando el estado actual de la pantalla.
-
-El objetivo del usuario es: "${goal}"
-La app objetivo es: "${app}"
-Pasos sugeridos: "${stepsHint}"
-
-COORDENADAS — CUADRÍCULA DE REFERENCIA:
-La imagen tiene una cuadrícula roja superpuesta con etiquetas de coordenadas cada 200 píxeles.
-- En el borde superior: etiquetas X (0, 200, 400, 600, ...)
-- En el borde izquierdo: etiquetas Y (200, 400, 600, ...)
-- Usa estas líneas y etiquetas como referencia para dar coordenadas PRECISAS.
-- Para encontrar la coordenada de un elemento, ubica las líneas de cuadrícula más cercanas y estima la posición exacta entre ellas.
-- Ejemplo: si un botón está a mitad de camino entre la línea x=400 y x=600, su x es ~500.
-
-Responde ÚNICAMENTE con JSON válido:
-{
-  "goal_reached": false,
-  "current_state": "Descripción breve de lo que se ve en pantalla",
-  "affordances": [
-    { "id": 1, "label": "Botón Enviar", "type": "button", "x": 500, "y": 300 },
-    { "id": 2, "label": "Campo de búsqueda", "type": "input", "x": 200, "y": 50 }
-  ]
-}
-
-IMPORTANTE:
-- USA LA CUADRÍCULA para dar coordenadas precisas en píxeles absolutos.
-- Solo incluye affordances VISIBLES y RELEVANTES para el objetivo (máximo 15).
-- Si el objetivo ya se cumplió (ej: el mensaje fue enviado, la app está abierta en la vista correcta), pon goal_reached: true.`
-                    },
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "image_url",
-                                image_url: {
-                                    url: `data:image/png;base64,${screenshotBase64}`,
-                                    detail: "high"
-                                }
-                            },
-                            {
-                                type: "text",
-                                text: `Analiza esta pantalla. Objetivo: "${goal}". App: "${app}".`
-                            }
-                        ]
-                    }
-                ],
-                response_format: { type: "json_object" },
-                max_tokens: 2000
-            });
-
-            const result = JSON.parse(response.choices[0].message.content);
-            console.log(`🔍 [ScreenAgent] Analysis: ${result.affordances?.length || 0} affordances found. Goal reached: ${result.goal_reached}`);
-            console.log(`📄 [ScreenAgent] State: ${result.current_state}`);
-            return result;
-
-        } catch (e) {
-            console.error('❌ [ScreenAgent] Screen analysis failed:', e.message);
-            return null;
-        }
-    }
-
-    /**
-     * GPT-5-Mini chooses which affordance to click/interact with.
-     */
-    async _chooseAction(affordances, goal, stepsHint, iteration, actionHistory = [], currentState = '') {
-        try {
-            // Build history summary for context
-            let historyText = 'Ninguna (primera iteración)';
-            if (actionHistory.length > 0) {
-                historyText = actionHistory.map(h => {
-                    if (h.action === 'type') return `  ${h.iteration}. TYPE "${h.text}" en "${h.label}"`;
-                    return `  ${h.iteration}. CLICK en "${h.label}" (${h.x}, ${h.y})`;
-                }).join('\n');
-            }
-
-            const response = await this.openai.chat.completions.create({
-                model: "gpt-4.1-mini",
-                messages: [
-                    {
-                        role: "system",
-                        content: `Eres un agente que decide qué acción tomar en una interfaz gráfica.
-Recibes:
-- El ESTADO ACTUAL de la pantalla (descripción de lo que se ve)
-- Una lista de affordances (elementos interactuables) con sus coordenadas
-- El historial de acciones que ya realizaste
-
-Tu trabajo es elegir UNA acción que te acerque al objetivo.
-
-REGLAS CRÍTICAS:
-1. LEE EL ESTADO ACTUAL primero. Si el objetivo ya está parcialmente logrado (ej: el chat correcto ya está abierto), NO repitas pasos ya completados. Avanza al SIGUIENTE paso lógico.
-2. Si ya hiciste CLICK en un campo de texto/input/búsqueda en la iteración anterior, la siguiente acción DEBE ser TYPE con el texto necesario.
-3. Cuando la acción es "type", DEBES incluir el campo "text" con el texto a escribir.
-4. NUNCA hagas click en el mismo elemento dos veces seguidas.
-5. Si el chat/conversación correcta ya está abierta, busca el campo de mensaje y escribe directamente. NO busques el contacto de nuevo.
-6. Piensa paso a paso: ¿qué paso me falta para completar el objetivo?
-
-Responde ÚNICAMENTE con JSON:
-{
-  "affordance_id": 1,
-  "label": "Nombre del elemento elegido",
-  "action": "click" | "type",
-  "text": "texto a escribir (OBLIGATORIO si action es type)",
-  "x": 500,
-  "y": 300,
-  "reasoning": "Por qué elegí este elemento",
-  "wait_after": 1000
-}
-
-- wait_after: ms a esperar (1000 default, 2000 si carga página).
-- Para escribir en un campo: action="type", text="lo que quieres escribir", x e y del campo.`
-                    },
-                    {
-                        role: "user",
-                        content: `Objetivo: "${goal}"
-Pasos sugeridos: "${stepsHint}"
-Iteración actual: ${iteration}
-
-📄 ESTADO ACTUAL DE LA PANTALLA:
-${currentState}
-
-📋 Historial de acciones previas:
-${historyText}
-
-🎯 Affordances disponibles:
-${JSON.stringify(affordances, null, 2)}
-
-Basándote en el ESTADO ACTUAL, ¿qué acción tomo ahora para avanzar hacia el objetivo? No repitas pasos ya logrados.`
-                    }
-                ],
-                response_format: { type: "json_object" },
-                max_tokens: 500
-            });
-
-            const action = JSON.parse(response.choices[0].message.content);
-            console.log(`🎯 [ScreenAgent] Chose: "${action.label}" (${action.action}) at (${action.x}, ${action.y}) — ${action.reasoning}`);
-            return action;
-
-        } catch (e) {
-            console.error('❌ [ScreenAgent] Action choice failed:', e.message);
-            return null;
-        }
-    }
-
-    /**
-     * Execute a click or type action using nut-js.
-     */
-    async _executeAction(action) {
+    async _executeTool(fnName, args) {
         try {
             const { mouse, keyboard, Button, Key, Point } = await this._getNutJS();
 
-            if (action.action === 'click') {
-                console.log(`🖱️ [ScreenAgent] Clicking at (${action.x}, ${action.y})`);
-                await mouse.setPosition(new Point(action.x, action.y));
+            if (fnName === 'click') {
+                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at (${args.x}, ${args.y})`);
+                await mouse.setPosition(new Point(args.x, args.y));
                 await this._wait(100);
                 await mouse.click(Button.LEFT);
 
-            } else if (action.action === 'type') {
-                if (action.x && action.y) {
-                    // Click on the field first
-                    console.log(`🖱️ [ScreenAgent] Clicking field at (${action.x}, ${action.y})`);
-                    await mouse.setPosition(new Point(action.x, action.y));
-                    await this._wait(100);
-                    await mouse.click(Button.LEFT);
-                    await this._wait(200);
-                }
+            } else if (fnName === 'type_text') {
+                console.log(`⌨️ [ScreenAgent] Typing "${args.text.substring(0, 40)}${args.text.length > 40 ? '...' : ''}" into "${args.label}"`);
+                await keyboard.type(args.text);
 
-                if (action.text) {
-                    console.log(`⌨️ [ScreenAgent] Typing: "${action.text.substring(0, 40)}..."`);
-                    await keyboard.type(action.text);
+            } else if (fnName === 'key_press') {
+                const keyMap = {
+                    enter: Key.Enter, tab: Key.Tab, escape: Key.Escape,
+                    backspace: Key.Backspace, delete: Key.Delete,
+                    up: Key.Up, down: Key.Down, left: Key.Left, right: Key.Right
+                };
+                const key = keyMap[args.key];
+                if (key) {
+                    console.log(`⌨️ [ScreenAgent] Pressing key: ${args.key} — ${args.label}`);
+                    await keyboard.pressKey(key);
+                    await keyboard.releaseKey(key);
+                } else {
+                    console.warn(`⚠️ [ScreenAgent] Unknown key: ${args.key}`);
                 }
             }
 
         } catch (e) {
-            console.error('❌ [ScreenAgent] Execute action failed:', e.message);
+            console.error('❌ [ScreenAgent] Execute tool failed:', e.message);
         }
     }
 
