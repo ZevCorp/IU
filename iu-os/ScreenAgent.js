@@ -83,7 +83,7 @@ class ScreenAgent {
         this.isRunning = false;
         this.maxIterations = 15;
         this.nutjs = null;
-        this.debugDir = path.join(require('electron').app.getPath('temp'), 'u_debug');
+        this.debugDir = path.join(require('os').homedir(), 'u_debug');
     }
 
     /**
