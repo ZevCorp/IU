@@ -8,11 +8,13 @@
   <link rel="stylesheet" href="styles.css">
   <!-- QRCode library (local) -->
   <script src="qrcode.min.js"></script>
-  <!-- MediaPipe Face Mesh & Camera -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+  <!-- MediaPipe Tasks Vision (FaceLandmarker with 52 Blendshapes) -->
+  <script type="module">
+    import { FilesetResolver, FaceLandmarker } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/vision_bundle.mjs';
+    window.FilesetResolver = FilesetResolver;
+    window.FaceLandmarker = FaceLandmarker;
+    window.dispatchEvent(new Event('mediapipe-ready'));
+  </script>
 </head>
 
 <body>
@@ -139,6 +141,7 @@
   <script src="sync/QRConnect.js"></script>
   <script src="vision/VisionManager.js"></script>
   <script src="systems/AudioLoop.js"></script>
+  <script src="systems/DopamineEngine.js"></script>
   <script src="neural-graph.js"></script>
   <!-- Main App -->
   <script src="app.js"></script>

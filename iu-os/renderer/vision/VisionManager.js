@@ -1,18 +1,21 @@
 /**
  * VisionManager.js
- * Handles Webcam Input & MediaPipe Face Mesh detection.
+ * Handles Webcam Input & MediaPipe Face Landmarker detection.
+ * Uses the new Tasks Vision API with 52 blendshapes for reliable gesture detection.
  * Detects:
- * 1. Gaze Direction (Where is the user looking?)
- * 2. Attention (Is user looking at THIS window?)
- * 3. Gestures (Action triggers, gated by attention)
+ * 1. Gaze Direction (Where is the user looking?) — via 478 landmarks
+ * 2. Attention (Is user looking at THIS window?) — via head pose from landmarks
+ * 3. Gestures (Action triggers, gated by attention) — via nod detection
+ * 4. Facial Expressions (52 blendshapes) — fed to DopamineEngine
  */
 
 class VisionManager {
     constructor() {
         this.videoElement = document.querySelector('.input_video');
-        this.faceMesh = null;
+        this.faceLandmarker = null;
         this.camera = null;
         this.isReady = false;
+        this._rafId = null;
 
         // State
         this.state = {
@@ -45,42 +48,95 @@ class VisionManager {
         this.onGesture = null;
         this.onFaceUpdate = null;
 
+        // DopamineEngine integration
+        this.dopamineEngine = null;
+        this.onDopamineResponse = null;
+
         this.init();
     }
 
     async init() {
-        console.log('👁️ VisionManager Initializing with Gaze Tracking...');
+        console.log('👁️ VisionManager Initializing with FaceLandmarker (Blendshapes)...');
 
-        // Initialize Face Mesh
-        this.faceMesh = new FaceMesh({
-            locateFile: (file) => {
-                return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
-            }
-        });
+        // Wait for MediaPipe Tasks Vision module to load (ES module is deferred)
+        if (!window.FilesetResolver || !window.FaceLandmarker) {
+            console.log('⏳ Waiting for MediaPipe Tasks Vision module...');
+            await new Promise((resolve) => {
+                if (window.FilesetResolver && window.FaceLandmarker) {
+                    resolve();
+                } else {
+                    window.addEventListener('mediapipe-ready', resolve, { once: true });
+                }
+            });
+            console.log('✅ MediaPipe Tasks Vision module loaded');
+        }
 
-        this.faceMesh.setOptions({
-            maxNumFaces: 1,
-            refineLandmarks: true, // Critical for Iris tracking
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
-        });
+        try {
+            // Load MediaPipe Tasks Vision WASM
+            const vision = await window.FilesetResolver.forVisionTasks(
+                'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+            );
 
-        this.faceMesh.onResults((results) => this.onResults(results));
-
-        // Initialize Camera
-        if (this.videoElement) {
-            this.camera = new Camera(this.videoElement, {
-                onFrame: async () => {
-                    await this.faceMesh.send({ image: this.videoElement });
+            // Create FaceLandmarker with blendshapes enabled
+            this.faceLandmarker = await window.FaceLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+                    delegate: 'GPU'
                 },
-                width: 640,
-                height: 480
+                runningMode: 'VIDEO',
+                numFaces: 1,
+                outputFaceBlendshapes: true,
+                outputFacialTransformationMatrixes: false,
+                minFaceDetectionConfidence: 0.5,
+                minFacePresenceConfidence: 0.5,
+                minTrackingConfidence: 0.5
             });
 
-            await this.camera.start();
-            console.log('📷 Camera started');
-            this.isReady = true;
+            console.log('✅ FaceLandmarker created with blendshapes');
+        } catch (e) {
+            console.error('❌ FaceLandmarker init failed:', e);
+            return;
         }
+
+        // Initialize Camera stream
+        if (this.videoElement) {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                this.videoElement.srcObject = stream;
+                this.videoElement.addEventListener('loadeddata', () => {
+                    this.isReady = true;
+                    this.startDetectionLoop();
+                    console.log('📷 Camera started (FaceLandmarker mode)');
+                });
+                await this.videoElement.play();
+            } catch (e) {
+                console.error('❌ Camera init failed:', e);
+            }
+        }
+    }
+
+    startDetectionLoop() {
+        let lastVideoTime = -1;
+
+        const detect = () => {
+            if (!this.isReady || !this.faceLandmarker) {
+                this._rafId = requestAnimationFrame(detect);
+                return;
+            }
+
+            const nowMs = performance.now();
+            if (this.videoElement.currentTime !== lastVideoTime) {
+                lastVideoTime = this.videoElement.currentTime;
+                const results = this.faceLandmarker.detectForVideo(this.videoElement, nowMs);
+                this.onResults(results);
+            }
+
+            this._rafId = requestAnimationFrame(detect);
+        };
+
+        detect();
     }
 
     setWindowPosition(position) {
@@ -92,12 +148,20 @@ class VisionManager {
     }
 
     onResults(results) {
-        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+        if (!results.faceLandmarks || results.faceLandmarks.length === 0) {
             this.updateAttention(false);
             return;
         }
 
-        const landmarks = results.multiFaceLandmarks[0];
+        const landmarks = results.faceLandmarks[0];
+
+        // --- 0. Feed DopamineEngine (blendshapes — 52 calibrated coefficients) ---
+        if (this.dopamineEngine && this.dopamineEngine.isActive) {
+            const blendshapes = (results.faceBlendshapes && results.faceBlendshapes.length > 0)
+                ? results.faceBlendshapes[0].categories
+                : null;
+            this.dopamineEngine.processBlendshapes(blendshapes, landmarks);
+        }
 
         // --- 1. Gaze & Zone Detection ---
 
@@ -246,6 +310,35 @@ class VisionManager {
     setOnAttentionChange(cb) { this.onAttentionChange = cb; }
     setOnGesture(cb) { this.onGesture = cb; }
     setOnFaceUpdate(cb) { this.onFaceUpdate = cb; }
+    setOnDopamineResponse(cb) { this.onDopamineResponse = cb; }
+
+    // DopamineEngine initialization
+    initDopamineEngine() {
+        if (typeof DopamineEngine === 'undefined') {
+            console.warn('🧬 DopamineEngine not loaded');
+            return;
+        }
+
+        this.dopamineEngine = new DopamineEngine();
+
+        // Wire response callback through VisionManager
+        this.dopamineEngine.onResponse = (preset, intensity, meta) => {
+            if (this.onDopamineResponse) {
+                this.onDopamineResponse(preset, intensity, meta);
+            }
+        };
+
+        this.dopamineEngine.onGestureDetected = (gesture, confidence) => {
+            console.log(`🧬 [Dopamine] Detected: ${gesture} (${(confidence * 100).toFixed(0)}%)`);
+        };
+
+        this.dopamineEngine.start();
+        console.log('🧬 DopamineEngine initialized via VisionManager');
+    }
+
+    getDopamineEngine() {
+        return this.dopamineEngine;
+    }
     setDeepAttention(isDeep) {
         this.state.inDeepAttention = isDeep;
         console.log(`🧠 Deep Attention: ${isDeep ? 'ENABLED' : 'DISABLED'} (Gestures ${isDeep ? 'active' : 'inactive'})`);

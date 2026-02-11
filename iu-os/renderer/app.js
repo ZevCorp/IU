@@ -113,19 +113,19 @@ const state = {
 
 const PRESETS = {
     neutral: {
-        eyeOpenness: 1, eyeSquint: 0, leftBrowHeight: 0, rightBrowHeight: 0, leftBrowCurve: 0.2, rightBrowCurve: 0.2,
-        mouthCurve: 0, mouthWidth: 1, leftCornerHeight: 0, rightCornerHeight: 0, mouthOpenness: 0,
-        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 0
+        eyeOpenness: 0.88, eyeSquint: 0.12, leftBrowHeight: -0.5, rightBrowHeight: 3, leftBrowCurve: 0.15, rightBrowCurve: 0.45,
+        mouthCurve: 0.55, mouthWidth: 0.95, leftCornerHeight: 0.05, rightCornerHeight: 0.45, mouthOpenness: 0,
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 4
     },
     smile: {
         eyeOpenness: 0.85, eyeSquint: 0.15, leftBrowHeight: 2, rightBrowHeight: 2.5, leftBrowCurve: 0.3, rightBrowCurve: 0.4,
         mouthCurve: 0.7, mouthWidth: 1.1, leftCornerHeight: 0.3, rightCornerHeight: 0.5, mouthOpenness: 0,
-        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 0 // Totally vertical when idle
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 0
     },
     mild_attention: {
-        eyeOpenness: 0.9, eyeSquint: 0.1, leftBrowHeight: 1, rightBrowHeight: 1, leftBrowCurve: 0.3, rightBrowCurve: 0.3,
-        mouthCurve: 0.7, mouthWidth: 1.1, leftCornerHeight: 0, rightCornerHeight: 0, mouthOpenness: 0,
-        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 5 // Subtle turn
+        eyeOpenness: 0.85, eyeSquint: 0.15, leftBrowHeight: 0, rightBrowHeight: 4, leftBrowCurve: 0.2, rightBrowCurve: 0.5,
+        mouthCurve: 0.6, mouthWidth: 0.92, leftCornerHeight: 0, rightCornerHeight: 0.5, mouthOpenness: 0,
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 6
     },
     thinking: {
         eyeOpenness: 0.75, eyeSquint: 0.2, leftBrowHeight: -1, rightBrowHeight: 4, leftBrowCurve: 0.1, rightBrowCurve: 0.5,
@@ -443,6 +443,69 @@ function init() {
                 });
             }
         }, 1000);
+
+        // 0. Initialize DopamineEngine (natural gesture interaction)
+        visionManager.initDopamineEngine();
+
+        // Wire dopamine responses to Ü face (human-realistic timing)
+        visionManager.setOnDopamineResponse((preset, intensity, meta) => {
+            if (conversationState !== 'idle') return;
+            if (visionManager.state.inDeepAttention) return;
+
+            // Decay transitions are slower and softer than active responses
+            const isDecay = meta.strategy === 'decay';
+            const transitionMs = isDecay ? 1200 : 800;
+
+            console.log(`🧬 [Dopamine] → Ü: ${preset} (${meta.strategy}, cos=${meta.cosineScore.toFixed(2)}) ← user ${meta.userGesture} (${(meta.confidence * 100).toFixed(0)}%)`);
+
+            if (face) {
+                face.transitionTo(preset, transitionMs);
+
+                // Reinforcement: check 3s later if user is still engaged positively
+                if (!isDecay) {
+                    const engine = visionManager.getDopamineEngine();
+                    if (engine) {
+                        setTimeout(() => {
+                            const engineState = engine.getState();
+                            if (engineState.lastGesture === 'smile' || engineState.lastGesture === 'nod') {
+                                engine.reinforceLastInteraction(true);
+                            }
+                        }, 3000);
+                    }
+                }
+            }
+        });
+
+        // Wire micro-expressions (rare, subtle — only blink_slow, eyes_widen, brow_flash)
+        const dopEngine = visionManager.getDopamineEngine();
+        if (dopEngine) {
+            dopEngine.onMicroExpression = (microType, params) => {
+                if (!face || conversationState !== 'idle') return;
+
+                switch (microType) {
+                    case 'blink_slow':
+                        face.blink();
+                        break;
+                    case 'brow_flash': {
+                        const origLeft = face.currentState.leftBrowHeight;
+                        const origRight = face.currentState.rightBrowHeight;
+                        face.setState({ leftBrowHeight: origLeft + 3, rightBrowHeight: origRight + 3 });
+                        setTimeout(() => {
+                            face.setState({ leftBrowHeight: origLeft, rightBrowHeight: origRight });
+                        }, 400);
+                        break;
+                    }
+                    case 'eyes_widen': {
+                        const origOpenness = face.currentState.eyeOpenness;
+                        face.setState({ eyeOpenness: Math.min(1.2, origOpenness + 0.15) });
+                        setTimeout(() => {
+                            face.setState({ eyeOpenness: origOpenness });
+                        }, 500);
+                        break;
+                    }
+                }
+            };
+        }
 
         // 1. Eye Tracking & Debug
         visionManager.setOnFaceUpdate((data) => {
