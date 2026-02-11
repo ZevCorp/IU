@@ -66,6 +66,31 @@ let chatWindow = null;
 
 // Sidebar width
 const SIDEBAR_WIDTH = 300;
+const CHAT_GAP = 7;
+
+function getChatBounds() {
+    if (!mainWindow) {
+        return null;
+    }
+    const mainBounds = mainWindow.getBounds();
+    return {
+        width: SIDEBAR_WIDTH,
+        height: mainBounds.height,
+        x: mainBounds.x + mainBounds.width + CHAT_GAP,
+        y: mainBounds.y
+    };
+}
+
+function syncChatWindowPosition(animate = false) {
+    if (!chatWindow || chatWindow.isDestroyed()) {
+        return;
+    }
+    const bounds = getChatBounds();
+    if (!bounds) {
+        return;
+    }
+    chatWindow.setBounds(bounds, animate);
+}
 
 // System Prompt for personality and task formatting
 const SYSTEM_PROMPT = `Seras U, el asistente capaz de controlar dispositivos, Iphone, Android, Ipad, y hasta tu computador, una IA integrada enfocada en minimizar el uso de tus dispositivos. Yo los uso para que tu puedas dedicarte a Vivir de verdad. Se libre de la tecnologia. Tu personalidad: Serio, eficaz, Poderoso, Colaborador, Atento.
@@ -137,6 +162,14 @@ function createWindow() {
         });
     });
 
+    mainWindow.on('move', () => {
+        syncChatWindowPosition(false);
+    });
+
+    mainWindow.on('resize', () => {
+        syncChatWindowPosition(false);
+    });
+
     console.log('✅ Window created');
 }
 
@@ -150,14 +183,14 @@ function createChatWindow() {
         return;
     }
 
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.workAreaSize;
+    const bounds = getChatBounds();
 
     chatWindow = new BrowserWindow({
-        width: SIDEBAR_WIDTH,
-        height: height,
-        x: width - SIDEBAR_WIDTH * 2 - 4,
-        y: 0,
+        width: bounds?.width || SIDEBAR_WIDTH,
+        height: bounds?.height || 600,
+        x: bounds?.x || 0,
+        y: bounds?.y || 0,
+        parent: mainWindow,
         frame: false,
         transparent: false,
         alwaysOnTop: true,
@@ -170,6 +203,7 @@ function createChatWindow() {
         hasShadow: true,
         backgroundColor: '#e7e7e7',
         roundedCorners: true,
+        show: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload-chat.js'),
             nodeIntegration: false,
@@ -183,6 +217,11 @@ function createChatWindow() {
     chatWindow.setAlwaysOnTop(true, 'screen-saver', 1);
 
     chatWindow.loadFile('renderer/chat.html');
+
+    chatWindow.once('ready-to-show', () => {
+        syncChatWindowPosition(false);
+        chatWindow.show();
+    });
 
     chatWindow.on('closed', () => {
         chatWindow = null;

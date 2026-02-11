@@ -7,6 +7,7 @@
 const { screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const sharp = require('sharp');
 
 class ScreenAgent {
     constructor(openai, mainWindow) {
@@ -166,13 +167,26 @@ class ScreenAgent {
                 });
             });
 
-            const buffer = fs.readFileSync(tmpPath);
-            const base64 = buffer.toString('base64');
-
-            // Cleanup
+            const rawBuffer = fs.readFileSync(tmpPath);
             fs.unlinkSync(tmpPath);
 
-            console.log(`📸 [ScreenAgent] Screenshot taken (${Math.round(buffer.length / 1024)}KB)`);
+            // Retina displays: screencapture produces 2x images.
+            // Downscale to logical resolution so grid coordinates match nut-js click coordinates.
+            const scaleFactor = screen.getPrimaryDisplay().scaleFactor || 1;
+            let imgBuffer = rawBuffer;
+            if (scaleFactor > 1) {
+                const meta = await sharp(rawBuffer).metadata();
+                const logicalW = Math.round(meta.width / scaleFactor);
+                const logicalH = Math.round(meta.height / scaleFactor);
+                imgBuffer = await sharp(rawBuffer).resize(logicalW, logicalH).png().toBuffer();
+                console.log(`📐 [ScreenAgent] Downscaled ${meta.width}x${meta.height} → ${logicalW}x${logicalH} (scale ${scaleFactor}x)`);
+            }
+
+            // Overlay coordinate grid for precise GPT-4V targeting
+            const gridBuffer = await this._overlayGrid(imgBuffer);
+
+            const base64 = gridBuffer.toString('base64');
+            console.log(`📸 [ScreenAgent] Screenshot taken (${Math.round(gridBuffer.length / 1024)}KB, grid overlay applied)`);
             return base64;
 
         } catch (e) {
@@ -205,6 +219,14 @@ El objetivo del usuario es: "${goal}"
 La app objetivo es: "${app}"
 Pasos sugeridos: "${stepsHint}"
 
+COORDENADAS — CUADRÍCULA DE REFERENCIA:
+La imagen tiene una cuadrícula roja superpuesta con etiquetas de coordenadas cada 200 píxeles.
+- En el borde superior: etiquetas X (0, 200, 400, 600, ...)
+- En el borde izquierdo: etiquetas Y (200, 400, 600, ...)
+- Usa estas líneas y etiquetas como referencia para dar coordenadas PRECISAS.
+- Para encontrar la coordenada de un elemento, ubica las líneas de cuadrícula más cercanas y estima la posición exacta entre ellas.
+- Ejemplo: si un botón está a mitad de camino entre la línea x=400 y x=600, su x es ~500.
+
 Responde ÚNICAMENTE con JSON válido:
 {
   "goal_reached": false,
@@ -216,7 +238,7 @@ Responde ÚNICAMENTE con JSON válido:
 }
 
 IMPORTANTE:
-- Las coordenadas deben ser lo más precisas posible, en píxeles absolutos de la pantalla.
+- USA LA CUADRÍCULA para dar coordenadas precisas en píxeles absolutos.
 - Solo incluye affordances VISIBLES y RELEVANTES para el objetivo (máximo 15).
 - Si el objetivo ya se cumplió (ej: el mensaje fue enviado, la app está abierta en la vista correcta), pon goal_reached: true.`
                     },
@@ -340,6 +362,47 @@ ${JSON.stringify(affordances, null, 2)}
         } catch (e) {
             console.error('❌ [ScreenAgent] Execute action failed:', e.message);
         }
+    }
+
+    /**
+     * Overlay a coordinate grid on the screenshot so GPT-4V can accurately locate pixel positions.
+     * Draws light lines every 200px and labels every 200px on edges.
+     */
+    async _overlayGrid(pngBuffer) {
+        const meta = await sharp(pngBuffer).metadata();
+        const w = meta.width;
+        const h = meta.height;
+        const step = 200;
+
+        // Build SVG overlay with grid lines + coordinate labels
+        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">`;
+
+        // Vertical lines + top labels
+        for (let x = 0; x <= w; x += step) {
+            svg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(255,0,0,0.35)" stroke-width="1"/>`;
+            svg += `<rect x="${x}" y="0" width="${String(x).length * 9 + 8}" height="16" fill="rgba(0,0,0,0.6)" rx="2"/>`;
+            svg += `<text x="${x + 4}" y="12" font-family="Helvetica" font-size="11" fill="#fff">${x}</text>`;
+        }
+
+        // Horizontal lines + left labels
+        for (let y = 0; y <= h; y += step) {
+            svg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="rgba(255,0,0,0.35)" stroke-width="1"/>`;
+            if (y > 0) {
+                svg += `<rect x="0" y="${y - 14}" width="${String(y).length * 9 + 8}" height="16" fill="rgba(0,0,0,0.6)" rx="2"/>`;
+                svg += `<text x="4" y="${y - 2}" font-family="Helvetica" font-size="11" fill="#fff">${y}</text>`;
+            }
+        }
+
+        svg += `</svg>`;
+
+        const gridOverlay = Buffer.from(svg);
+
+        const result = await sharp(pngBuffer)
+            .composite([{ input: gridOverlay, top: 0, left: 0 }])
+            .png()
+            .toBuffer();
+
+        return result;
     }
 
     /**
