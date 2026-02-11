@@ -1709,6 +1709,7 @@ function showActionConfirmation(plan) {
         border-radius: 12px; padding: 14px; z-index: 9999;
         font-family: -apple-system, BlinkMacSystemFont, sans-serif;
         backdrop-filter: blur(10px);
+        -webkit-app-region: no-drag; pointer-events: auto;
     `;
 
     overlay.innerHTML = `
@@ -1725,12 +1726,12 @@ function showActionConfirmation(plan) {
             <button id="action-confirm-btn" style="
                 flex: 1; padding: 8px; border: none; border-radius: 8px;
                 background: #00d4ff; color: #000; font-weight: 600; font-size: 12px;
-                cursor: pointer;
+                cursor: pointer; -webkit-app-region: no-drag; pointer-events: auto;
             ">Ejecutar</button>
             <button id="action-cancel-btn" style="
                 flex: 1; padding: 8px; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px;
                 background: transparent; color: #888; font-size: 12px;
-                cursor: pointer;
+                cursor: pointer; -webkit-app-region: no-drag; pointer-events: auto;
             ">Cancelar</button>
         </div>
     `;
