@@ -16,6 +16,7 @@ class ScreenAgent {
         this.isRunning = false;
         this.maxIterations = 15;
         this.nutjs = null;
+        this.debugDir = path.join(require('electron').app.getPath('temp'), 'u_debug');
     }
 
     /**
@@ -107,6 +108,9 @@ class ScreenAgent {
                     y: action.y
                 });
 
+                // Save debug screenshot with crosshair at click point
+                await this._saveDebugScreenshot(screenshotBase64, action, iteration);
+
                 // Step 5: Execute the action (click or type)
                 this._notify('action-status', { phase: 'acting', action: action.label });
                 await this._executeAction(action);
@@ -183,14 +187,15 @@ class ScreenAgent {
 
             // Retina displays: screencapture produces 2x images.
             // Downscale to logical resolution so grid coordinates match nut-js click coordinates.
-            const scaleFactor = screen.getPrimaryDisplay().scaleFactor || 1;
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const scaleFactor = primaryDisplay.scaleFactor || 1;
+            const displaySize = primaryDisplay.size; // logical size
             let imgBuffer = rawBuffer;
             if (scaleFactor > 1) {
                 const meta = await sharp(rawBuffer).metadata();
-                const logicalW = Math.round(meta.width / scaleFactor);
-                const logicalH = Math.round(meta.height / scaleFactor);
-                imgBuffer = await sharp(rawBuffer).resize(logicalW, logicalH).png().toBuffer();
-                console.log(`📐 [ScreenAgent] Downscaled ${meta.width}x${meta.height} → ${logicalW}x${logicalH} (scale ${scaleFactor}x)`);
+                // Use actual display logical size (not image/scaleFactor) for perfect calibration
+                imgBuffer = await sharp(rawBuffer).resize(displaySize.width, displaySize.height).png().toBuffer();
+                console.log(`📐 [ScreenAgent] Downscaled ${meta.width}x${meta.height} → ${displaySize.width}x${displaySize.height} (display logical size)`);
             }
 
             // Overlay coordinate grid for precise GPT-4V targeting
@@ -393,31 +398,70 @@ ${JSON.stringify(affordances, null, 2)}
     }
 
     /**
+     * Save a debug screenshot with a crosshair at the click point for calibration verification.
+     */
+    async _saveDebugScreenshot(screenshotBase64, action, iteration) {
+        try {
+            if (!fs.existsSync(this.debugDir)) fs.mkdirSync(this.debugDir, { recursive: true });
+
+            const imgBuffer = Buffer.from(screenshotBase64, 'base64');
+            const meta = await sharp(imgBuffer).metadata();
+            const cx = action.x;
+            const cy = action.y;
+
+            // Draw crosshair + circle at click point
+            const crosshair = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${meta.width}" height="${meta.height}">
+                <circle cx="${cx}" cy="${cy}" r="20" fill="none" stroke="#00ff00" stroke-width="3"/>
+                <circle cx="${cx}" cy="${cy}" r="4" fill="#00ff00"/>
+                <line x1="${cx - 30}" y1="${cy}" x2="${cx + 30}" y2="${cy}" stroke="#00ff00" stroke-width="2"/>
+                <line x1="${cx}" y1="${cy - 30}" x2="${cx}" y2="${cy + 30}" stroke="#00ff00" stroke-width="2"/>
+                <rect x="${cx + 25}" y="${cy - 20}" width="${String(action.label).length * 7 + 12}" height="18" fill="rgba(0,0,0,0.8)" rx="3"/>
+                <text x="${cx + 31}" y="${cy - 6}" font-family="Helvetica" font-size="12" fill="#00ff00">${action.label}</text>
+            </svg>`);
+
+            const debugImg = await sharp(imgBuffer)
+                .composite([{ input: crosshair, top: 0, left: 0 }])
+                .png()
+                .toBuffer();
+
+            const debugPath = path.join(this.debugDir, `iter_${iteration}_${action.action}_${cx}_${cy}.png`);
+            fs.writeFileSync(debugPath, debugImg);
+            console.log(`🔎 [ScreenAgent] Debug screenshot saved: ${debugPath}`);
+        } catch (e) {
+            console.warn('⚠️ [ScreenAgent] Debug screenshot failed:', e.message);
+        }
+    }
+
+    /**
      * Overlay a coordinate grid on the screenshot so GPT-4V can accurately locate pixel positions.
-     * Draws light lines every 200px and labels every 200px on edges.
+     * Draws lines every 100px, labels every 200px on edges.
      */
     async _overlayGrid(pngBuffer) {
         const meta = await sharp(pngBuffer).metadata();
         const w = meta.width;
         const h = meta.height;
-        const step = 200;
+        const step = 100;
 
         // Build SVG overlay with grid lines + coordinate labels
         let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">`;
 
-        // Vertical lines + top labels
+        // Vertical lines + top labels (label every 200px, line every 100px)
         for (let x = 0; x <= w; x += step) {
-            svg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(255,0,0,0.35)" stroke-width="1"/>`;
-            svg += `<rect x="${x}" y="0" width="${String(x).length * 9 + 8}" height="16" fill="rgba(0,0,0,0.6)" rx="2"/>`;
-            svg += `<text x="${x + 4}" y="12" font-family="Helvetica" font-size="11" fill="#fff">${x}</text>`;
+            const isMajor = x % 200 === 0;
+            svg += `<line x1="${x}" y1="0" x2="${x}" y2="${h}" stroke="rgba(255,0,0,${isMajor ? '0.4' : '0.2'})" stroke-width="${isMajor ? 1 : 0.5}"/>`;
+            if (isMajor) {
+                svg += `<rect x="${x + 1}" y="1" width="${String(x).length * 8 + 6}" height="14" fill="rgba(0,0,0,0.7)" rx="2"/>`;
+                svg += `<text x="${x + 4}" y="12" font-family="Helvetica" font-size="10" font-weight="bold" fill="#ff0" letter-spacing="0">${x}</text>`;
+            }
         }
 
-        // Horizontal lines + left labels
+        // Horizontal lines + left labels (label every 200px, line every 100px)
         for (let y = 0; y <= h; y += step) {
-            svg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="rgba(255,0,0,0.35)" stroke-width="1"/>`;
-            if (y > 0) {
-                svg += `<rect x="0" y="${y - 14}" width="${String(y).length * 9 + 8}" height="16" fill="rgba(0,0,0,0.6)" rx="2"/>`;
-                svg += `<text x="4" y="${y - 2}" font-family="Helvetica" font-size="11" fill="#fff">${y}</text>`;
+            const isMajor = y % 200 === 0;
+            svg += `<line x1="0" y1="${y}" x2="${w}" y2="${y}" stroke="rgba(255,0,0,${isMajor ? '0.4' : '0.2'})" stroke-width="${isMajor ? 1 : 0.5}"/>`;
+            if (isMajor && y > 0) {
+                svg += `<rect x="1" y="${y + 1}" width="${String(y).length * 8 + 6}" height="14" fill="rgba(0,0,0,0.7)" rx="2"/>`;
+                svg += `<text x="4" y="${y + 12}" font-family="Helvetica" font-size="10" font-weight="bold" fill="#ff0" letter-spacing="0">${y}</text>`;
             }
         }
 
