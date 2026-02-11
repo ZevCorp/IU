@@ -40,6 +40,14 @@ contextBridge.exposeInMainWorld('iuOS', {
     onExplicitPredictions: (callback) => ipcRenderer.on('explicit-predictions', (event, predictions) => callback(predictions)),
     onVoiceStateChanged: (callback) => ipcRenderer.on('voice-state-changed', (event, state) => callback(state)),
 
+    // Action System
+    executeExplicitAction: (userText) => ipcRenderer.invoke('execute-explicit-action', userText),
+    executeImplicitAction: (contextText, suggestion) => ipcRenderer.invoke('execute-implicit-action', contextText, suggestion),
+    confirmAction: (plan) => ipcRenderer.invoke('confirm-action', plan),
+    stopAction: () => ipcRenderer.invoke('stop-action'),
+    onActionConfirmRequest: (callback) => ipcRenderer.on('action-confirm-request', (event, data) => callback(data)),
+    onActionStatus: (callback) => ipcRenderer.on('action-status', (event, data) => callback(data)),
+
     // Auto-updater APIs
     checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
     downloadUpdate: () => ipcRenderer.invoke('download-update'),

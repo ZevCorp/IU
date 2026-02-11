@@ -40,6 +40,12 @@ if (process.env.OPENAI_API_KEY) {
     console.log('⚠️ OPENAI_API_KEY not set. Voice features disabled.');
 }
 
+// Action System: Planner + Screen Agent
+const ActionPlanner = require('./ActionPlanner');
+const ScreenAgent = require('./ScreenAgent');
+let actionPlanner = null;
+let screenAgent = null;
+
 // Auto-updater for automatic updates from GitHub Releases
 const { autoUpdater } = require('electron-updater');
 
@@ -157,6 +163,13 @@ app.whenReady().then(async () => {
     await requestCameraAccess();
 
     createWindow();
+
+    // Initialize Action System (Planner + Screen Agent)
+    if (openai) {
+        actionPlanner = new ActionPlanner(openai);
+        screenAgent = new ScreenAgent(openai, mainWindow);
+        console.log('🎯 Action System initialized (Planner + ScreenAgent)');
+    }
 
     // Check for updates (only in production)
     if (app.isPackaged) {
@@ -565,6 +578,20 @@ function startUserVoiceMonitoring() {
                     console.log('🎯 [Explicit] Sending predictions to renderer');
                     mainWindow.webContents.send('explicit-predictions', predictions);
                 }
+
+                // Also route to ActionPlanner for screen actions
+                if (actionPlanner && cleanText.length > 10) {
+                    const plan = await actionPlanner.planFromExplicit(cleanText);
+                    if (plan && mainWindow) {
+                        console.log('🎯 [Action] Auto-planned from explicit speech:', plan.goal);
+                        mainWindow.webContents.send('action-confirm-request', {
+                            goal: plan.goal,
+                            app: plan.app,
+                            stepsHint: plan.stepsHint,
+                            source: 'explicit'
+                        });
+                    }
+                }
             }
         } catch (e) {
             // Silently fail polling
@@ -897,6 +924,99 @@ function stopTextMonitoring() {
         console.log('🔇 Stopped transcription monitoring.');
     }
 }
+
+
+// ============================================
+// Action System IPC Handlers
+// ============================================
+
+// Explicit action: User directly asked U to do something
+ipcMain.handle('execute-explicit-action', async (event, userText) => {
+    console.log('🎯 [Action] Explicit action request:', userText.substring(0, 60));
+
+    if (!actionPlanner || !screenAgent) {
+        return { success: false, error: 'Action system not initialized' };
+    }
+
+    try {
+        // Step 1: Plan the action
+        const plan = await actionPlanner.planFromExplicit(userText);
+        if (!plan) {
+            return { success: false, error: 'No actionable intent detected' };
+        }
+
+        // Step 2: Send plan to renderer for user confirmation
+        if (mainWindow) {
+            mainWindow.webContents.send('action-confirm-request', {
+                goal: plan.goal,
+                app: plan.app,
+                stepsHint: plan.stepsHint,
+                source: 'explicit'
+            });
+        }
+
+        return { success: true, plan };
+    } catch (e) {
+        console.error('❌ [Action] Explicit action failed:', e);
+        return { success: false, error: e.message };
+    }
+});
+
+// Implicit action: User confirmed a suggestion (nodded)
+ipcMain.handle('execute-implicit-action', async (event, contextText, confirmedSuggestion) => {
+    console.log('🎯 [Action] Implicit action confirmed:', confirmedSuggestion.substring(0, 60));
+
+    if (!actionPlanner || !screenAgent) {
+        return { success: false, error: 'Action system not initialized' };
+    }
+
+    try {
+        const plan = await actionPlanner.planFromImplicit(contextText, confirmedSuggestion);
+        if (!plan) {
+            return { success: false, error: 'Could not plan action from suggestion' };
+        }
+
+        // Send plan to renderer for confirmation
+        if (mainWindow) {
+            mainWindow.webContents.send('action-confirm-request', {
+                goal: plan.goal,
+                app: plan.app,
+                stepsHint: plan.stepsHint,
+                source: 'implicit'
+            });
+        }
+
+        return { success: true, plan };
+    } catch (e) {
+        console.error('❌ [Action] Implicit action failed:', e);
+        return { success: false, error: e.message };
+    }
+});
+
+// User confirmed the action plan — execute it
+ipcMain.handle('confirm-action', async (event, plan) => {
+    console.log('✅ [Action] User confirmed plan. Executing:', plan.goal);
+
+    if (!screenAgent) {
+        return { success: false, error: 'Screen agent not initialized' };
+    }
+
+    try {
+        const result = await screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+        return result;
+    } catch (e) {
+        console.error('❌ [Action] Execution failed:', e);
+        return { success: false, error: e.message };
+    }
+});
+
+// Stop current action
+ipcMain.handle('stop-action', async () => {
+    if (screenAgent) {
+        screenAgent.stop();
+    }
+    return { success: true };
+});
 
 
 // Add setupChatGPT to initialization

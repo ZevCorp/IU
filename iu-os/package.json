@@ -65,6 +65,7 @@
         "javascript-obfuscator": "^4.1.0"
     },
     "dependencies": {
+        "@nut-tree-fork/nut-js": "^4.2.6",
         "axios": "^1.13.4",
         "dotenv": "^17.2.3",
         "electron-updater": "^6.1.7",

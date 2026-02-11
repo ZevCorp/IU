@@ -142,6 +142,16 @@ const PRESETS = {
         eyeOpenness: 1.15, eyeSquint: -0.05, leftBrowHeight: 8, rightBrowHeight: 8, leftBrowCurve: 0.5, rightBrowCurve: 0.5, // Stronger Attention
         mouthCurve: 0.9, mouthWidth: 1.1, leftCornerHeight: 0.3, rightCornerHeight: 0.3, mouthOpenness: 0.05,
         leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 0
+    },
+    looking_at_screen: {
+        eyeOpenness: 0.80, eyeSquint: 0.18, leftBrowHeight: 1, rightBrowHeight: 1, leftBrowCurve: 0.2, rightBrowCurve: 0.2,
+        mouthCurve: 0.5, mouthWidth: 0.9, leftCornerHeight: 0, rightCornerHeight: 0, mouthOpenness: 0,
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: -8
+    },
+    action_complete: {
+        eyeOpenness: 0.90, eyeSquint: 0.10, leftBrowHeight: 3, rightBrowHeight: 3, leftBrowCurve: 0.3, rightBrowCurve: 0.3,
+        mouthCurve: 0.75, mouthWidth: 1.05, leftCornerHeight: 0.3, rightCornerHeight: 0.3, mouthOpenness: 0,
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 0
     }
 };
 
@@ -1630,4 +1640,122 @@ if (window.iuOS && window.iuOS.onVoiceStateChanged) {
             if (textSpan) textSpan.textContent = 'Hablar';
         }
     });
+}
+
+// ============================================
+// Action System Listeners
+// ============================================
+
+let pendingActionPlan = null;
+
+// Listen for action confirmation requests from main process
+if (window.iuOS && window.iuOS.onActionConfirmRequest) {
+    window.iuOS.onActionConfirmRequest((data) => {
+        console.log('🎯 [Action] Confirmation request:', data);
+        pendingActionPlan = data;
+        showActionConfirmation(data);
+    });
+}
+
+// Listen for action status updates (phase changes during execution)
+if (window.iuOS && window.iuOS.onActionStatus) {
+    window.iuOS.onActionStatus((data) => {
+        console.log('🖥️ [Action] Status:', data.phase);
+
+        switch (data.phase) {
+            case 'starting':
+                showToast(`Ejecutando: ${data.goal}`);
+                if (face) face.transitionTo('thinking', 600);
+                break;
+            case 'analyzing':
+                if (face) face.transitionTo('looking_at_screen', 400);
+                break;
+            case 'acting':
+                showToast(`Clic: ${data.action}`);
+                break;
+            case 'completed':
+                showToast('✓ Acción completada');
+                if (face) face.transitionTo('action_complete', 500);
+                setTimeout(() => {
+                    if (face) face.transitionTo('smile', 800);
+                }, 2000);
+                break;
+            case 'incomplete':
+                showToast(`Acción incompleta (${data.iterations} pasos)`);
+                if (face) face.transitionTo('neutral', 600);
+                break;
+            case 'error':
+                showToast(`Error: ${data.error}`);
+                if (face) face.transitionTo('neutral', 400);
+                break;
+            case 'stopped':
+                showToast('Acción detenida');
+                if (face) face.transitionTo('neutral', 400);
+                break;
+        }
+    });
+}
+
+function showActionConfirmation(plan) {
+    // Remove existing confirmation if any
+    const existing = document.getElementById('action-confirmation');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'action-confirmation';
+    overlay.style.cssText = `
+        position: fixed; bottom: 80px; left: 10px; right: 10px;
+        background: rgba(0, 0, 0, 0.85); border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 12px; padding: 14px; z-index: 9999;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        backdrop-filter: blur(10px);
+    `;
+
+    overlay.innerHTML = `
+        <div style="color: #aaa; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;">
+            ${plan.source === 'explicit' ? '🗣️ Acción detectada' : '🧠 Sugerencia confirmada'}
+        </div>
+        <div style="color: #fff; font-size: 13px; font-weight: 500; margin-bottom: 4px;">
+            ${plan.goal}
+        </div>
+        <div style="color: #888; font-size: 11px; margin-bottom: 12px;">
+            📱 ${plan.app}
+        </div>
+        <div style="display: flex; gap: 8px;">
+            <button id="action-confirm-btn" style="
+                flex: 1; padding: 8px; border: none; border-radius: 8px;
+                background: #00d4ff; color: #000; font-weight: 600; font-size: 12px;
+                cursor: pointer;
+            ">Ejecutar</button>
+            <button id="action-cancel-btn" style="
+                flex: 1; padding: 8px; border: 1px solid rgba(255,255,255,0.2); border-radius: 8px;
+                background: transparent; color: #888; font-size: 12px;
+                cursor: pointer;
+            ">Cancelar</button>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    document.getElementById('action-confirm-btn').addEventListener('click', () => {
+        overlay.remove();
+        if (pendingActionPlan && window.iuOS && window.iuOS.confirmAction) {
+            window.iuOS.confirmAction(pendingActionPlan);
+            pendingActionPlan = null;
+        }
+    });
+
+    document.getElementById('action-cancel-btn').addEventListener('click', () => {
+        overlay.remove();
+        pendingActionPlan = null;
+        showToast('Acción cancelada');
+    });
+
+    // Auto-dismiss after 15 seconds
+    setTimeout(() => {
+        if (document.getElementById('action-confirmation')) {
+            overlay.remove();
+            pendingActionPlan = null;
+        }
+    }, 15000);
 }
