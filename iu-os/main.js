@@ -40,6 +40,16 @@ if (process.env.OPENAI_API_KEY) {
     console.log('⚠️ OPENAI_API_KEY not set. Voice features disabled.');
 }
 
+// ModelSwitch: permite alternar entre OpenAI y Gemini con una sola línea
+const ModelSwitch = require('./ModelSwitch');
+if (openai) ModelSwitch.initOpenAI(openai);
+if (process.env.GOOGLE_API_KEY) {
+    ModelSwitch.initGemini(process.env.GOOGLE_API_KEY);
+} else {
+    console.log('⚠️ GOOGLE_API_KEY not set. Gemini provider disabled.');
+}
+console.log(`🔀 [ModelSwitch] Provider: ${ModelSwitch.PROVIDER}, Model: ${ModelSwitch.MODELS[ModelSwitch.PROVIDER].vision}`);
+
 // Action System: Planner + Screen Agent
 const ActionPlanner = require('./ActionPlanner');
 const ScreenAgent = require('./ScreenAgent');
@@ -248,9 +258,8 @@ ipcMain.on('chat-send-message', async (event, text) => {
     }
 
     try {
-        // Send to GPT-5-Mini with action planning capability
-        const response = await openai.chat.completions.create({
-            model: "gpt-4.1-mini",
+        // Send to active model (OpenAI or Gemini via ModelSwitch)
+        const response = await ModelSwitch.chatCompletion({
             messages: [
                 {
                     role: "system",
@@ -797,8 +806,7 @@ function stopUserVoiceMonitoring() {
 // Classify explicit intent from user's spoken text
 async function classifyExplicitIntent(userText) {
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-5-mini",
+        const response = await ModelSwitch.chatCompletion({
             messages: [
                 {
                     role: "system",
@@ -816,7 +824,7 @@ async function classifyExplicitIntent(userText) {
                     content: `El usuario dijo: "${userText}"`
                 }
             ],
-            response_format: { type: "json_object" }
+            max_tokens: 300
         });
 
         return JSON.parse(response.choices[0].message.content).predictions;
@@ -936,9 +944,8 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
             }
         }
 
-        // 4. Reasoning with GPT-5 Mini Classifier
-        const response = await openai.chat.completions.create({
-            model: "gpt-5-mini",
+        // 4. Reasoning with ModelSwitch (respects VISION_PROVIDER)
+        const response = await ModelSwitch.chatCompletion({
             messages: [
                 {
                     role: "system",
@@ -957,7 +964,7 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
                     content: `Audio reciente: "${transcript}"\nTareas actuales: ${JSON.stringify(tasks)}`
                 }
             ],
-            response_format: { type: "json_object" }
+            max_tokens: 300
         });
 
         const predictions = JSON.parse(response.choices[0].message.content).predictions;

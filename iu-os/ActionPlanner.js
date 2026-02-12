@@ -1,8 +1,11 @@
 /**
  * ActionPlanner.js
- * GPT-5-Mini based planner that receives user intent (explicit or implicit)
+ * Planner that receives user intent (explicit or implicit)
  * and decides what app to open and what action to perform via function calling.
+ * Uses ModelSwitch to alternate between OpenAI (GPT-4.1-mini) and Gemini (2.5 Flash).
  */
+
+const ModelSwitch = require('./ModelSwitch');
 
 class ActionPlanner {
     constructor(openai) {
@@ -46,8 +49,7 @@ class ActionPlanner {
         try {
             console.log('🧠 [Planner] Planning from EXPLICIT intent:', userText.substring(0, 60));
 
-            const response = await this.openai.chat.completions.create({
-                model: "gpt-4.1-mini",
+            const response = await ModelSwitch.chatCompletion({
                 messages: [
                     {
                         role: "system",
@@ -83,8 +85,7 @@ Responde en español.`
         try {
             console.log('🧠 [Planner] Planning from IMPLICIT intent:', confirmedSuggestion.substring(0, 60));
 
-            const response = await this.openai.chat.completions.create({
-                model: "gpt-4.1-mini",
+            const response = await ModelSwitch.chatCompletion({
                 messages: [
                     {
                         role: "system",

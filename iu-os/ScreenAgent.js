@@ -8,6 +8,7 @@ const { screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
+const ModelSwitch = require('./ModelSwitch');
 
 // Function calling tools for the unified model — normalized coordinates (0-1)
 const ACTION_TOOLS = [
@@ -78,7 +79,7 @@ const ACTION_TOOLS = [
 
 class ScreenAgent {
     constructor(openai, mainWindow) {
-        this.openai = openai;
+        this.openai = openai; // kept for backward compat, actual calls go through ModelSwitch
         this.mainWindow = mainWindow;
         this.isRunning = false;
         this.maxIterations = 15;
@@ -137,32 +138,45 @@ class ScreenAgent {
 OBJETIVO: "${goal}"
 APP: "${app}"
 PASOS SUGERIDOS: "${stepsHint}"
+PANTALLA: ${this.screenWidth}x${this.screenHeight} píxeles
 
-COORDENADAS NORMALIZADAS:
-En cada turno recibirás un screenshot LIMPIO de la pantalla (sin cuadrícula).
-Para indicar posiciones, usa coordenadas NORMALIZADAS de 0.0 a 1.0:
-- x=0.0 es el borde izquierdo, x=1.0 es el borde derecho
-- y=0.0 es el borde superior, y=1.0 es el borde inferior
-- El CENTRO de la pantalla es (0.5, 0.5)
-- Ejemplo: un botón en la esquina superior derecha sería aprox (0.9, 0.05)
-- Ejemplo: un campo de texto centrado horizontalmente a 3/4 de altura sería (0.5, 0.75)
-Estima la posición del CENTRO del elemento que quieres clickear.
+CONTEXTO CRÍTICO DE VENTANAS:
+- La app "${app}" puede NO ocupar toda la pantalla (puede estar en ventana, no fullscreen).
+- Otras apps/ventanas pueden estar visibles en el screenshot (dock, menú, otras ventanas).
+- SOLO haz click en elementos que VISUALMENTE pertenecen a la ventana de "${app}".
+- Si ves un elemento de la app cerca del borde inferior/superior, verifica que NO sea otra ventana.
+- Ejemplo: si ves un campo de texto "al fondo" pero también ves una terminal/otra app ahí, el campo real está MÁS ARRIBA.
+
+CUADRÍCULA DE REFERENCIA:
+El screenshot tiene una cuadrícula sutil con líneas rojas punteadas cada 10%.
+Las etiquetas en los bordes muestran .1, .2, .3 ... .9 (que corresponden a 0.1, 0.2, 0.3 ... 0.9).
+USA estas líneas como referencia para estimar coordenadas con precisión.
+
+COORDENADAS NORMALIZADAS (0.0 a 1.0):
+- x=0.0 borde izquierdo, x=1.0 borde derecho
+- y=0.0 borde superior, y=1.0 borde inferior
+- Centro de pantalla = (0.5, 0.5)
+
+CÓMO ESTIMAR COORDENADAS CON PRECISIÓN:
+1. PRIMERO: Identifica visualmente los LÍMITES de la ventana de "${app}" (barra de título, bordes).
+2. Localiza el elemento DENTRO de esa ventana específica.
+3. Identifica entre qué líneas de la cuadrícula está el elemento (ej: entre .3 y .4 en x).
+4. Estima la posición dentro de ese intervalo (ej: a 1/3 del camino → x=0.333).
+5. Apunta al CENTRO exacto del elemento clickeable, no al borde.
+6. Para elementos cerca de bordes de pantalla (y>0.9 o y<0.1), VERIFICA que pertenecen a "${app}" y no a dock/menú/otra ventana.
 
 REGLAS:
-1. Llama UNA función por turno. Analiza la pantalla y decide la MEJOR acción siguiente.
-2. Para escribir en un campo: primero CLICK en el campo (un turno), luego TYPE_TEXT (siguiente turno).
-3. NUNCA hagas click en el mismo lugar dos veces seguidas sin razón. Pero SÍ reintenta si la acción anterior NO tuvo efecto visible.
-4. Si el objetivo ya se cumplió visualmente, llama goal_reached.
-5. Sé preciso con las coordenadas normalizadas. Piensa en proporciones relativas de la pantalla.
-6. Después de escribir texto, usa key_press con "enter" si necesitas enviar/confirmar.
+1. UNA función por turno. Analiza y decide la MEJOR acción siguiente.
+2. Para escribir: primero CLICK en el campo (un turno), luego TYPE_TEXT (siguiente turno).
+3. NUNCA clicks repetidos en el mismo lugar sin razón. SÍ reintenta con coordenadas corregidas si no tuvo efecto.
+4. Si el objetivo se cumplió visualmente, llama goal_reached.
+5. Después de escribir texto, usa key_press con "enter" para enviar/confirmar.
 
-VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
-- ANTES de avanzar al siguiente paso, VERIFICA en el screenshot actual que tu acción ANTERIOR realmente tuvo efecto.
-- Si hiciste CLICK en un chat/contacto: verifica que la conversación se abrió (debe verse el historial de mensajes y el campo de texto).
-- Si hiciste CLICK en un campo de texto: verifica que el cursor está activo en ese campo.
-- Si hiciste TYPE_TEXT: verifica que el texto aparece escrito en el campo.
-- Si la acción anterior NO tuvo el efecto esperado (la pantalla se ve igual o diferente a lo esperado), REPITE la acción con coordenadas corregidas o intenta una alternativa.
-- NUNCA asumas que una acción funcionó. SIEMPRE confirma visualmente en el screenshot.`
+VERIFICACIÓN OBLIGATORIA:
+- ANTES de avanzar, VERIFICA que tu acción anterior tuvo efecto en el screenshot actual.
+- Si hiciste CLICK pero la pantalla no cambió, probablemente clickeaste FUERA de la ventana de "${app}".
+- Si la pantalla NO cambió como esperabas, CORRIGE las coordenadas o intenta alternativa.
+- NUNCA asumas que funcionó. SIEMPRE confirma visualmente.`
                 }
             ];
 
@@ -202,14 +216,13 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
                     ]
                 });
 
-                // Single GPT-4.1-mini call with vision + function calling
-                const response = await this.openai.chat.completions.create({
-                    model: "gpt-4.1-mini",
+                // Vision + function calling via ModelSwitch (OpenAI or Gemini) with retry
+                const response = await this._retryWithBackoff(() => ModelSwitch.visionCompletion({
                     messages,
                     tools: ACTION_TOOLS,
                     tool_choice: "required",
                     max_tokens: 500
-                });
+                }), 3);
 
                 const choice = response.choices[0];
                 const toolCall = choice.message.tool_calls?.[0];
@@ -230,7 +243,8 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
                 messages.push({
                     role: "tool",
                     tool_call_id: toolCall.id,
-                    content: "OK"
+                    content: "OK",
+                    _functionName: fnName // used by ModelSwitch for Gemini conversion
                 });
 
                 // Handle goal_reached
@@ -367,9 +381,11 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
                 console.log(`📐 [ScreenAgent] Downscaled ${meta.width}x${meta.height} → ${displaySize.width}x${displaySize.height} (display logical size)`);
             }
 
-            // No grid overlay — clean image + normalized coordinates (0-1)
+            // Add subtle reference grid for better coordinate estimation
+            imgBuffer = await this._addReferenceGrid(imgBuffer, displaySize.width, displaySize.height);
+
             const base64 = imgBuffer.toString('base64');
-            console.log(`📸 [ScreenAgent] Screenshot taken (${Math.round(imgBuffer.length / 1024)}KB, clean — no grid)`);
+            console.log(`📸 [ScreenAgent] Screenshot taken (${Math.round(imgBuffer.length / 1024)}KB, with reference grid)`);
             return base64;
 
         } catch (e) {
@@ -379,6 +395,51 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
                 this.mainWindow.show();
             }
             return null;
+        }
+    }
+
+    /**
+     * Add a subtle reference grid overlay to help the model estimate coordinates.
+     * Draws thin semi-transparent lines at 10% intervals with labels on edges.
+     */
+    async _addReferenceGrid(imgBuffer, width, height) {
+        try {
+            const lines = [];
+            const labels = [];
+            const step = 0.1; // 10% intervals
+
+            // Vertical lines (x-axis)
+            for (let i = 1; i <= 9; i++) {
+                const x = Math.round(i * step * width);
+                lines.push(`<line x1="${x}" y1="0" x2="${x}" y2="${height}" stroke="rgba(255,0,0,0.25)" stroke-width="1" stroke-dasharray="4,8"/>`);
+                // Label at top
+                labels.push(`<rect x="${x - 10}" y="0" width="24" height="13" fill="rgba(0,0,0,0.5)" rx="2"/>`);
+                labels.push(`<text x="${x}" y="10" font-family="Helvetica" font-size="9" fill="#ff6666" text-anchor="middle">.${i}</text>`);
+            }
+
+            // Horizontal lines (y-axis)
+            for (let i = 1; i <= 9; i++) {
+                const y = Math.round(i * step * height);
+                lines.push(`<line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="rgba(255,0,0,0.25)" stroke-width="1" stroke-dasharray="4,8"/>`);
+                // Label at left
+                labels.push(`<rect x="0" y="${y - 7}" width="20" height="13" fill="rgba(0,0,0,0.5)" rx="2"/>`);
+                labels.push(`<text x="10" y="${y + 4}" font-family="Helvetica" font-size="9" fill="#ff6666" text-anchor="middle">.${i}</text>`);
+            }
+
+            const svg = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+                ${lines.join('\n')}
+                ${labels.join('\n')}
+            </svg>`);
+
+            const result = await sharp(imgBuffer)
+                .composite([{ input: svg, top: 0, left: 0 }])
+                .png()
+                .toBuffer();
+
+            return result;
+        } catch (e) {
+            console.warn('⚠️ [ScreenAgent] Grid overlay failed, using clean image:', e.message);
+            return imgBuffer;
         }
     }
 
@@ -465,6 +526,23 @@ VERIFICACIÓN OBLIGATORIA (MUY IMPORTANTE):
     _notify(channel, data) {
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send(channel, data);
+        }
+    }
+
+    /**
+     * Retry an async function with exponential backoff.
+     */
+    async _retryWithBackoff(fn, maxRetries = 3) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return await fn();
+            } catch (e) {
+                const isRetryable = e.status === 429 || e.status === 500 || e.status === 503 || e.code === 'ECONNRESET';
+                if (attempt === maxRetries || !isRetryable) throw e;
+                const delay = Math.min(1000 * Math.pow(2, attempt), 30000);
+                console.warn(`⏳ [ScreenAgent] Retry ${attempt}/${maxRetries} after ${delay}ms (${e.status || e.code})`);
+                await this._wait(delay);
+            }
         }
     }
 
