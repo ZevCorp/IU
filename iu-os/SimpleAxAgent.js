@@ -64,12 +64,7 @@ class SimpleAxAgent {
     async extract(appName = null) {
         console.log('🍎 [SimpleAxAgent] Starting AX extraction...');
 
-        // Step 1: Ensure app is ready FIRST
-        if (appName) {
-            await this._ensureAppReady(appName);
-        }
-
-        // Step 2: Try extraction with retries
+        // Try extraction with retries
         for (let attempt = 1; attempt <= 3; attempt++) {
             console.log(`🔄 [SimpleAxAgent] Attempt ${attempt}/3`);
 
