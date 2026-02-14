@@ -426,6 +426,9 @@ ${elementsText}${historyHint}${loopWarning}
                 });
 
                 console.log(`📤 [ScreenAgent] Sending to LLM: ${elements.length} elements, tool_choice=required`);
+                if (loopWarning) {
+                    console.log(`🔴 [ScreenAgent] Loop warning INCLUDED in prompt`);
+                }
                 console.log(`📋 [ScreenAgent] Tools available: ${SOM_TOOLS.map(t => t.function.name).join(', ')}`);
 
                 const somResponse = await this._retryWithBackoff(() => ModelSwitch.chatCompletion({
