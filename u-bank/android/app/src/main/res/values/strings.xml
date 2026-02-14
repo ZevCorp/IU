@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ü Bank</string>
+    <string name="accessibility_service_description">Ü Bank necesita acceso de accesibilidad para leer y controlar la interfaz de apps bancarias como Bancolombia. Esto permite que Ü ejecute transferencias, consultas y pagos por ti.</string>
+</resources>

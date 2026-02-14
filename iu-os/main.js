@@ -73,10 +73,13 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
 
 let mainWindow = null;
 let chatWindow = null;
+let compactWindow = null; // Mini circular window for action mode
 
-// Sidebar width
-const SIDEBAR_WIDTH = 300;
+// Window sizing (compact vs expanded)
+const COMPACT_SIZE = 150;  // Compact mode: small square showing only face
+const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
 const CHAT_GAP = 7;
+let isCompactMode = false;  // Start in EXPANDED mode by default
 
 function getChatBounds() {
     if (!mainWindow) {
@@ -127,11 +130,17 @@ function createWindow() {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
 
+    // Start in compact mode: small square in top-right corner
+    const windowWidth = isCompactMode ? COMPACT_SIZE : SIDEBAR_WIDTH;
+    const windowHeight = isCompactMode ? COMPACT_SIZE : height;
+    const windowX = width - windowWidth - 20; // 20px margin from right edge
+    const windowY = 20; // 20px margin from top
+
     mainWindow = new BrowserWindow({
-        width: SIDEBAR_WIDTH,
-        height: height,
-        x: width - SIDEBAR_WIDTH,
-        y: 0,
+        width: windowWidth,
+        height: windowHeight,
+        x: windowX,
+        y: windowY,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
@@ -142,6 +151,8 @@ function createWindow() {
         fullscreenable: false,
         skipTaskbar: true,
         hasShadow: false,
+        vibrancy: 'hud', // macOS vibrancy for glassmorphism
+        visualEffectState: 'active',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -164,11 +175,13 @@ function createWindow() {
     // Maintain position on screen resize
     screen.on('display-metrics-changed', () => {
         const { width: newWidth, height: newHeight } = screen.getPrimaryDisplay().workAreaSize;
+        const newWindowWidth = isCompactMode ? COMPACT_SIZE : SIDEBAR_WIDTH;
+        const newWindowHeight = isCompactMode ? COMPACT_SIZE : newHeight;
         mainWindow.setBounds({
-            x: newWidth - SIDEBAR_WIDTH,
-            y: 0,
-            width: SIDEBAR_WIDTH,
-            height: newHeight
+            x: newWidth - newWindowWidth - 20,
+            y: isCompactMode ? 20 : 0,
+            width: newWindowWidth,
+            height: newWindowHeight
         });
     });
 
@@ -180,7 +193,113 @@ function createWindow() {
         syncChatWindowPosition(false);
     });
 
-    console.log('✅ Window created');
+    console.log(`✅ Window created in ${isCompactMode ? 'COMPACT' : 'EXPANDED'} mode (${windowWidth}x${windowHeight})`);
+}
+
+// ============================================
+// Compact Action Window (Circular Liquid Glass)
+// ============================================
+function createCompactWindow() {
+    if (compactWindow) return; // Already exists
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+
+    compactWindow = new BrowserWindow({
+        width: COMPACT_SIZE,
+        height: COMPACT_SIZE,
+        x: width - COMPACT_SIZE - 20,
+        y: 20,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: true,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        hasShadow: false,
+        vibrancy: 'hud',
+        visualEffectState: 'active',
+        show: false, // Start hidden
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            webSecurity: true
+        }
+    });
+
+    if (process.platform === 'darwin') {
+        compactWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
+    compactWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+
+    // Load compact-specific HTML
+    compactWindow.loadFile('renderer/compact.html');
+
+    compactWindow.on('closed', () => {
+        compactWindow = null;
+    });
+
+    console.log('✅ Compact action window created');
+}
+
+function showCompactWindow() {
+    if (!compactWindow) createCompactWindow();
+
+    compactWindow.webContents.once('did-finish-load', () => {
+        compactWindow.show();
+        compactWindow.setOpacity(0);
+
+        // Fade in
+        let opacity = 0;
+        const fadeIn = setInterval(() => {
+            opacity += 0.1;
+            if (opacity >= 1) {
+                compactWindow.setOpacity(1);
+                clearInterval(fadeIn);
+            } else {
+                compactWindow.setOpacity(opacity);
+            }
+        }, 30);
+    });
+
+    if (compactWindow.webContents.isLoading()) {
+        // Already handled by did-finish-load
+    } else {
+        compactWindow.show();
+        compactWindow.setOpacity(0);
+
+        let opacity = 0;
+        const fadeIn = setInterval(() => {
+            opacity += 0.1;
+            if (opacity >= 1) {
+                compactWindow.setOpacity(1);
+                clearInterval(fadeIn);
+            } else {
+                compactWindow.setOpacity(opacity);
+            }
+        }, 30);
+    }
+}
+
+function hideCompactWindow() {
+    if (!compactWindow) return;
+
+    // Fade out
+    let opacity = 1;
+    const fadeOut = setInterval(() => {
+        opacity -= 0.1;
+        if (opacity <= 0) {
+            compactWindow.hide();
+            compactWindow.setOpacity(1);
+            clearInterval(fadeOut);
+        } else {
+            compactWindow.setOpacity(opacity);
+        }
+    }, 30);
 }
 
 // ============================================
@@ -276,7 +395,7 @@ Responde en español.`
                 }
             ],
             tools: actionPlanner ? actionPlanner.tools : undefined,
-            tool_choice: "auto"
+            tool_choice: actionPlanner ? "auto" : undefined
         });
 
         const message = response.choices[0].message;
@@ -359,10 +478,20 @@ app.whenReady().then(async () => {
 
     createWindow();
 
+    // Initialize ChatGPT integration first
+    await setupChatGPT();
+
+    // Check Accessibility permissions (required for AX screen control)
+    const PermissionManager = require('./PermissionManager');
+    const hasAxPermissions = await PermissionManager.ensurePermissions(mainWindow);
+    if (!hasAxPermissions) {
+        console.warn('⚠️ [Main] Accessibility permissions not granted. Screen control features will be limited.');
+    }
+
     // Initialize Action System (Planner + Screen Agent)
     if (openai) {
         actionPlanner = new ActionPlanner(openai);
-        screenAgent = new ScreenAgent(openai, mainWindow);
+        screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
         console.log('🎯 Action System initialized (Planner + ScreenAgent)');
     }
 
@@ -449,25 +578,10 @@ async function captureScreenContext() {
         return lastScreenContext;
     }
 
-    return new Promise((resolve) => {
-        const scriptPath = path.join(__dirname, 'ax-reader.sh');
-        exec(`"${scriptPath}"`, { timeout: 5000 }, (err, stdout, stderr) => {
-            if (err) {
-                console.error('❌ [Context] AX capture failed:', err.message);
-                return resolve({ app: null, snapshot: [], error: err.message });
-            }
-            try {
-                const result = JSON.parse(stdout);
-                console.log(`📄 [Context] Captured ${result.snapshot?.length || 0} elements from ${result.app || 'unknown'}`);
-                lastScreenContext = result;
-                lastContextTime = now;
-                resolve(result);
-            } catch (e) {
-                console.error('❌ [Context] Parse error:', e.message);
-                resolve({ app: null, snapshot: [], error: e.message });
-            }
-        });
-    });
+    // NOTE: This function is deprecated. Use ScreenAgent's AX extraction instead.
+    // Kept for backwards compatibility but will return empty.
+    console.warn('⚠️ [Context] captureScreenContext is deprecated. Use  ScreenAgent.extract() instead.');
+    return { app: null, snapshot: [], error: 'Use ScreenAgent for AX extraction' };
 }
 
 ipcMain.handle('get-screen-context', async (event, gazeDirection) => {
@@ -568,6 +682,20 @@ async function injectSystemPromptOnStartup() {
             // Wait for response
             await chatPage.waitForTimeout(3000);
             console.log('✅ System prompt injected on startup');
+
+            // Minimize ChatGPT window to avoid screen interference
+            try {
+                const chatWindow = chatPage.context().pages()[0];
+                if (chatWindow) {
+                    await chatWindow.evaluate(() => {
+                        window.resizeTo(400, 300);
+                        window.moveTo(screen.availWidth - 400, screen.availHeight - 300);
+                    });
+                    console.log('🪟 ChatGPT window minimized to corner');
+                }
+            } catch (err) {
+                console.warn('⚠️ Could not minimize ChatGPT window:', err.message);
+            }
 
             // Start voice state monitoring
             startVoiceStateMonitoring();
@@ -824,10 +952,21 @@ async function classifyExplicitIntent(userText) {
                     content: `El usuario dijo: "${userText}"`
                 }
             ],
-            max_tokens: 300
+            max_tokens: 1000  // Increased for GPT-5-mini
         });
 
-        return JSON.parse(response.choices[0].message.content).predictions;
+        const content = response.choices[0]?.message?.content;
+        if (!content || content.trim() === '') {
+            console.warn('⚠️ [Explicit] Empty response from model');
+            return [];
+        }
+        try {
+            const parsed = JSON.parse(content);
+            return parsed.predictions || [];
+        } catch (parseErr) {
+            console.error('❌ [Explicit] JSON parse error:', content.substring(0, 100));
+            return [];
+        }
     } catch (e) {
         console.error('❌ [Explicit] Classification failed:', e);
         return [];
@@ -964,10 +1103,22 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
                     content: `Audio reciente: "${transcript}"\nTareas actuales: ${JSON.stringify(tasks)}`
                 }
             ],
-            max_tokens: 300
+            max_tokens: 1000  // Increased for GPT-5-mini
         });
 
-        const predictions = JSON.parse(response.choices[0].message.content).predictions;
+        const content = response.choices[0]?.message?.content;
+        if (!content || content.trim() === '') {
+            console.warn('⚠️ [Intent Prediction] Empty response from model');
+            return { success: false, predictions: [] };
+        }
+        let predictions = [];
+        try {
+            const parsed = JSON.parse(content);
+            predictions = parsed.predictions || [];
+        } catch (parseErr) {
+            console.error('❌ [Intent Prediction] JSON parse error:', content.substring(0, 100));
+            return { success: false, predictions: [] };
+        }
         return { success: true, predictions };
 
     } catch (e) {
@@ -1194,11 +1345,39 @@ ipcMain.handle('confirm-action', async (event, plan) => {
         return { success: false, error: 'Screen agent not initialized' };
     }
 
+    // SHOW COMPACT &  FADE OUT MAIN
+    showCompactWindow();
+    if (mainWindow) {
+        let op = 1;
+        const fadeOut = setInterval(() => {
+            op -= 0.1;
+            if (op <= 0) { mainWindow.setOpacity(0); clearInterval(fadeOut); }
+            else { mainWindow.setOpacity(op); }
+        }, 30);
+    }
+
     try {
         const result = await screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+
+        // RESTORE after 2s
+        setTimeout(() => {
+            hideCompactWindow();
+            if (mainWindow) {
+                mainWindow.setOpacity(0);
+                let op2 = 0;
+                const fadeIn = setInterval(() => {
+                    op2 += 0.1;
+                    if (op2 >= 1) { mainWindow.setOpacity(1); clearInterval(fadeIn); }
+                    else { mainWindow.setOpacity(op2); }
+                }, 30);
+            }
+        }, 2000);
+
         return result;
     } catch (e) {
         console.error('❌ [Action] Execution failed:', e);
+        hideCompactWindow();
+        if (mainWindow) mainWindow.setOpacity(1);
         return { success: false, error: e.message };
     }
 });

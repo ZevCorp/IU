@@ -1,29 +1,50 @@
 #!/usr/bin/env osascript -l JavaScript
 /**
- * AX Reader - macOS Accessibility Tree Extractor
+ * AX Reader v2 - Improved with permission handling and diagnostics
  * 
- * Reads the UI elements from the active window and returns
- * a flattened semantic snapshot for LLM reasoning.
- * 
- * Usage: osascript -l JavaScript ax-reader.js
+ * Returns a robust accessibility snapshot with proper error handling
  */
 
 ObjC.import('Cocoa');
 ObjC.import('ApplicationServices');
 
-function run() {
+function run(argv) {
     const result = {
         app: null,
         window: null,
         snapshot: [],
-        error: null
+        error: null,
+        diagnostic: null
     };
 
     try {
+        // Optional: accept app name as argument
+        const targetApp = argv && argv.length > 0 ? argv[0] : null;
+
+        let frontApp, pid, appName;
+
+        if (targetApp) {
+            // Try to get specific app
+            try {
+                const app = Application(targetApp);
+                if (!app.running()) {
+                    result.error = `App "${targetApp}" is not running`;
+                    result.diagnostic = "APP_NOT_RUNNING";
+                    return JSON.stringify(result);
+                }
+                app.activate();
+                delay(0.5); // Give time to become frontmost
+            } catch (e) {
+                result.error = `Could not activate app "${targetApp}": ${e}`;
+                result.diagnostic = "ACTIVATION_FAILED";
+                return JSON.stringify(result);
+            }
+        }
+
         // Get the frontmost application
-        const frontApp = $.NSWorkspace.sharedWorkspace.frontmostApplication;
-        const pid = frontApp.processIdentifier;
-        const appName = ObjC.unwrap(frontApp.localizedName);
+        frontApp = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+        pid = frontApp.processIdentifier;
+        appName = ObjC.unwrap(frontApp.localizedName);
 
         result.app = appName;
 
@@ -32,36 +53,51 @@ function run() {
 
         // Try multiple methods to get a window
         let window = null;
+        let windowMethod = null;
 
         // Method 1: AXFocusedWindow
         const focusedRef = Ref();
-        if ($.AXUIElementCopyAttributeValue(appElement, 'AXFocusedWindow', focusedRef) === 0 && focusedRef[0]) {
+        const focusedResult = $.AXUIElementCopyAttributeValue(appElement, 'AXFocusedWindow', focusedRef);
+        if (focusedResult === 0 && focusedRef[0]) {
             window = focusedRef[0];
+            windowMethod = 'AXFocusedWindow';
         }
 
         // Method 2: AXMainWindow
         if (!window) {
             const mainRef = Ref();
-            if ($.AXUIElementCopyAttributeValue(appElement, 'AXMainWindow', mainRef) === 0 && mainRef[0]) {
+            const mainResult = $.AXUIElementCopyAttributeValue(appElement, 'AXMainWindow', mainRef);
+            if (mainResult === 0 && mainRef[0]) {
                 window = mainRef[0];
+                windowMethod = 'AXMainWindow';
             }
         }
 
         // Method 3: First window from AXWindows
         if (!window) {
             const windowsRef = Ref();
-            if ($.AXUIElementCopyAttributeValue(appElement, 'AXWindows', windowsRef) === 0 && windowsRef[0]) {
+            const windowsResult = $.AXUIElementCopyAttributeValue(appElement, 'AXWindows', windowsRef);
+            if (windowsResult === 0 && windowsRef[0]) {
                 const windows = ObjC.unwrap(windowsRef[0]);
                 if (windows && windows.length > 0) {
                     window = windows[0];
+                    windowMethod = 'AXWindows[0]';
                 }
+            } else if (windowsResult === -25201) {
+                // kAXErrorCannotComplete - permission denied
+                result.error = 'Permission denied - Accessibility access required';
+                result.diagnostic = 'PERMISSION_DENIED';
+                return JSON.stringify(result);
             }
         }
 
         if (!window) {
             result.error = 'No window found';
+            result.diagnostic = 'NO_WINDOW';
             return JSON.stringify(result);
         }
+
+        result.diagnostic = `Window found via ${windowMethod}`;
 
         // Get window title
         const titleRef = Ref();
@@ -75,27 +111,10 @@ function run() {
         $.AXUIElementCopyAttributeValue(window, 'AXPosition', posRef);
         $.AXUIElementCopyAttributeValue(window, 'AXSize', sizeRef);
 
-        let winX = 0, winY = 0, winW = 1920, winH = 1080;
-
-        if (posRef[0]) {
-            const pos = {};
-            $.AXValueGetValue(posRef[0], $.kAXValueCGPointType, pos);
-            winX = pos.x || 0;
-            winY = pos.y || 0;
-        }
-        if (sizeRef[0]) {
-            const size = {};
-            $.AXValueGetValue(sizeRef[0], $.kAXValueCGSizeType, size);
-            winW = size.width || 1920;
-            winH = size.height || 1080;
-        }
-
-        // Target roles - buttons, links, inputs, and text
-        const targetRoles = [
-            'AXButton', 'AXLink', 'AXTextField', 'AXTextArea',
-            'AXStaticText', 'AXMenuItem', 'AXPopUpButton',
-            'AXCheckBox', 'AXRadioButton', 'AXTab'
-        ];
+        // Get primary screen size for normalization
+        const screenFrame = $.NSScreen.mainScreen.frame;
+        const screenW = screenFrame.size.width;
+        const screenH = screenFrame.size.height;
 
         let elementId = 0;
         const maxElements = 40;
@@ -169,12 +188,12 @@ function run() {
                     // Skip tiny elements
                     if (w < 5 || h < 5) return;
 
-                    // Calculate normalized bbox
+                    // Calculate normalized bbox relative to the entire screen
                     const bbox = {
-                        x: Math.max(0, Math.min(1, (x - winX) / winW)),
-                        y: Math.max(0, Math.min(1, (y - winY) / winH)),
-                        w: Math.min(1, w / winW),
-                        h: Math.min(1, h / winH)
+                        x: Math.max(0, Math.min(1, x / screenW)),
+                        y: Math.max(0, Math.min(1, y / screenH)),
+                        w: Math.min(1, w / screenW),
+                        h: Math.min(1, h / screenH)
                     };
 
                     // Map role to simple type
@@ -216,6 +235,7 @@ function run() {
 
     } catch (e) {
         result.error = String(e);
+        result.diagnostic = 'UNEXPECTED_ERROR';
     }
 
     return JSON.stringify(result);

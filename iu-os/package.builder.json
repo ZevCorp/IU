@@ -1,0 +1,41 @@
+{
+    "name": "iu-os",
+    "version": "1.0.0",
+    "description": "iü Operating System",
+    "main": "main.js",
+    "scripts": {
+        "dev": "electron .",
+        "pack": "electron-builder --dir",
+        "dist": "electron-builder",
+        "dist:mac": "electron-builder --mac"
+    },
+    "build": {
+        "appId": "com.iu.os",
+        "productName": "iü OS",
+        "mac": {
+            "category": "public.app-category.utilities",
+            "target": [
+                "dmg",
+                "zip"
+            ],
+            "extendInfo": {
+                "NSAppleEventsUsageDescription": "iü OS necesita controlar otras aplicaciones para asistencia inteligente.",
+                "NSSystemAdministrationUsageDescription": "iü OS necesita permisos de administración para control de sistema.",
+                "NSAccessibilityUsageDescription": "iü OS necesita permisos de Accessibility para leer y controlar elementos de interfaz."
+            },
+            "hardenedRuntime": true,
+            "entitlements": "entitlements.mac.plist",
+            "entitlementsInherit": "entitlements.mac.plist"
+        },
+        "files": [
+            "**/*",
+            "!**/*.ts",
+            "!node_modules/@nut-tree-fork/nut-js/build",
+            "!.git"
+        ]
+    },
+    "devDependencies": {
+        "electron": "^33.2.1",
+        "electron-builder": "^25.1.8"
+    }
+}

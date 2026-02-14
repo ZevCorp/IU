@@ -1,0 +1,6 @@
+# AxExtractionAgent - Intelligent version (archived for future use)
+
+This file contains the GPT-4.1 powered intelligent AX extraction agent.
+It was archived in favor of SimpleAxAgent for performance and reliability.
+
+To re-enable, replace SimpleAxAgent with AxExtractionAgent in ScreenAgent.js

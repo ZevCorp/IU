@@ -60,19 +60,76 @@ $ExePath = "$InstallDir\$AppName.exe"
 Move-Item -Path $TempFile -Destination $ExePath -Force
 Write-Host "      Installed to: $ExePath" -ForegroundColor Green
 
-# Create Desktop shortcut
-$WshShell = New-Object -ComObject WScript.Shell
-$Shortcut = $WshShell.CreateShortcut("$env:USERPROFILE\Desktop\$AppName.lnk")
-$Shortcut.TargetPath = $ExePath
-$Shortcut.Save()
-Write-Host "      Desktop shortcut created" -ForegroundColor Green
+# Verify executable exists
+if (-not (Test-Path $ExePath)) {
+    Write-Host "[ERROR] Installation failed. Executable not found at: $ExePath" -ForegroundColor Red
+    exit 1
+}
+
+# Create shortcuts
+Write-Host ""
+Write-Host "[5/5] Creating shortcuts..." -ForegroundColor Yellow
+
+try {
+    $WshShell = New-Object -ComObject WScript.Shell
+    
+    # Desktop shortcut
+    $DesktopPath = "$env:USERPROFILE\Desktop\$AppName.lnk"
+    try {
+        $Shortcut = $WshShell.CreateShortcut($DesktopPath)
+        $Shortcut.TargetPath = $ExePath
+        $Shortcut.WorkingDirectory = $InstallDir
+        $Shortcut.Description = "IU OS - Minimalist overlay interface"
+        $Shortcut.Save()
+        
+        if (Test-Path $DesktopPath) {
+            Write-Host "      ✓ Desktop shortcut created" -ForegroundColor Green
+        } else {
+            Write-Host "      ⚠ Desktop shortcut creation failed (permissions?)" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "      ⚠ Could not create desktop shortcut: $_" -ForegroundColor Yellow
+    }
+    
+    # Start Menu shortcut
+    $StartMenuPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\$AppName.lnk"
+    try {
+        $Shortcut = $WshShell.CreateShortcut($StartMenuPath)
+        $Shortcut.TargetPath = $ExePath
+        $Shortcut.WorkingDirectory = $InstallDir
+        $Shortcut.Description = "IU OS - Minimalist overlay interface"
+        $Shortcut.Save()
+        
+        if (Test-Path $StartMenuPath) {
+            Write-Host "      ✓ Start Menu shortcut created" -ForegroundColor Green
+        } else {
+            Write-Host "      ⚠ Start Menu shortcut creation failed" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "      ⚠ Could not create Start Menu shortcut: $_" -ForegroundColor Yellow
+    }
+    
+} catch {
+    Write-Host "      ⚠ Shortcut creation failed: $_" -ForegroundColor Yellow
+    Write-Host "      You can run the app from: $ExePath" -ForegroundColor Cyan
+}
 
 Write-Host ""
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host "   Installation Complete!" -ForegroundColor Green
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "You can open IU from:" -ForegroundColor Cyan
+Write-Host "  • Desktop shortcut" -ForegroundColor White
+Write-Host "  • Start Menu (search 'IU')" -ForegroundColor White
+Write-Host "  • Or run: $ExePath" -ForegroundColor White
+Write-Host ""
 Write-Host "Starting IU..." -ForegroundColor Yellow
 
 # Launch
-Start-Process $ExePath
+try {
+    Start-Process $ExePath
+} catch {
+    Write-Host "[ERROR] Could not launch app: $_" -ForegroundColor Red
+    Write-Host "Please run manually from: $ExePath" -ForegroundColor Yellow
+}

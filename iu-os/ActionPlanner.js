@@ -2,7 +2,7 @@
  * ActionPlanner.js
  * Planner that receives user intent (explicit or implicit)
  * and decides what app to open and what action to perform via function calling.
- * Uses ModelSwitch to alternate between OpenAI (GPT-4.1-mini) and Gemini (2.5 Flash).
+ * Uses ModelSwitch to alternate between OpenAI (GPT-5-mini) and Gemini (2.5 Flash).
  */
 
 const ModelSwitch = require('./ModelSwitch');

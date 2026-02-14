@@ -72,6 +72,8 @@ const SOM_TOOLS = [
             }
         }
     },
+    // TEMPORARILY DISABLED TO SAVE TOKENS - Need visual inspection fallback
+    /*
     {
         type: "function",
         function: {
@@ -86,6 +88,7 @@ const SOM_TOOLS = [
             }
         }
     },
+    */
     {
         type: "function",
         function: {
@@ -170,15 +173,21 @@ const VISUAL_TOOLS = [
 ];
 
 class ScreenAgent {
-    constructor(openai, mainWindow) {
+    constructor(openai, mainWindow, chatPage = null) {
         this.openai = openai; // kept for backward compat, actual calls go through ModelSwitch
         this.mainWindow = mainWindow;
+        this.chatPage = chatPage; // ChatGPT Playwright page for web searches
         this.isRunning = false;
         this.maxIterations = 15;
         this.nutjs = null;
         this.debugDir = path.join(require('os').homedir(), 'u_debug');
         this.screenWidth = 0;
         this.screenHeight = 0;
+
+        // Use simple deterministic agent (fast and reliable)
+        // For complex future scenarios, see AxExtractionAgent.js.future
+        const SimpleAxAgent = require('./SimpleAxAgent');
+        this.axAgent = new SimpleAxAgent();
     }
 
     /**
@@ -194,9 +203,91 @@ class ScreenAgent {
         return this.nutjs;
     }
 
+
     /**
-     * Main action loop with SoM (Set-of-Mark) architecture.
-     * Each iteration: Screenshot → YOLO detect → LLM selects element or requests visual fallback.
+     * Run AX Accessibility detection (JXA).
+     * Returns standard elements list or null on failure.
+     */
+    /**
+     * Run intelligent AX detection using AxExtractionAgent
+     * The agent will use GPT-4.1 to diagnose problems and search the web for solutions
+     */
+    async _runAxDetection(appName = null) {
+        console.log('🤖 [ScreenAgent] Running intelligent AX extraction...');
+
+        try {
+            const result = await this.axAgent.extract(appName);
+
+            if (result.error || !result.snapshot || result.snapshot.length === 0) {
+                console.warn('⚠️ [ScreenAgent] AX Agent returned error:', result.error);
+                return null;
+            }
+
+            // Normalize elements to match expected format
+            const elements = result.snapshot.map(e => ({
+                id: e.id,
+                type: e.type,
+                label: e.label || e.type,
+                confidence: 1.0,
+                bbox: e.bbox, // already normalized by ax-reader.js
+                center: {
+                    x: e.bbox.x + e.bbox.w / 2,
+                    y: e.bbox.y + e.bbox.h / 2
+                }
+            }));
+
+            return {
+                elements,
+                app: result.app,
+                window: result.window,
+                source: 'AX_ACCESSIBILITY'
+            };
+
+        } catch (e) {
+            console.error('❌ [ScreenAgent] AX Agent failed:', e.message);
+            return null;
+        }
+    }
+
+    /**
+     * Save the extracted graph to history for future training.
+     */
+    async _saveGraph(app, window, elements) {
+        try {
+            // In packaged apps, __dirname is inside asar (read-only)
+            // Use app.getPath('userData') instead
+            const { app: electronApp } = require('electron');
+            const historyDir = path.join(electronApp.getPath('userData'), 'history', 'graphs');
+            if (!fs.existsSync(historyDir)) {
+                fs.mkdirSync(historyDir, { recursive: true });
+            }
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const safeAppName = (app || 'unknown').replace(/[^a-z0-9]/gi, '_');
+            const filename = path.join(historyDir, `${safeAppName}_${timestamp}.json`);
+
+            const data = {
+                timestamp: new Date().toISOString(),
+                app,
+                window,
+                elementCount: elements.length,
+                elements
+            };
+
+            fs.writeFileSync(filename, JSON.stringify(data, null, 2));
+            console.log(`💾 [ScreenAgent] Graph saved: ${filename}`);
+
+            // TODO: Pipe to Jetson here if needed
+
+        } catch (e) {
+            console.error('⚠️ [ScreenAgent] Failed to save graph:', e.message);
+        }
+    }
+
+    // ... (rest of class) ...
+
+    /**
+     * Main action loop override to use hybrid AX/Vision approach.
      */
     async executeAction(goal, app, stepsHint) {
         if (this.isRunning) {
@@ -205,7 +296,7 @@ class ScreenAgent {
         }
 
         this.isRunning = true;
-        console.log(`🖥️ [ScreenAgent] Starting SoM action loop: "${goal}" in ${app}`);
+        console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
 
         this._notify('action-status', { phase: 'starting', goal, app });
 
@@ -222,77 +313,70 @@ class ScreenAgent {
             this.screenWidth = primaryDisplay.size.width;
             this.screenHeight = primaryDisplay.size.height;
 
-            // SoM conversation history (text-only, no images — cheaper and faster)
             const somMessages = [
                 {
                     role: "system",
-                    content: `Eres un agente de automatización de interfaces gráficas. Controlas el mouse y teclado de una Mac.
-
+                    content: `Eres un agente de automatización.
 OBJETIVO: "${goal}"
 APP: "${app}"
-PASOS SUGERIDOS: "${stepsHint}"
-PANTALLA: ${this.screenWidth}x${this.screenHeight} píxeles
+PASOS: "${stepsHint}"
 
-MODO DE OPERACIÓN (SoM — Set-of-Mark):
-En cada turno recibirás una LISTA de elementos UI detectados automáticamente en la pantalla.
-Cada elemento tiene: #id, tipo (AXButton, AXTextArea, AXLink, AXImage, AXDisclosureTriangle), posición (bbox), y confianza.
+MODO HÍBRIDO (AX + Vision):
+Recibirás una lista de elementos UI.
+- Si la fuente es 'AX_ACCESSIBILITY', los IDs y coordenadas son EXACTOS (Ground Truth). Confía plenamente en ellos.
+- Si la fuente es 'VISION' (YOLO), los elementos son aproximados.
 
-TU TRABAJO:
-1. Analiza la lista de elementos detectados.
-2. Decide la MEJOR acción siguiente para avanzar hacia el objetivo.
-3. Si el elemento que necesitas está en la lista → usa select_element con su #id (click exacto, sin error).
-4. Si el elemento que necesitas NO está en la lista (el detector no lo encontró) → usa need_visual_inspection para ver el screenshot real y dar coordenadas manuales.
+ACCIONES:
+1. select_element(#id): Click exacto en el elemento.
+2. type_text("texto"): Escribir en el foco actual.
+3. need_visual_inspection(reason): Si no ves lo que buscas en la lista.
 
-CUÁNDO USAR need_visual_inspection:
-- El campo de texto/barra de búsqueda no aparece en la lista pero debería estar visible.
-- Necesitas verificar visualmente si una acción anterior tuvo efecto.
-- Los elementos detectados no son suficientes para decidir qué hacer.
-- Hay ambigüedad sobre qué elemento es el correcto.
-
-REGLAS:
-1. UNA función por turno.
-2. Para escribir: primero select_element en el campo de texto (un turno), luego type_text (siguiente turno).
-3. Después de escribir texto, usa key_press con "enter" para enviar/confirmar.
-4. Si el objetivo se cumplió, llama goal_reached.
-5. PREFIERE select_element sobre need_visual_inspection siempre que sea posible (es más preciso).
-
-VERIFICACIÓN:
-- Si la lista de elementos no cambió después de una acción, probablemente la acción no tuvo efecto.
-- Si repites la misma acción 2 veces sin cambio, usa need_visual_inspection para diagnosticar.`
+Prioriza siempre select_element sobre inspección visual si el elemento está en la lista.`
                 }
             ];
 
+            let historyHint = '';
+
             while (iteration < this.maxIterations && !goalReached) {
                 iteration++;
-                console.log(`🔄 [ScreenAgent] SoM Iteration ${iteration}/${this.maxIterations}`);
+                console.log(`🔄 [ScreenAgent] Iteration ${iteration}`);
                 this._notify('action-status', { phase: 'analyzing', iteration });
 
-                // 1. Take screenshot (raw, no grid)
-                const screenshotPath = await this._takeScreenshotToFile();
-                if (!screenshotPath) {
-                    console.error('❌ [ScreenAgent] Screenshot failed');
-                    break;
-                }
-
-                // 2. Run YOLO UI detection
-                const yoloResult = await this._runYoloDetection(screenshotPath);
-                const elements = yoloResult?.elements || [];
-                console.log(`🔍 [ScreenAgent] YOLO detected ${elements.length} UI elements`);
-
-                // 3. Save SoM debug image
-                if (yoloResult?.som_image) {
-                    console.log(`🏷️ [ScreenAgent] SoM overlay saved: ${yoloResult.som_image}`);
-                }
-
-                // 4. Build history hint
-                let historyHint = '';
                 if (actionHistory.length > 0) {
                     historyHint = '\n\nAcciones realizadas hasta ahora:\n' + actionHistory.map(h => `  ${h.iteration}. ${h.summary}`).join('\n');
                 }
 
+                // 1. Take screenshot (DISABLED - always needed for context/fallback/debug - but DISABLED per user request)
+                const screenshotPath = null; // await this._takeScreenshotToFile();
+
+                // 2. Try AX Detection First (The "Effort Loop" extraction)
+                this._notify('action-status', { phase: 'extracting_graph' });
+
+                // Retry AX a few times if it fails
+                let detectionResult = null;
+                for (let i = 0; i < 3; i++) {
+                    detectionResult = await this._runAxDetection(app);
+                    if (detectionResult && detectionResult.elements.length > 0) break;
+                    console.log(`⏳ [ScreenAgent] AX Retry ${i + 1}/3...`);
+                    await this._wait(1500);
+                }
+
+                if (detectionResult && detectionResult.elements.length > 0) {
+                    console.log(`✅ [ScreenAgent] AX Graph extracted: ${detectionResult.elements.length} nodes`);
+                    // Save the successful graph
+                    this._saveGraph(detectionResult.app, detectionResult.window, detectionResult.elements);
+                } else {
+                    console.error(`🔴 [ScreenAgent] CRITICAL: AX Failed after 3 retries. Fallback DISABLED.`);
+                    // FORCE AX: fallback DISABLED per user request
+                    detectionResult = { elements: [], source: 'AX_FAILED' };
+                }
+
+                const elements = detectionResult?.elements || [];
+                // ... continue to LLM logic using 'elements' ...
+
                 // 5. Format elements list for LLM
                 const elementsText = elements.length > 0
-                    ? elements.map(e => `  #${e.id} [${e.label}] conf=${e.confidence} bbox=(${e.bbox.x1},${e.bbox.y1})-(${e.bbox.x2},${e.bbox.y2}) center=(${e.center.x},${e.center.y})`).join('\n')
+                    ? elements.map(e => `  #${e.id} [${e.label}] (${e.type}) bbox=[${e.bbox.x.toFixed(2)},${e.bbox.y.toFixed(2)}]`).join('\n')
                     : '  (No se detectaron elementos UI)';
 
                 // 6. Send element list to LLM (text-only, no image)
@@ -300,18 +384,28 @@ VERIFICACIÓN:
                     role: "user",
                     content: `Iteración ${iteration}/${this.maxIterations}. Objetivo: "${goal}"
 
-Elementos UI detectados en pantalla (${elements.length} total):
+Elementos UI detectados en pantalla (${elements.length} total) [Fuente: ${detectionResult.source || 'VISION'}]:
 ${elementsText}${historyHint}
 
 ¿Qué acción ejecutar?`
                 });
 
+                console.log(`📤 [ScreenAgent] Sending to LLM: ${elements.length} elements, tool_choice=required`);
+                console.log(`📋 [ScreenAgent] Tools available: ${SOM_TOOLS.map(t => t.function.name).join(', ')}`);
+
                 const somResponse = await this._retryWithBackoff(() => ModelSwitch.chatCompletion({
                     messages: somMessages,
                     tools: SOM_TOOLS,
                     tool_choice: "required",
-                    max_tokens: 400
+                    max_tokens: 2000  // Increased for GPT-5-mini to generate complete tool calls
                 }), 3);
+
+                console.log(`📥 [ScreenAgent] LLM Response:`, JSON.stringify({
+                    hasToolCalls: !!somResponse.choices[0]?.message?.tool_calls,
+                    toolCallCount: somResponse.choices[0]?.message?.tool_calls?.length || 0,
+                    finishReason: somResponse.choices[0]?.finish_reason,
+                    messageContent: somResponse.choices[0]?.message?.content?.substring(0, 100)
+                }));
 
                 const somChoice = somResponse.choices[0];
                 const somToolCall = somChoice.message.tool_calls?.[0];
@@ -342,7 +436,8 @@ ${elementsText}${historyHint}
                     break;
                 }
 
-                // Handle need_visual_inspection — fallback to vision-based single iteration
+                // DISABLED: Visual inspection fallback (saves tokens)
+                /*
                 if (fnName === 'need_visual_inspection') {
                     console.log(`👁️ [ScreenAgent] Visual inspection requested: ${args.reason}`);
                     const visualResult = await this._visualFallbackIteration(
@@ -354,7 +449,6 @@ ${elementsText}${historyHint}
                     }
                     if (visualResult.summary) {
                         actionHistory.push({ iteration, summary: `[VISUAL] ${visualResult.summary}` });
-                        // Inform SoM conversation about what happened
                         somMessages.push({
                             role: "user",
                             content: `[Resultado de inspección visual]: Se ejecutó: ${visualResult.summary}`
@@ -362,51 +456,64 @@ ${elementsText}${historyHint}
                     }
                     await this._wait(1000);
                     this._trimSomMessages(somMessages);
-                    // Clean up screenshot
-                    try { fs.unlinkSync(screenshotPath); } catch (e) {}
+                    // try { fs.unlinkSync(screenshotPath); } catch (e) { }
                     continue;
                 }
+                */
 
                 // Handle select_element — deterministic click
                 if (fnName === 'select_element') {
-                    const targetElement = elements.find(e => e.id === args.element_id);
+                    const targetElement = elements.find(e => e.id == args.element_id);
                     if (!targetElement) {
                         console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
                         actionHistory.push({ iteration, summary: `SELECT #${args.element_id} — NOT FOUND` });
                     } else {
-                        const px = targetElement.center.x;
-                        const py = targetElement.center.y;
-                        const label = `${targetElement.label} #${targetElement.id}`;
-                        console.log(`🎯 [ScreenAgent] Deterministic click on #${targetElement.id} [${targetElement.label}] at pixel (${px}, ${py})`);
+                        // AX elements usually have 'center' pre-calculated
+                        let px, py;
+                        if (targetElement.center) {
+                            px = targetElement.center.x;
+                            py = targetElement.center.y;
+                        } else if (targetElement.bbox) {
+                            px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
+                            py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
+                        }
+
+                        // Denormalize if normalized
+                        if (px < 1 && py < 1) {
+                            px = Math.round(px * this.screenWidth);
+                            py = Math.round(py * this.screenHeight);
+                        }
+
+                        const label = `${targetElement.label || targetElement.type} #${targetElement.id}`;
+                        console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
+
+                        /*
                         await this._saveDebugScreenshot(
                             fs.readFileSync(screenshotPath).toString('base64'),
                             { x: px, y: py, label }, iteration
                         );
+                        */
                         await this._executeToolDirect('click', { px, py, label });
-                        actionHistory.push({ iteration, summary: `SELECT #${targetElement.id} [${targetElement.label}] → pixel (${px}, ${py})` });
+                        actionHistory.push({ iteration, summary: `SELECT #${targetElement.id} [${label}]` });
                     }
                 }
                 // Handle type_text
                 else if (fnName === 'type_text') {
                     await this._executeTool('type_text', args);
-                    actionHistory.push({ iteration, summary: `TYPE "${args.text}" en "${args.label}"` });
+                    actionHistory.push({ iteration, summary: `TYPE "${args.text}"` });
                 }
                 // Handle key_press
                 else if (fnName === 'key_press') {
                     await this._executeTool('key_press', args);
-                    actionHistory.push({ iteration, summary: `KEY ${args.key} — ${args.label}` });
+                    actionHistory.push({ iteration, summary: `KEY ${args.key}` });
                 }
 
                 this._notify('action-status', { phase: 'acting', action: actionHistory[actionHistory.length - 1]?.summary });
-
-                // Wait for UI to update
                 await this._wait(fnName === 'select_element' ? 1000 : 800);
-
-                // Trim old messages to save tokens
                 this._trimSomMessages(somMessages);
-
-                // Clean up screenshot
-                try { fs.unlinkSync(screenshotPath); } catch (e) {}
+                if (screenshotPath) {
+                    try { fs.unlinkSync(screenshotPath); } catch (e) { }
+                }
             }
 
             if (!goalReached) {
@@ -436,9 +543,12 @@ ${elementsText}${historyHint}
         console.log(`👁️ [ScreenAgent] Running visual fallback iteration...`);
 
         // Read screenshot and add grid overlay
-        let imgBuffer = fs.readFileSync(screenshotPath);
-        imgBuffer = await this._addReferenceGrid(imgBuffer, this.screenWidth, this.screenHeight);
-        const base64 = imgBuffer.toString('base64');
+        let base64 = "";
+        if (screenshotPath) {
+            let imgBuffer = fs.readFileSync(screenshotPath);
+            imgBuffer = await this._addReferenceGrid(imgBuffer, this.screenWidth, this.screenHeight);
+            base64 = imgBuffer.toString('base64');
+        }
 
         let historyHint = '';
         if (actionHistory.length > 0) {
@@ -578,6 +688,35 @@ CONTEXTO DE VENTANAS:
                 }
                 try {
                     const result = JSON.parse(stdout);
+                    // Normalize YOLO result to match AX format (normalized x,y,w,h)
+                    const imgW = result.image_size.width;
+                    const imgH = result.image_size.height;
+
+                    result.elements = result.elements.map(e => {
+                        // Original YOLO bbox is pixel coords {x1, y1, x2, y2}
+                        // We need normalized {x, y, w, h}
+                        const w = Math.abs(e.bbox.x2 - e.bbox.x1);
+                        const h = Math.abs(e.bbox.y2 - e.bbox.y1);
+                        const x = e.bbox.x1;
+                        const y = e.bbox.y1;
+
+                        return {
+                            ...e,
+                            bbox: {
+                                x: x / imgW,
+                                y: y / imgH,
+                                w: w / imgW,
+                                h: h / imgH,
+                                // Keep original pixel coords for debug/direct if needed, but standard is now normalized
+                                x1: e.bbox.x1, y1: e.bbox.y1, x2: e.bbox.x2, y2: e.bbox.y2
+                            },
+                            center: {
+                                x: e.center.x,
+                                y: e.center.y
+                            }
+                        };
+                    });
+
                     resolve(result);
                 } catch (parseErr) {
                     console.error('❌ [ScreenAgent] YOLO output parse failed:', parseErr.message);
@@ -650,12 +789,30 @@ CONTEXTO DE VENTANAS:
     async _openApp(appName) {
         return new Promise((resolve) => {
             const { exec } = require('child_process');
-            // Try common app name mappings
-            const cmd = `open -a "${appName}"`;
+
+            // Spanish to English app name mappings for macOS
+            const appMappings = {
+                'Calculadora': 'Calculator',
+                'Calendario': 'Calendar',
+                'Contactos': 'Contacts',
+                'Notas': 'Notes',
+                'Música': 'Music',
+                'Fotos': 'Photos',
+                'Mapas': 'Maps',
+                'Recordatorios': 'Reminders',
+                'Mail': 'Mail',
+                'Mensajes': 'Messages',
+                'FaceTime': 'FaceTime'
+            };
+
+            // Normalize app name
+            const normalizedApp = appMappings[appName] || appName;
+
+            const cmd = `open -a "${normalizedApp}"`;
             console.log(`📱 [ScreenAgent] Opening app: ${cmd}`);
             exec(cmd, (err) => {
                 if (err) {
-                    console.warn(`⚠️ [ScreenAgent] Could not open "${appName}":`, err.message);
+                    console.warn(`⚠️ [ScreenAgent] Could not open "${normalizedApp}":`, err.message);
                 }
                 resolve();
             });

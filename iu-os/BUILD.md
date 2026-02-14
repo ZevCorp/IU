@@ -38,8 +38,20 @@ irm https://iu.space/install | iex
 This script:
 1. Downloads latest release from GitHub
 2. Installs to `%LOCALAPPDATA%\Programs\IU\`
-3. Creates desktop shortcut
+3. Creates desktop + Start Menu shortcuts
 4. Launches the app
+
+### Create Shortcuts (if missing)
+If shortcuts weren't created during installation:
+```powershell
+irm https://iu.space/shortcuts | iex
+```
+
+### Alternative Ways to Open IU
+If shortcuts are missing, users can:
+- **Search Start Menu**: Press Windows key, type "IU"
+- **Run directly**: Press `Win+R`, paste `%LOCALAPPDATA%\Programs\IU\IU.exe`
+- **Navigate to folder**: `%LOCALAPPDATA%\Programs\IU\`
 
 ## Auto-Updates
 The app checks for updates on startup. Users can also manually check via the UI.

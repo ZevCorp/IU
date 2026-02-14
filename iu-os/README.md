@@ -47,7 +47,15 @@ npm run dev
 - Partículas viajando entre nodos
 - Refleja navegación HRM en tiempo real
 
-### 5. Sistema de Recordatorios
+### 5. Native AX System (NEW! ✨)
+- **Control de apps por voz**: "abre calculator y suma 5 + 5 + 5"
+- **Extracción nativa**: Addon C++ que llama directamente a macOS Accessibility APIs
+- **Sin problemas de permisos**: Ejecuta en el proceso principal de IU.app
+- **Detección automática**: Extrae botones, inputs, textos de cualquier app
+- **Clicks precisos**: Coordenadas exactas, sin estimación
+- 📖 **Documentación completa**: Ver `NATIVE_AX_SYSTEM.md`
+
+### 6. Sistema de Recordatorios
 - Prioridades 0-100
 - Ajuste automático por menciones en conversación
 - Decay temporal de prioridades

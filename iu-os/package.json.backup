@@ -7,11 +7,8 @@
         "dev": "electron .",
         "build": "npm run obfuscate && electron-builder --win portable",
         "build:dir": "electron-builder --win --dir",
-        "dist:mac": "electron-builder --mac",
-        "pack:mac": "electron-builder --mac --dir",
         "obfuscate": "node scripts/obfuscate.js",
-        "publish": "electron-builder --win portable --publish always",
-        "install": "node-gyp rebuild"
+        "publish": "electron-builder --win portable --publish always"
     },
     "repository": {
         "type": "git",
@@ -24,8 +21,7 @@
             "output": "dist"
         },
         "files": [
-            "*.js",
-            "!*.config.js",
+            "main.js",
             "preload.js",
             "renderer/**/*",
             "node_modules/**/*",
@@ -35,18 +31,11 @@
             {
                 "from": ".env",
                 "to": ".env"
-            },
-            {
-                "from": "build/Release",
-                "to": "build/Release"
             }
         ],
         "asar": true,
         "asarUnpack": [
-            "node_modules/playwright/**/*",
-            "node_modules/sharp/**/*",
-            "node_modules/@img/**/*",
-            "node_modules/@nut-tree-fork/**/*"
+            "node_modules/playwright/**/*"
         ],
         "win": {
             "target": "portable",
@@ -55,23 +44,6 @@
         },
         "portable": {
             "artifactName": "${productName}-${version}-Windows.exe"
-        },
-        "mac": {
-            "category": "public.app-category.utilities",
-            "target": [
-                "dmg",
-                "zip"
-            ],
-            "icon": "assets/icon.icns",
-            "extendInfo": {
-                "NSAppleEventsUsageDescription": "iü OS necesita controlar otras aplicaciones para asistencia inteligente.",
-                "NSSystemAdministrationUsageDescription": "iü OS necesita permisos de administración para control de sistema.",
-                "NSAccessibilityUsageDescription": "iü OS necesita permisos de Accessibility para leer y controlar elementos de interfaz."
-            },
-            "hardenedRuntime": true,
-            "gatekeeperAssess": false,
-            "entitlements": "entitlements.mac.plist",
-            "entitlementsInherit": "entitlements.mac.plist"
         },
         "publish": {
             "provider": "github",
@@ -90,9 +62,7 @@
     "devDependencies": {
         "electron": "^28.0.0",
         "electron-builder": "^24.13.3",
-        "javascript-obfuscator": "^4.1.0",
-        "node-addon-api": "^8.0.0",
-        "node-gyp": "^10.0.0"
+        "javascript-obfuscator": "^4.1.0"
     },
     "dependencies": {
         "@google/generative-ai": "^0.24.1",

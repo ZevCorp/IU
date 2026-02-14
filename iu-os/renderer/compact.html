@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IÜ Compact</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: transparent;
+        }
+
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+
+        #compact-container {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            overflow: visible;
+        }
+
+        /* Apple Liquid Glass Halo */
+        #compact-container::before {
+            content: '';
+            position: absolute;
+            width: 150px;
+            height: 150px;
+            border-radius: 50%;
+
+            /* Apple Liquid Glass: ultra-transparent with strong blur */
+            background: linear-gradient(135deg,
+                    rgba(255, 255, 255, 0.12) 0%,
+                    rgba(255, 255, 255, 0.05) 50%,
+                    rgba(255, 255, 255, 0.08) 100%);
+
+            backdrop-filter: blur(60px) saturate(180%);
+            -webkit-backdrop-filter: blur(60px) saturate(180%);
+
+            /* Subtle border for depth */
+            border: 0.5px solid rgba(255, 255, 255, 0.18);
+            box-shadow:
+                0 8px 32px rgba(0, 0, 0, 0.12),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2),
+                inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+
+            z-index: -1;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+
+            /* Subtle breathing animation */
+            animation: liquidGlassGlow 6s ease-in-out infinite;
+        }
+
+        @keyframes liquidGlassGlow {
+
+            0%,
+            100% {
+                opacity: 0.95;
+                transform: translate(-50%, -50%) scale(1);
+                filter: brightness(1);
+            }
+
+            50% {
+                opacity: 1;
+                transform: translate(-50%, -50%) scale(1.02);
+                filter: brightness(1.05);
+            }
+        }
+
+        #face-svg {
+            width: 140px;
+            height: 140px;
+            transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .face-stroke {
+            fill: none;
+            stroke: #ffffff;
+            stroke-width: 2.2px;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            transition: stroke 0.3 s ease;
+        }
+
+        /* Popup for status messages */
+        #compact-popup {
+            position: absolute;
+            bottom: -50px;
+            left: 50%;
+            transform: translateX(-50%) scale(0.9);
+            padding: 12px 18px;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 20px;
+            color: rgba(255, 255, 255, 0.95);
+            font-size: 11px;
+            font-weight: 400;
+            letter-spacing: 0.3px;
+            text-align: center;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 2000;
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            max-width: 130px;
+            white-space: nowrap;
+        }
+
+        #compact-popup.visible {
+            opacity: 1;
+            transform: translateX(-50%) scale(1);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="compact-container">
+        <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
+            <g id="face-group" transform="translate(200, 250)">
+                <!-- Eyebrows -->
+                <g id="eyebrows-group">
+                    <path id="left-eyebrow" class="face-stroke" />
+                    <path id="right-eyebrow" class="face-stroke" />
+                </g>
+
+                <!-- Eyes -->
+                <g id="eyes-group">
+                    <g id="left-eye" class="eye-group">
+                        <path id="left-eye-top" class="face-stroke" />
+                        <path id="left-eye-line" class="face-stroke" />
+                        <path id="left-eye-bottom" class="face-stroke" />
+                    </g>
+                    <g id="right-eye" class="eye-group">
+                        <path id="right-eye-top" class="face-stroke" />
+                        <path id="right-eye-line" class="face-stroke" />
+                        <path id="right-eye-bottom" class="face-stroke" />
+                    </g>
+                </g>
+
+                <!-- Mouth -->
+                <g id="mouth-group">
+                    <path id="mouth" class="face-stroke" />
+                </g>
+            </g>
+        </svg>
+
+        <div id="compact-popup">Ejecutando...</div>
+    </div>
+
+    <script src="face/index.js"></script>
+    <script src="compact-face.js"></script>
+</body>
+
+</html>

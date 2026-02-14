@@ -118,6 +118,112 @@ body {
   height: 100%;
   max-width: 300px;
   max-height: 400px;
+  transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* =====================================================
+   Compact Mode Styles (150x150 window)
+   ===================================================== */
+
+/* Compact mode: detect via window size */
+@media (max-width: 170px) {
+
+  /* Apple Liquid Glass Effect - Maximum Transparency */
+  body {
+    background: transparent;
+    overflow: hidden;
+  }
+
+  #app {
+    background: transparent;
+    border-radius: 50%;
+    /* Circular window */
+    overflow: visible;
+  }
+
+  /* Liquid Glass Halo - Apple Style */
+  #face-container::before {
+    content: '';
+    position: absolute;
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+
+    /* Apple Liquid Glass: ultra-transparent with strong blur */
+    background: linear-gradient(135deg,
+        rgba(255, 255, 255, 0.12) 0%,
+        rgba(255, 255, 255, 0.05) 50%,
+        rgba(255, 255, 255, 0.08) 100%);
+
+    backdrop-filter: blur(60px) saturate(180%);
+    -webkit-backdrop-filter: blur(60px) saturate(180%);
+
+    /* Subtle border for depth */
+    border: 0.5px solid rgba(255, 255, 255, 0.18);
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.1);
+
+    z-index: -1;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+
+    /* Subtle breathing animation */
+    animation: liquidGlassGlow 6s ease-in-out infinite;
+  }
+
+  @keyframes liquidGlassGlow {
+
+    0%,
+    100% {
+      opacity: 0.95;
+      transform: translate(-50%, -50%) scale(1);
+      filter: brightness(1);
+    }
+
+    50% {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1.02);
+      filter: brightness(1.05);
+    }
+  }
+
+  /* Hide ALL controls in compact mode */
+  #controls-panel,
+  .menu-toggle,
+  .chat-toggle-btn,
+  .transfer-btn-top,
+  #intent-carousel,
+  #transcript-container,
+  #nav-hud,
+  #checklist-container,
+  #neural-canvas {
+    display: none !important;
+  }
+
+  /* ENLARGED face to fill the window */
+  #face-svg {
+    max-width: 140px;
+    max-height: 140px;
+  }
+
+  /* Center face perfectly */
+  #face-container {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Slightly thinner stroke for compact */
+  .face-stroke {
+    stroke-width: 2.2px;
+  }
 }
 
 /* Face Stroke Styling - EXACT from iü.space */
@@ -958,7 +1064,7 @@ body {
 }
 
 .role-toggle.active .role-icon {
-  transform: scale(1.1);
+  transform: scale(1.15);
   filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.5));
 }
 
@@ -973,4 +1079,119 @@ body {
 
 .role-toggle.active .role-label {
   color: var(--text-primary);
+}
+
+/* =====================================================
+   Loading Overlay
+   ===================================================== */
+
+#loading-overlay {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(10px);
+  padding: 24px 40px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 2000;
+  transition: opacity 0.3s ease;
+}
+
+#loading-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: #00d4ff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 12px;
+}
+
+.loading-text {
+  color: #fff;
+  font-family: 'SF Pro Display', -apple-system, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* =====================================================
+   Compact Action Mode (Function Calling Active)
+   ===================================================== */
+
+/* When executing an action, face moves to top-left */
+#app.compact-action-mode #face-container {
+  transform: translate(-25%, -25%) scale(0.7);
+  transition: all 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Fade out all elements when entering action mode */
+#app.compact-action-mode #controls-panel,
+#app.compact-action-mode .menu-toggle,
+#app.compact-action-mode .chat-toggle-btn,
+#app.compact-action-mode .transfer-btn-top,
+#app.compact-action-mode #intent-carousel,
+#app.compact-action-mode #transcript-container {
+  opacity: 0;
+  transition: opacity 0.6s ease-out;
+  pointer-events: none;
+}
+
+/* =====================================================
+   Compact Mode Popup (Text from Model)
+   ===================================================== */
+
+#compact-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.9);
+  padding: 16px 24px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.3px;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2000;
+  transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  max-width: 200px;
+}
+
+#compact-popup.visible {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+@media (max-width: 170px) {
+  #compact-popup {
+    max-width: 130px;
+    font-size: 11px;
+    padding: 12px 18px;
+  }
 }

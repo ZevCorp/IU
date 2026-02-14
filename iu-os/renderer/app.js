@@ -1658,52 +1658,96 @@ if (window.iuOS && window.iuOS.onVoiceStateChanged) {
 
 let pendingActionPlan = null;
 
+
 // Listen for action confirmation requests from main process
 if (window.iuOS && window.iuOS.onActionConfirmRequest) {
     window.iuOS.onActionConfirmRequest((data) => {
-        console.log('🎯 [Action] Confirmation request:', data);
+        console.log('[App] Action confirmation requested:', data);
         pendingActionPlan = data;
-        showActionConfirmation(data);
+
+        // ACTIVATE COMPACT ACTION MODE - Trigger transition
+        const app = document.getElementById('app');
+        if (app) app.classList.add('compact-action-mode');
+
+        // Show popup with action description
+        showCompactPopup(data.goal);
+
+        // In compact mode: auto-confirm immediately (no button)
+        // The transition happens, then action executes
+        setTimeout(() => {
+            if (window.iuOS && window.iuOS.confirmAction) {
+                window.iuOS.confirmAction(data);
+            }
+        }, 800); // Wait for transition to settle
     });
 }
 
 // Listen for action status updates (phase changes during execution)
 if (window.iuOS && window.iuOS.onActionStatus) {
     window.iuOS.onActionStatus((data) => {
-        console.log('🖥️ [Action] Status:', data.phase);
+        console.log('[App] Action status:', data.status);
 
-        switch (data.phase) {
-            case 'starting':
-                showToast(`Ejecutando: ${data.goal}`);
-                if (face) face.transitionTo('thinking', 600);
+        switch (data.status) {
+            case 'executing':
+                showCompactPopup(data.step || 'Ejecutando...');
+                document.getElementById('loading-overlay').classList.remove('hidden');
+                if (face) face.transitionTo('looking_at_screen', 600);
                 break;
-            case 'analyzing':
-                if (face) face.transitionTo('looking_at_screen', 400);
-                break;
-            case 'acting':
-                showToast(`Clic: ${data.action}`);
-                break;
-            case 'completed':
-                showToast('✓ Acción completada');
-                if (face) face.transitionTo('action_complete', 500);
+            case 'complete':
+                document.getElementById('loading-overlay').classList.add('hidden');
+                showCompactPopup('✓ Completado');
+
+                // EXIT COMPACT ACTION MODE
+                const app = document.getElementById('app');
+                if (app) app.classList.remove('compact-action-mode');
+
                 setTimeout(() => {
+                    hideCompactPopup();
                     if (face) face.transitionTo('smile', 800);
                 }, 2000);
                 break;
             case 'incomplete':
-                showToast(`Acción incompleta (${data.iterations} pasos)`);
+                document.getElementById('loading-overlay').classList.add('hidden');
+                showCompactPopup(`⚠ Incompleto`);
+                const appIncomplete = document.getElementById('app');
+                if (appIncomplete) appIncomplete.classList.remove('compact-action-mode');
                 if (face) face.transitionTo('neutral', 600);
+                setTimeout(hideCompactPopup, 3000);
                 break;
             case 'error':
-                showToast(`Error: ${data.error}`);
+                document.getElementById('loading-overlay').classList.add('hidden');
+                showCompactPopup(`✗ Error`);
+                const appError = document.getElementById('app');
+                if (appError) appError.classList.remove('compact-action-mode');
                 if (face) face.transitionTo('neutral', 400);
+                setTimeout(hideCompactPopup, 3000);
                 break;
             case 'stopped':
-                showToast('Acción detenida');
+                document.getElementById('loading-overlay').classList.add('hidden');
+                showCompactPopup('Detenido');
+                const appStopped = document.getElementById('app');
+                if (appStopped) appStopped.classList.remove('compact-action-mode');
                 if (face) face.transitionTo('neutral', 400);
+                setTimeout(hideCompactPopup, 2000);
                 break;
         }
     });
+}
+
+// Helper functions for compact popup
+function showCompactPopup(message) {
+    const popup = document.getElementById('compact-popup');
+    if (popup) {
+        popup.textContent = message;
+        popup.classList.add('visible');
+    }
+}
+
+function hideCompactPopup() {
+    const popup = document.getElementById('compact-popup');
+    if (popup) {
+        popup.classList.remove('visible');
+    }
 }
 
 function showActionConfirmation(plan) {

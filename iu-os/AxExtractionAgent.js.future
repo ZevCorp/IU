@@ -1,0 +1,332 @@
+/**
+ * AxExtractionAgent - Intelligent AX Tree Extraction Agent
+ * 
+ * Uses GPT-5-mini to intelligently extract macOS Accessibility trees.
+ * Has access to web search via ChatGPT+Playwright for research.
+ * Persists until it successfully extracts the UI tree.
+ */
+
+const { execFile } = require('child_process');
+const path = require('path');
+const ModelSwitch = require('./ModelSwitch');
+
+class AxExtractionAgent {
+    constructor(chatPage = null) {
+        this.chatPage = chatPage; // ChatGPT Playwright page for web searches
+        this.maxAttempts = 5;
+        this.axScriptPath = path.join(__dirname, 'ax-reader.js');
+    }
+
+    /**
+     * Main entry point: Extract AX tree with intelligent retry
+     */
+    async extract(appName = null) {
+        console.log('🤖 [AxAgent] Starting intelligent AX extraction...');
+
+        const context = {
+            appName: appName || 'Calculator',
+            attempts: [],
+            knowledge: []
+        };
+
+        for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+            console.log(`🔄 [AxAgent] Attempt ${attempt}/${this.maxAttempts}`);
+
+            // Try to extract
+            const result = await this._tryExtraction();
+            context.attempts.push({ attempt, result, timestamp: new Date().toISOString() });
+
+            // Success!
+            if (result && !result.error && result.snapshot && result.snapshot.length > 0) {
+                console.log(`✅ [AxAgent] Success on attempt ${attempt}!`);
+                return result;
+            }
+
+            // Failed - ask LLM for diagnosis and solution
+            console.log(`⚠️ [AxAgent] Attempt ${attempt} failed: ${result?.error || 'No elements found'}`);
+
+            const diagnosis = await this._diagnoseWithLLM(context, result);
+
+            // Execute LLM's recommended actions
+            if (diagnosis.actions && diagnosis.actions.length > 0) {
+                for (const action of diagnosis.actions) {
+                    await this._executeAction(action, context);
+                }
+            }
+
+            // Wait before retry
+            if (attempt < this.maxAttempts) {
+                const delay = diagnosis.retryDelay || 2000;
+                console.log(`⏳ [AxAgent] Waiting ${delay}ms before retry...`);
+                await this._wait(delay);
+            }
+        }
+
+        console.error(`❌ [AxAgent] Failed after ${this.maxAttempts} attempts`);
+        return { error: 'Max attempts reached', snapshot: [] };
+    }
+
+    /**
+     * Try to run ax-reader.js and parse output
+     */
+    async _tryExtraction() {
+        return new Promise((resolve) => {
+            execFile('osascript', ['-l', 'JavaScript', this.axScriptPath], { timeout: 10000 }, (err, stdout, stderr) => {
+                if (err) {
+                    resolve({ error: err.message, stderr });
+                    return;
+                }
+
+                try {
+                    const result = JSON.parse(stdout);
+                    resolve(result);
+                } catch (parseErr) {
+                    resolve({ error: 'Parse error', parseError: parseErr.message, stdout });
+                }
+            });
+        });
+    }
+
+    /**
+     * Ask GPT-5-mini to diagnose the problem and suggest actions
+     */
+    async _diagnoseWithLLM(context, lastResult) {
+        const tools = [
+            {
+                type: "function",
+                function: {
+                    name: "search_web",
+                    description: "Search the web for information about macOS Accessibility API issues",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            query: { type: "string", description: "Search query" }
+                        },
+                        required: ["query"]
+                    }
+                }
+            },
+            {
+                type: "function",
+                function: {
+                    name: "recommend_solution",
+                    description: "Recommend a solution after analyzing the problem",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            reasoning: { type: "string", description: "Why the extraction failed" },
+                            actions: {
+                                type: "array",
+                                items: {
+                                    type: "object",
+                                    properties: {
+                                        type: { type: "string", enum: ["wait", "focus_app", "open_app"], description: "Action type" },
+                                        appName: { type: "string", description: "App name (for focus_app/open_app)" },
+                                        duration: { type: "number", description: "Duration in ms (for wait)" }
+                                    }
+                                }
+                            },
+                            retryDelay: { type: "number", description: "Milliseconds to wait before retry" }
+                        },
+                        required: ["reasoning", "actions"]
+                    }
+                }
+            }
+        ];
+
+        const errorMsg = lastResult?.error || 'Unknown error';
+
+        // Check if we've already searched for this error
+        const alreadySearched = context.knowledge.some(k => k.includes(errorMsg.substring(0, 20)));
+
+        const messages = [
+            {
+                role: "system",
+                content: `You are an expert in macOS Accessibility API. Diagnose AX extraction failures.
+
+Common issues:
+1. "No window found" → app not focused, not running, or slow to launch
+2. Empty snapshot → permission issues or app has no accessible elements
+3. Timeout → app slow to respond
+
+Target App: ${context.appName || 'Calculator'}
+
+${alreadySearched ? 'NOTE: You already searched for this error. Use your existing knowledge to recommend actions without searching again.' : 'You can search_web ONCE if needed, then recommend_solution.'}`
+            },
+            {
+                role: "user",
+                content: `Error: ${errorMsg}
+Attempt: ${context.attempts.length}
+
+${context.knowledge.length > 0 ? 'Knowledge:\n' + context.knowledge.join('\n') : ''}
+
+Diagnose and recommend actions. If you need more info, search ONCE, then recommend.`
+            }
+        ];
+
+        try {
+            const response = await ModelSwitch.chatCompletion({
+                messages,
+                tools,
+                tool_choice: "auto",
+                max_tokens: 600
+            });
+
+            const message = response.choices[0].message;
+
+            // Handle tool calls
+            if (message.tool_calls && message.tool_calls.length > 0) {
+                const toolCall = message.tool_calls[0]; // Process only first call
+
+                if (toolCall.function.name === 'search_web' && !alreadySearched) {
+                    const args = JSON.parse(toolCall.function.arguments);
+                    console.log(`🔍 [AxAgent] Searching web: "${args.query}"`);
+                    const searchResult = await this._searchWeb(args.query);
+                    context.knowledge.push(`Search: ${args.query.substring(0, 50)} → ${searchResult.substring(0, 200)}`);
+
+                    // Continue conversation with search result
+                    messages.push(message);
+                    messages.push({
+                        role: "tool",
+                        tool_call_id: toolCall.id,
+                        content: searchResult
+                    });
+
+                    // Now ask for recommendation with the search result
+                    const followUp = await ModelSwitch.chatCompletion({
+                        messages,
+                        tools: [tools[1]], // Only recommend_solution now
+                        tool_choice: "auto",
+                        max_tokens: 500
+                    });
+
+                    const recCall = followUp.choices[0].message.tool_calls?.find(
+                        tc => tc.function.name === 'recommend_solution'
+                    );
+
+                    if (recCall) {
+                        const solution = JSON.parse(recCall.function.arguments);
+                        console.log(`💡 [AxAgent] LLM Diagnosis: ${solution.reasoning}`);
+                        return solution;
+                    }
+                } else if (toolCall.function.name === 'recommend_solution') {
+                    const solution = JSON.parse(toolCall.function.arguments);
+                    console.log(`💡 [AxAgent] LLM Diagnosis: ${solution.reasoning}`);
+                    return solution;
+                }
+            }
+
+            // Fallback
+            return {
+                reasoning: message.content || "No specific diagnosis",
+                actions: [
+                    { type: "focus_app", appName: context.appName || "Calculator" },
+                    { type: "wait", duration: 2000 }
+                ],
+                retryDelay: 2000
+            };
+
+        } catch (e) {
+            console.error('❌ [AxAgent] LLM diagnosis failed:', e.message);
+            return {
+                reasoning: `LLM error: ${e.message}`,
+                actions: [{ type: "wait", duration: 2000 }],
+                retryDelay: 2000
+            };
+        }
+    }
+
+    /**
+     * Search web using ChatGPT+Playwright
+     */
+    async _searchWeb(query) {
+        if (!this.chatPage || this.chatPage.isClosed()) {
+            return "Web search unavailable (ChatGPT page not open)";
+        }
+
+        try {
+            // Send search query to ChatGPT
+            const composer = this.chatPage.locator('#prompt-textarea');
+            if (await composer.count() > 0) {
+                await composer.fill(`Search the web: ${query}`);
+                await this.chatPage.waitForTimeout(500);
+
+                const sendBtn = this.chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
+                if (await sendBtn.count() > 0) {
+                    await sendBtn.click();
+                } else {
+                    await this.chatPage.keyboard.press('Enter');
+                }
+
+                // Wait longer for ChatGPT to search and respond (10 seconds)
+                console.log('⏳ [AxAgent] Waiting for ChatGPT search result...');
+                await this.chatPage.waitForTimeout(10000);
+
+                // Extract response
+                const response = await this.chatPage.evaluate(() => {
+                    const messages = document.querySelectorAll('[data-message-author-role="assistant"]');
+                    if (messages.length === 0) return '';
+                    const lastMessage = messages[messages.length - 1];
+                    const markdown = lastMessage.querySelector('.markdown');
+                    return markdown ? markdown.innerText : lastMessage.innerText;
+                });
+
+                return response.substring(0, 400); // Truncate for token efficiency
+            }
+
+            return "Could not interact with ChatGPT";
+        } catch (e) {
+            console.error('❌ [AxAgent] Web search failed:', e.message);
+            return `Search error: ${e.message}`;
+        }
+    }
+
+    /**
+     * Execute an action recommended by LLM
+     */
+    async _executeAction(action, context) {
+        console.log(`🎬 [AxAgent] Executing action: ${action.type}`);
+
+        switch (action.type) {
+            case 'wait':
+                const duration = action.duration || 2000;
+                await this._wait(duration);
+                break;
+
+            case 'focus_app':
+                const appToFocus = action.appName || context.appName || 'Calculator';
+                await this._focusApp(appToFocus);
+                break;
+
+            case 'open_app':
+                const appToOpen = action.appName || context.appName || 'Calculator';
+                await this._openApp(appToOpen);
+                context.appName = appToOpen;
+                break;
+        }
+    }
+
+    async _wait(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async _focusApp(appName) {
+        return new Promise((resolve) => {
+            execFile('osascript', ['-e', `tell application "${appName}" to activate`], (err) => {
+                if (err) console.warn(`⚠️ [AxAgent] Could not focus ${appName}`);
+                setTimeout(resolve, 1000);
+            });
+        });
+    }
+
+    async _openApp(appName) {
+        return new Promise((resolve) => {
+            execFile('open', ['-a', appName], (err) => {
+                if (err) console.warn(`⚠️ [AxAgent] Could not open ${appName}`);
+                setTimeout(resolve, 2000);
+            });
+        });
+    }
+}
+
+module.exports = AxExtractionAgent;

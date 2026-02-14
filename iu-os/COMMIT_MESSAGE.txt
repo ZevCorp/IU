@@ -1,0 +1,103 @@
+# Git Commit Message
+
+## Title (feat):
+feat: implement native C++ AX extraction system for macOS app control
+
+## Body:
+
+Replaced osascript subprocess approach with native C++ addon to solve macOS 
+Accessibility permission issues. The addon calls macOS AX APIs directly from 
+the main IU.app process, eliminating permission denials.
+
+### What Changed:
+
+**Core Implementation:**
+- Created native/ax_extractor.mm: 522-line Objective-C++ addon
+- Calls AXUIElementCreateApplication, AXUIElementCopyAttributeValue directly
+- Traverses AX tree recursively, returns JSON with detected elements
+- Added binding.gyp for node-gyp compilation
+
+**Integration:**
+- Modified SimpleAxAgent.js to load native addon (with osascript fallback)
+- Updated package.json: auto-compile on npm install, include in build
+- Fixed history/graphs path to use userData (not __dirname in asar)
+
+**Cleanup:**
+- Fixed tool_choice error (only send when tools array present)
+- Deprecated captureScreenContext() in main.js (use ScreenAgent instead)
+- Removed obsolete ax-reader.sh and ax-reader-old.js
+
+**Documentation:**
+- Added NATIVE_AX_SYSTEM.md: comprehensive technical documentation
+- Added PROJECT_SUMMARY.md: executive summary and deliverables
+- Added test-native-ax.sh: automated testing script
+- Updated README.md: documented new Native AX System feature
+
+### Technical Details:
+
+**Files Created:**
+- native/ax_extractor.mm (522 lines)
+- binding.gyp (26 lines)
+- NATIVE_AX_SYSTEM.md (400+ lines)
+- PROJECT_SUMMARY.md (200+ lines)
+- test-native-ax.sh (120 lines)
+
+**Files Modified:**
+- SimpleAxAgent.js (60 lines changed)
+- main.js (25 lines changed)
+- ScreenAgent.js (5 lines changed)
+- package.json (8 lines changed)
+- README.md (8 lines added)
+
+**Files Removed:**
+- ax-reader.sh
+- ax-reader-old.js
+
+**Binary Generated:**
+- build/Release/ax_native.node (54KB)
+
+### Why This Matters:
+
+1. **Solves Permission Issue**: macOS TCC grants Accessibility permissions 
+   per-binary. Subprocesses don't inherit permissions. Native addon runs 
+   in IU.app process → has permissions ✅
+
+2. **Performance**: No subprocess spawning, direct API calls
+
+3. **Reliability**: Fewer failure points, better error handling
+
+4. **Maintainability**: All logic in one place, easier to debug
+
+### Testing:
+
+Manual test successful:
+```
+✅ [SimpleAxAgent] Using NATIVE addon (no osascript!)
+✅ [SimpleAxAgent] Success! Found 28 elements
+```
+
+Automated test script created and passing:
+```bash
+$ ./test-native-ax.sh
+✅ ALL TESTS PASSED!
+```
+
+Functional test: "abre calculator y suma 5 + 5 + 5" works correctly
+
+### Compatibility:
+
+- macOS 10.15+
+- Electron 28
+- Node.js 24
+- Requires Accessibility permissions (auto-requested)
+
+### Next Steps (Future Work):
+
+- Cache AX tree intelligently
+- Support for more AX attributes (state, values)
+- Cross-platform: Windows (UIA), Linux (AT-SPI)
+
+---
+
+Co-authored-by: Antigravity AI <dev@antigravity.ai>
+Signed-off-by: Felipe Maldonado <felipe@zevcorp.com>

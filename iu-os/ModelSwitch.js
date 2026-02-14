@@ -1,6 +1,6 @@
 /**
  * ModelSwitch.js
- * Switch fácil entre OpenAI (GPT-4.1-mini) y Google Gemini (2.5 Flash).
+ * Switch fácil entre OpenAI (GPT-5-mini) y Google Gemini (2.5 Flash).
  * 
  * Para cambiar de provider, modifica PROVIDER abajo o usa env var VISION_PROVIDER.
  * 
@@ -16,9 +16,9 @@
 // 
 // Ejemplos en .env:
 //    VISION_PROVIDER=openai
-//    VISION_MODEL=full      # gpt-4.1 (más preciso, más caro)
-//    VISION_MODEL=mini      # gpt-4.1-mini (balance)
-//    VISION_MODEL=nano      # gpt-4.1-nano (rápido, barato)
+//    VISION_MODEL=full      # gpt-5.2 (más preciso, más caro)
+//    VISION_MODEL=mini      # gpt-5-mini (balance)
+//    VISION_MODEL=nano      # gpt-5-nano (rápido, barato)
 // ============================================================
 const PROVIDER = process.env.VISION_PROVIDER || 'openai';
 const VISION_MODEL = process.env.VISION_MODEL || 'nano'; // nano | mini | full
@@ -42,9 +42,9 @@ function initGemini(apiKey) {
 // Modelos por provider
 // ============================================================
 const OPENAI_MODELS = {
-    nano: 'gpt-4.1-nano',
-    mini: 'gpt-4.1-mini',
-    full: 'gpt-4.1'
+    nano: 'gpt-5-mini',       // GPT-5 Mini (2025-08-07) - Fast, efficient
+    mini: 'gpt-5-mini',       // GPT-5 Mini (same)
+    full: 'gpt-5.2'           // GPT-5.2 - Most capable premium model
 };
 
 const MODELS = {
@@ -87,23 +87,32 @@ async function visionCompletion({ messages, tools, tool_choice, max_tokens }) {
 // OpenAI implementations (directo, ya funciona)
 // ============================================================
 async function _chatOpenAI({ messages, tools, tool_choice, max_tokens }) {
-    return _openai.chat.completions.create({
+    const options = {
         model: MODELS.openai.chat,
         messages,
         tools,
         tool_choice,
-        max_tokens
-    });
+        max_completion_tokens: max_tokens  // GPT-5 models require max_completion_tokens
+    };
+    if (tools && tools.length > 0) {
+        options.parallel_tool_calls = false;
+    }
+    console.log(`🤖 [ModelSwitch] Using OpenAI model: ${MODELS.openai.chat}`);
+    return _openai.chat.completions.create(options);
 }
 
 async function _visionOpenAI({ messages, tools, tool_choice, max_tokens }) {
-    return _openai.chat.completions.create({
+    const options = {
         model: MODELS.openai.vision,
         messages,
         tools,
         tool_choice,
-        max_tokens
-    });
+        max_completion_tokens: max_tokens  // GPT-5 models require max_completion_tokens
+    };
+    if (tools && tools.length > 0) {
+        options.parallel_tool_calls = false;
+    }
+    return _openai.chat.completions.create(options);
 }
 
 // ============================================================

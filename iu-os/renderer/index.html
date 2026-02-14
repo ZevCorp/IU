@@ -43,6 +43,12 @@
       <div id="intent-details" class="hidden"></div>
     </div>
 
+    <!-- Loading Overlay for Graph Extraction -->
+    <div id="loading-overlay" class="hidden">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Generando Grafo UI...</div>
+    </div>
+
     <!-- Face Container - EXACT structure from iü.space -->
     <div id="face-container">
       <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
@@ -82,8 +88,9 @@
 
     <!-- Chat Toggle Button (top-right) -->
     <button id="btn-chat-toggle" class="chat-toggle-btn" aria-label="Open chat">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     </button>
 
@@ -141,6 +148,9 @@
         <span id="sync-status-text">Not connected</span>
       </div>
     </div>
+
+    <!-- Compact Mode Popup -->
+    <div id="compact-popup">Ejecutando acción...</div>
   </div>
 
   <!-- Sync Modules -->
