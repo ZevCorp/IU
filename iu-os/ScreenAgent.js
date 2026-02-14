@@ -326,30 +326,10 @@ Recibirás una lista de elementos UI.
 - Si la fuente es 'AX_ACCESSIBILITY', los IDs y coordenadas son EXACTOS (Ground Truth). Confía plenamente en ellos.
 - Si la fuente es 'VISION' (YOLO), los elementos son aproximados.
 
-REGLAS CRÍTICAS - LEE CUIDADOSAMENTE:
-
-1. IDENTIFICAR ELEMENTOS CLICKEABLES VS CONTENIDO:
-   - "Button: X" = BOTÓNClickeableACTION ✓
-   - "Text: X" = TEXTO ESTÁTICO (fechas, números, datos) - NO CLICKEAR ✗
-   - Labels con prefijo "Text:" son CONTENIDO, no interfaz
-   - Calendario: fechas (1,2,3...) son "Text:", NO son botones para crear eventos
-
-2. EVITAR LOOPS INFINITOS:
-   - Si NO encuentras botones de acción (Button: +, Button: Nuevo, etc), USA TECLAS
-   - Teclas útiles: "escape" para cerrar, "tab" para navegar
-   - NO hagas click repetidamente en elementos "Text:" esperando que hagan algo
-   - Si los elementos no cambian después de 2 clics, CAMBIA DE ESTRATEGIA
-
-3. ESTRATEGIA PARA CREAR EVENTOS/RECORDATORIOS:
-   - Busca "Button: +" o "Button: Nuevo" PRIMERO
-   - Si no existe, usa key_press({"key": "Cmd+N"}) o similar
-   - NO clickees fechas del calendario para crear eventos
-
 ACCIONES:
 1. select_element(#id): Click exacto en el elemento.
 2. type_text("texto"): Escribir en el foco actual.
-3. key_press({"key": "..."}) : Presionar teclas para navegar/crear
-4. goal_reached({"summary": "..."}): Cuando completes el objetivo
+3. need_visual_inspection(reason): Si no ves lo que buscas en la lista.
 
 Prioriza siempre select_element sobre inspección visual si el elemento está en la lista.`
                 }
@@ -446,9 +426,6 @@ ${elementsText}${historyHint}${loopWarning}
                 });
 
                 console.log(`📤 [ScreenAgent] Sending to LLM: ${elements.length} elements, tool_choice=required`);
-                if (loopWarning) {
-                    console.log(`🔴 [ScreenAgent] Loop warning INCLUDED in prompt`);
-                }
                 console.log(`📋 [ScreenAgent] Tools available: ${SOM_TOOLS.map(t => t.function.name).join(', ')}`);
 
                 const somResponse = await this._retryWithBackoff(() => ModelSwitch.chatCompletion({
