@@ -106,10 +106,37 @@ void TraverseElement(AXUIElementRef element, NSMutableArray *results, int depth,
 
       (*elementId)++;
 
+      // Enhance label with role prefix for better LLM understanding
+      // This helps distinguish between "Button: 7" vs "7" (static text/date)
+      NSString *enhancedLabel = label ?: @"";
+      if (label && label.length > 0) {
+        // Only add prefix if label is very short/generic (likely ambiguous)
+        if (label.length <= 3) {
+          // Extract short role name for prefix
+          NSString *rolePrefix = @"";
+          if ([role isEqualToString:@"AXButton"]) {
+            rolePrefix = @"Button";
+          } else if ([role isEqualToString:@"AXStaticText"]) {
+            rolePrefix = @"Text";
+          } else if ([role isEqualToString:@"AXPopUpButton"]) {
+            rolePrefix = @"Menu";
+          } else if ([role isEqualToString:@"AXMenuItem"]) {
+            rolePrefix = @"Item";
+          } else if ([role isEqualToString:@"AXTab"]) {
+            rolePrefix = @"Tab";
+          }
+
+          if (rolePrefix.length > 0) {
+            enhancedLabel =
+                [NSString stringWithFormat:@"%@: %@", rolePrefix, label];
+          }
+        }
+      }
+
       NSDictionary *item = @{
         @"id" : [NSString stringWithFormat:@"%d", *elementId],
         @"type" : type,
-        @"label" : label ?: @"",
+        @"label" : enhancedLabel,
         @"bbox" : @{@"x" : @(x), @"y" : @(y), @"w" : @(w), @"h" : @(h)},
         @"confidence" : @1.0
       };

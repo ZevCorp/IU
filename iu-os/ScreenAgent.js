@@ -337,6 +337,11 @@ Prioriza siempre select_element sobre inspección visual si el elemento está en
 
             let historyHint = '';
 
+            // Loop detection: track element state changes
+            let lastElementsHash = null;
+            let sameStateCount = 0;
+            const LOOP_THRESHOLD = 3; // 3 clicks without progress = loop
+
             while (iteration < this.maxIterations && !goalReached) {
                 iteration++;
                 console.log(`🔄 [ScreenAgent] Iteration ${iteration}`);
@@ -372,6 +377,36 @@ Prioriza siempre select_element sobre inspección visual si el elemento está en
                 }
 
                 const elements = detectionResult?.elements || [];
+
+                // 3. Loop detection: check if elements haven't changed
+                const currentHash = this._hashElements(elements);
+                let loopWarning = '';
+
+                if (currentHash === lastElementsHash) {
+                    sameStateCount++;
+                    console.log(`⚠️ [ScreenAgent] Same state detected: ${sameStateCount}/${LOOP_THRESHOLD}`);
+
+                    if (sameStateCount >= LOOP_THRESHOLD) {
+                        loopWarning = `\n\n🔴 ADVERTENCIA CRÍTICA: No se detecta progreso en las últimas ${LOOP_THRESHOLD} iteraciones.
+Los elementos en pantalla NO HAN CAMBIADO. Estás probablemente en un LOOP INFINITO.
+
+Posibles causas:
+- Estás clickeando contenido estático (fechas, números, texto) en vez de botones de acción
+- El botón que buscas NO está en la lista de elementos detectados
+- Necesitas usar otra estrategia: teclas (ESC para cerrar, Tab para navegar), o buscar "+", "Nuevo", "Crear"
+
+ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los mismos elementos.`;
+
+                        console.warn(`🔴 [ScreenAgent] LOOP DETECTED! Same state for ${sameStateCount} iterations`);
+                    }
+                } else {
+                    if (sameStateCount > 0) {
+                        console.log(`✅ [ScreenAgent] State changed! Loop counter reset.`);
+                    }
+                    sameStateCount = 0;
+                }
+                lastElementsHash = currentHash;
+
                 // ... continue to LLM logic using 'elements' ...
 
                 // 5. Format elements list for LLM
@@ -385,7 +420,7 @@ Prioriza siempre select_element sobre inspección visual si el elemento está en
                     content: `Iteración ${iteration}/${this.maxIterations}. Objetivo: "${goal}"
 
 Elementos UI detectados en pantalla (${elements.length} total) [Fuente: ${detectionResult.source || 'VISION'}]:
-${elementsText}${historyHint}
+${elementsText}${historyHint}${loopWarning}
 
 ¿Qué acción ejecutar?`
                 });
@@ -1029,6 +1064,29 @@ CONTEXTO DE VENTANAS:
      */
     _wait(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Create a simple hash of elements list for loop detection.
+     * Compares IDs, labels, and types to detect if screen state changed.
+     */
+    _hashElements(elements) {
+        if (!elements || elements.length === 0) return 'empty';
+
+        // Create a simple hash from element properties
+        const signature = elements
+            .map(e => `${e.id}:${e.label}:${e.type}`)
+            .sort()
+            .join('|');
+
+        // Simple string hash (similar to Java's hashCode)
+        let hash = 0;
+        for (let i = 0; i < signature.length; i++) {
+            const char = signature.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return hash.toString();
     }
 
     /**
