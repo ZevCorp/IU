@@ -34,7 +34,7 @@ NSString *GetStringAttribute(AXUIElementRef element, CFStringRef attribute) {
 // Helper: Traverse AX tree and collect elements
 void TraverseElement(AXUIElementRef element, NSMutableArray *results, int depth,
                      int *elementId, CGFloat screenW, CGFloat screenH) {
-  if (depth > 15 || *elementId >= 40)
+  if (depth > 50 || *elementId >= 1000)
     return;
 
   @autoreleasepool {
@@ -46,7 +46,9 @@ void TraverseElement(AXUIElementRef element, NSMutableArray *results, int depth,
     // Target roles
     NSArray *targetRoles = @[
       @"AXButton", @"AXLink", @"AXTextField", @"AXTextArea", @"AXStaticText",
-      @"AXMenuItem", @"AXPopUpButton", @"AXCheckBox", @"AXRadioButton", @"AXTab"
+      @"AXMenuItem", @"AXPopUpButton", @"AXCheckBox", @"AXRadioButton",
+      @"AXTab", @"AXImage", @"AXScrollArea", @"AXSlider", @"AXToolbar",
+      @"AXGroup"
     ];
 
     if ([targetRoles containsObject:role]) {
@@ -102,6 +104,16 @@ void TraverseElement(AXUIElementRef element, NSMutableArray *results, int depth,
       } else if ([role isEqualToString:@"AXCheckBox"] ||
                  [role isEqualToString:@"AXRadioButton"]) {
         type = @"checkbox";
+      } else if ([role isEqualToString:@"AXImage"]) {
+        type = @"image";
+      } else if ([role isEqualToString:@"AXScrollArea"]) {
+        type = @"scroll";
+      } else if ([role isEqualToString:@"AXSlider"]) {
+        type = @"slider";
+      } else if ([role isEqualToString:@"AXToolbar"]) {
+        type = @"toolbar";
+      } else if ([role isEqualToString:@"AXGroup"]) {
+        type = @"group";
       }
 
       (*elementId)++;
@@ -151,7 +163,7 @@ void TraverseElement(AXUIElementRef element, NSMutableArray *results, int depth,
       if (childrenRef && CFGetTypeID(childrenRef) == CFArrayGetTypeID()) {
         NSArray *children = (__bridge_transfer NSArray *)childrenRef;
         for (id child in children) {
-          if (*elementId >= 40)
+          if (*elementId >= 1000)
             break;
           TraverseElement((__bridge AXUIElementRef)child, results, depth + 1,
                           elementId, screenW, screenH);
