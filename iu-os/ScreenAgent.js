@@ -17,6 +17,7 @@ const sharp = require('sharp');
 const { execFile } = require('child_process');
 const ModelSwitch = require('./ModelSwitch');
 const PersistentMemory = require('./PersistentMemory');
+const GraphFormalizer = require('./GraphFormalizer');
 
 // Path to Python venv and YOLO detection script
 const YOLO_PYTHON = path.join(__dirname, 'yolo_venv', 'bin', 'python3');
@@ -419,43 +420,12 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                     }
                 }
 
-                // Optimization: Filter elements if too many (Token Saving)
+                // Optimization: Use GraphFormalizer for Semantic Zoom (LLM-friendly Graph)
                 let llmElements = elements;
-                if (elements.length > 200) {
-                    console.log(`🧹 [ScreenAgent] Optimizing ${elements.length} elements for LLM context...`);
-
-                    // Priority 1: High-value interactive elements
-                    const highValue = elements.filter(e =>
-                        ['button', 'input', 'menu', 'link', 'checkbox', 'radio', 'tab', 'slider', 'scroll', 'toolbar'].includes(e.type)
-                    );
-
-                    // Priority 2: Images that look like icons (small) or have labels
-                    const iconImages = elements.filter(e =>
-                        e.type === 'image' && (e.label || (e.bbox.w < 0.1 && e.bbox.h < 0.1))
-                    );
-
-                    // Priority 3: Text with semantic keywords
-                    const keywords = /add|new|create|back|next|cancel|ok|save|search|menu|settings|options|edit|delete|today|day|week|month|year/i;
-                    const semanticText = elements.filter(e =>
-                        (e.type === 'text' || e.type === 'statictext') && (e.label && e.label.match(keywords))
-                    );
-
-                    // Priority 4: Structural containers (groups) - limit regular text
-                    // We take a sample of text to provide context (e.g. current date) but not all 40 numbers
-                    const contextText = elements.filter(e =>
-                        (e.type === 'text' || e.type === 'statictext') && !e.label.match(keywords)
-                    ).slice(0, 20); // Limit context text to 20 items
-
-                    // Combine and deduplicate
-                    const combined = [...highValue, ...iconImages, ...semanticText, ...contextText];
-                    const uniqueIds = new Set();
-                    llmElements = combined.filter(e => {
-                        if (uniqueIds.has(e.id)) return false;
-                        uniqueIds.add(e.id);
-                        return true;
-                    });
-
-                    console.log(`📉 [ScreenAgent] Reduced to ${llmElements.length} relevant elements`);
+                if (elements.length > 0) {
+                    console.log(`🧠 [ScreenAgent] Formalizing graph with ${elements.length} raw nodes...`);
+                    llmElements = GraphFormalizer.optimize(elements);
+                    console.log(`📉 [ScreenAgent] Graph formalized: ${elements.length} -> ${llmElements.length} meaningful nodes`);
                 }
 
                 // 5. Format elements list for LLM
