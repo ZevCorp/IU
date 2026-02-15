@@ -25,11 +25,11 @@ class ActionPlanner {
                             },
                             app: {
                                 type: "string",
-                                description: "The application to open or interact with. E.g. 'WhatsApp', 'Safari', 'Spotify', 'Notes'"
+                                description: "The INITIAL application to open. If multiple apps are needed, specify the FIRST one here."
                             },
                             steps_hint: {
                                 type: "string",
-                                description: "High-level hint of steps needed. E.g. 'Open WhatsApp, find María, hold mic button, record, release to send'"
+                                description: "High-level hint of steps needed. Can include switching apps (e.g. 'Open Notes, copy text, switch to Mail, paste')."
                             }
                         },
                         required: ["goal", "app", "steps_hint"]
@@ -56,6 +56,8 @@ class ActionPlanner {
                         content: `Eres U, un asistente digital silencioso. Recibes lo que el usuario dice explícitamente.
 Si detectas que quiere ejecutar algo en su computador, piensa en qué app abrir y qué pasos seguir para completar la tarea.
 Llama la función execute_screen_action con esa información.
+Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa SOLO la primera app en 'app' y describe el cambio en 'steps_hint'.
+IMPORTANTE: El campo 'app' debe ser UN SOLO nombre de aplicación (ej: "Calculadora"). NUNCA uses "Calculadora y Notas" o listas.
 Si el usuario NO está pidiendo una acción ejecutable en pantalla (solo conversa, pregunta algo, etc.), NO llames ninguna función.
 Responde en español.`
                     },
@@ -121,10 +123,25 @@ Responde en español.`
             const call = message.tool_calls[0];
             if (call.function.name === 'execute_screen_action') {
                 const args = JSON.parse(call.function.arguments);
-                console.log('🎯 [Planner] Action planned:', JSON.stringify(args, null, 2));
+
+                // SANITIZATION: Ensure 'app' is a single application name
+                let cleanApp = args.app;
+                if (cleanApp) {
+                    // Split by common separators used by LLMs when hallucinating lists
+                    const separators = [' y ', ' Y ', ' and ', ' AND ', ',', ' y,', ' and,'];
+                    for (const sep of separators) {
+                        if (cleanApp.includes(sep)) {
+                            cleanApp = cleanApp.split(sep)[0].trim();
+                        }
+                    }
+                }
+
+                console.log(`🎯 [Planner] Action planned (raw): ${args.app} -> (sanitized): ${cleanApp}`);
+                console.log(JSON.stringify(args, null, 2));
+
                 return {
                     goal: args.goal,
-                    app: args.app,
+                    app: cleanApp, // Return the sanitized single app name
                     stepsHint: args.steps_hint
                 };
             }

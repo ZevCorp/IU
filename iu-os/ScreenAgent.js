@@ -94,6 +94,92 @@ const SOM_TOOLS = [
     {
         type: "function",
         function: {
+            name: "perform_set_of_actions",
+            description: "Execute a sequence of actions in order (batch execution). Use this when you are confident about multiple steps (e.g. typing then pressing enter, or clicking multiple known buttons like a calculator). This is MUCH faster than doing one action at a time.",
+            parameters: {
+                type: "object",
+                properties: {
+                    actions: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            properties: {
+                                action: { type: "string", enum: ["click", "type", "key"], description: "Type of action to perform" },
+                                element_id: { type: "number", description: "If action=click, the ID of the element" },
+                                text: { type: "string", description: "If action=type, the text to type" },
+                                key: { type: "string", description: "If action=key, the key to press" },
+                                reasoning: { type: "string", description: "Why this action is needed" }
+                            },
+                            required: ["action", "reasoning"]
+                        }
+                    },
+                    reasoning: { type: "string", description: "Reason for the entire batch" }
+                },
+                required: ["actions", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "switch_app",
+            description: "Switch focus to a different application or open it if closed. Use this when the goal requires interacting with multiple apps (e.g. copying from Notes to Calendar).",
+            parameters: {
+                type: "object",
+                properties: {
+                    app_name: { type: "string", description: "Name of the app to switch to (e.g. 'Calculator', 'Notes', 'Calendar')" },
+                    reasoning: { type: "string", description: "Why switching apps helps achieve the goal" }
+                },
+                required: ["app_name", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "perform_set_of_actions",
+            description: "Execute a sequence of actions in order (batch execution). Use this when you are confident about multiple steps (e.g. typing then pressing enter, or clicking multiple known buttons like a calculator). This is MUCH faster than doing one action at a time.",
+            parameters: {
+                type: "object",
+                properties: {
+                    actions: {
+                        type: "array",
+                        items: {
+                            type: "object",
+                            properties: {
+                                action: { type: "string", enum: ["click", "type", "key"], description: "Type of action to perform" },
+                                element_id: { type: "number", description: "If action=click, the ID of the element" },
+                                text: { type: "string", description: "If action=type, the text to type" },
+                                key: { type: "string", description: "If action=key, the key to press" },
+                                reasoning: { type: "string", description: "Why this action is needed" }
+                            },
+                            required: ["action", "reasoning"]
+                        }
+                    },
+                    reasoning: { type: "string", description: "Reason for the entire batch" }
+                },
+                required: ["actions", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "switch_app",
+            description: "Switch focus to a different application or open it if closed. Use this when the goal requires interacting with multiple apps (e.g. copying from Notes to Calendar).",
+            parameters: {
+                type: "object",
+                properties: {
+                    app_name: { type: "string", description: "Name of the app to switch to (e.g. 'Calculator', 'Notes', 'Calendar')" },
+                    reasoning: { type: "string", description: "Why switching apps helps achieve the goal" }
+                },
+                required: ["app_name", "reasoning"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
             name: "goal_reached",
             description: "Call this when the objective has been fully completed based on the detected elements and previous actions.",
             parameters: {
@@ -298,6 +384,7 @@ class ScreenAgent {
         }
 
         this.isRunning = true;
+        this.currentApp = app; // Track current app context
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
 
         this._notify('action-status', { phase: 'starting', goal, app });
@@ -320,20 +407,30 @@ class ScreenAgent {
                     role: "system",
                     content: `Eres un agente de automatización.
 OBJETIVO: "${goal}"
-APP: "${app}"
-PASOS: "${stepsHint}"
+APP INICIAL: "${app}"
+PASOS SUGERIDOS: "${stepsHint}"
 
 MODO HÍBRIDO (AX + Vision):
 Recibirás una lista de elementos UI.
 - Si la fuente es 'AX_ACCESSIBILITY', los IDs y coordenadas son EXACTOS (Ground Truth). Confía plenamente en ellos.
 - Si la fuente es 'VISION' (YOLO), los elementos son aproximados.
 
-ACCIONES:
-1. select_element(#id): Click exacto en el elemento.
-2. type_text("texto"): Escribir en el foco actual.
-3. need_visual_inspection(reason): Si no ves lo que buscas en la lista.
+ACCIONES DISPONIBLES (ordenadas por preferencia):
+1. perform_set_of_actions([...]): EJECUTA UNA SECUENCIA. Úsalo siempre para acciones múltiples (ej: marcar dígitos, navegar menús). ES MUCHO MÁS RÁPIDO.
+2. switch_app("NombreApp"): Cambia de aplicación. Úsalo si el objetivo requiere otra app.
+3. select_element(#id): Click simple (paso a paso).
+4. type_text("texto"): Escribir.
+5. key_press("tecla"): Pulsar tecla especial (enter, escape, etc).
+6. need_visual_inspection(reason): Fallback visual.
 
-Prioriza siempre select_element sobre inspección visual si el elemento está en la lista.`
+Prioriza siempre select_element (o perform_set_of_actions) sobre inspección visual.
+
+IMPORTANTE SOBRE MULTI-APP:
+Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa 'switch_app' cuando termines con la primera.
+
+IMPORTANTE SOBRE VELOCIDAD:
+¡USA 'perform_set_of_actions' SIEMPRE QUE SEA SEGURO! 
+Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No hagas uno por uno.`
                 }
             ];
 
@@ -362,7 +459,7 @@ Prioriza siempre select_element sobre inspección visual si el elemento está en
                 // Retry AX a few times if it fails
                 let detectionResult = null;
                 for (let i = 0; i < 3; i++) {
-                    detectionResult = await this._runAxDetection(app);
+                    detectionResult = await this._runAxDetection(this.currentApp); // Use currentApp dynamic context
                     if (detectionResult && detectionResult.elements.length > 0) break;
                     console.log(`⏳ [ScreenAgent] AX Retry ${i + 1}/3...`);
                     await this._wait(1500);
@@ -462,108 +559,154 @@ ${elementsText}${historyHint}${loopWarning}
                 }));
 
                 const somChoice = somResponse.choices[0];
-                const somToolCall = somChoice.message.tool_calls?.[0];
+                const toolCalls = somChoice.message.tool_calls;
 
-                if (!somToolCall) {
+                if (!toolCalls || toolCalls.length === 0) {
                     console.warn('⚠️ [ScreenAgent] No tool call returned from SoM');
                     break;
                 }
 
                 somMessages.push(somChoice.message);
 
-                const fnName = somToolCall.function.name;
-                const args = JSON.parse(somToolCall.function.arguments);
-                console.log(`🎯 [ScreenAgent] SoM decision: ${fnName}: ${JSON.stringify(args)}`);
+                // Iterate over all tool calls (BATCH EXECUTION)
+                for (let i = 0; i < toolCalls.length; i++) {
+                    const toolCall = toolCalls[i];
+                    const fnName = toolCall.function.name;
+                    const args = JSON.parse(toolCall.function.arguments);
 
-                somMessages.push({
-                    role: "tool",
-                    tool_call_id: somToolCall.id,
-                    content: "OK",
-                    _functionName: fnName
-                });
+                    console.log(`🎯 [ScreenAgent] SoM decision (${i + 1}/${toolCalls.length}): ${fnName}: ${JSON.stringify(args)}`);
 
-                // Handle goal_reached
-                if (fnName === 'goal_reached') {
-                    goalReached = true;
-                    console.log(`✅ [ScreenAgent] Goal reached: ${args.summary}`);
-                    this._notify('action-status', { phase: 'completed', goal });
-                    break;
-                }
-
-                // DISABLED: Visual inspection fallback (saves tokens)
-                /*
-                if (fnName === 'need_visual_inspection') {
-                    console.log(`👁️ [ScreenAgent] Visual inspection requested: ${args.reason}`);
-                    const visualResult = await this._visualFallbackIteration(
-                        screenshotPath, goal, app, stepsHint, actionHistory, iteration
-                    );
-                    if (visualResult.goalReached) {
+                    // Handle goal_reached
+                    if (fnName === 'goal_reached') {
                         goalReached = true;
+                        console.log(`✅ [ScreenAgent] Goal reached: ${args.summary}`);
+                        this._notify('action-status', { phase: 'completed', goal });
+
+                        // Push result and break inner loop
+                        somMessages.push({
+                            role: "tool",
+                            tool_call_id: toolCall.id,
+                            content: "OK",
+                            _functionName: fnName
+                        });
                         break;
                     }
-                    if (visualResult.summary) {
-                        actionHistory.push({ iteration, summary: `[VISUAL] ${visualResult.summary}` });
-                        somMessages.push({
-                            role: "user",
-                            content: `[Resultado de inspección visual]: Se ejecutó: ${visualResult.summary}`
-                        });
-                    }
-                    await this._wait(1000);
-                    this._trimSomMessages(somMessages);
-                    // try { fs.unlinkSync(screenshotPath); } catch (e) { }
-                    continue;
-                }
-                */
 
-                // Handle select_element — deterministic click
-                if (fnName === 'select_element') {
-                    const targetElement = elements.find(e => e.id == args.element_id);
-                    if (!targetElement) {
-                        console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
-                        actionHistory.push({ iteration, summary: `SELECT #${args.element_id} — NOT FOUND` });
+                    // Handle actions
+                    let actionSummary = '';
+
+                    if (fnName === 'select_element') {
+                        const targetElement = elements.find(e => e.id == args.element_id);
+                        if (!targetElement) {
+                            console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
+                            actionSummary = `SELECT #${args.element_id} — NOT FOUND`;
+                        } else {
+                            let px, py;
+                            if (targetElement.center) {
+                                px = targetElement.center.x;
+                                py = targetElement.center.y;
+                            } else if (targetElement.bbox) {
+                                px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
+                                py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
+                            }
+
+                            if (px < 1 && py < 1) {
+                                px = Math.round(px * this.screenWidth);
+                                py = Math.round(py * this.screenHeight);
+                            }
+
+                            const label = `${targetElement.label || targetElement.type} #${targetElement.id}`;
+                            console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
+
+                            await this._executeToolDirect('click', { px, py, label });
+                            actionSummary = `SELECT #${targetElement.id} [${label}]`;
+                        }
+                    }
+                    else if (fnName === 'type_text') {
+                        await this._executeTool('type_text', args);
+                        actionSummary = `TYPE "${args.text}"`;
+                    }
+                    else if (fnName === 'key_press') {
+                        await this._executeTool('key_press', args);
+                        actionSummary = `KEY ${args.key}`;
+                    }
+                    else if (fnName === 'switch_app') {
+                        console.log(`🔄 [ScreenAgent] Switching app to: "${args.app_name}"`);
+                        try {
+                            // Use existing _openApp method
+                            await this._openApp(args.app_name);
+                            await this._wait(2000); // Wait for app to open/focus
+
+                            this.currentApp = args.app_name; // Update context
+                            actionSummary = `SWITCH APP to "${args.app_name}"`;
+
+                            lastElementsHash = null;
+                            sameStateCount = 0;
+                        } catch (e) {
+                            console.error(`❌ [ScreenAgent] Failed to switch app: ${e.message}`);
+                            actionSummary = `SWITCH APP FAILED: ${e.message}`;
+                        }
+                    }
+                    else if (fnName === 'perform_set_of_actions') {
+                        const subActions = args.actions;
+                        console.log(`📦 [ScreenAgent] Batch executing ${subActions.length} actions...`);
+
+                        for (let j = 0; j < subActions.length; j++) {
+                            const sub = subActions[j];
+                            const stepStr = `Step ${j + 1}/${subActions.length}`;
+
+                            if (sub.action === 'click') {
+                                const targetElement = elements.find(e => e.id == sub.element_id);
+                                if (!targetElement) {
+                                    console.warn(`⚠️ [ScreenAgent] ${stepStr}: Element #${sub.element_id} not found`);
+                                    continue;
+                                }
+
+                                let px, py;
+                                if (targetElement.center) {
+                                    px = targetElement.center.x;
+                                    py = targetElement.center.y;
+                                } else if (targetElement.bbox) {
+                                    px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
+                                    py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
+                                }
+                                if (px < 1 && py < 1) { px = Math.round(px * this.screenWidth); py = Math.round(py * this.screenHeight); }
+
+                                await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` });
+                                await this._wait(600); // Slightly faster in batch
+                            }
+                            else if (sub.action === 'type') {
+                                await this._executeTool('type_text', { text: sub.text });
+                                await this._wait(300);
+                            }
+                            else if (sub.action === 'key') {
+                                await this._executeTool('key_press', { key: sub.key });
+                                await this._wait(300);
+                            }
+                        }
+                        actionSummary = `BATCH: Executed ${subActions.length} actions (${args.reasoning})`;
+                    }
+
+                    if (actionSummary) {
+                        actionHistory.push({ iteration, summary: actionSummary });
+                        this._notify('action-status', { phase: 'acting', action: actionSummary });
+                    }
+
+                    somMessages.push({
+                        role: "tool",
+                        tool_call_id: toolCall.id,
+                        content: actionSummary || "OK",
+                        _functionName: fnName
+                    });
+
+                    // Wait between batched actions
+                    if (i < toolCalls.length - 1) {
+                        await this._wait(500);
                     } else {
-                        // AX elements usually have 'center' pre-calculated
-                        let px, py;
-                        if (targetElement.center) {
-                            px = targetElement.center.x;
-                            py = targetElement.center.y;
-                        } else if (targetElement.bbox) {
-                            px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
-                            py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
-                        }
-
-                        // Denormalize if normalized
-                        if (px < 1 && py < 1) {
-                            px = Math.round(px * this.screenWidth);
-                            py = Math.round(py * this.screenHeight);
-                        }
-
-                        const label = `${targetElement.label || targetElement.type} #${targetElement.id}`;
-                        console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
-
-                        /*
-                        await this._saveDebugScreenshot(
-                            fs.readFileSync(screenshotPath).toString('base64'),
-                            { x: px, y: py, label }, iteration
-                        );
-                        */
-                        await this._executeToolDirect('click', { px, py, label });
-                        actionHistory.push({ iteration, summary: `SELECT #${targetElement.id} [${label}]` });
+                        await this._wait(1000);
                     }
                 }
-                // Handle type_text
-                else if (fnName === 'type_text') {
-                    await this._executeTool('type_text', args);
-                    actionHistory.push({ iteration, summary: `TYPE "${args.text}"` });
-                }
-                // Handle key_press
-                else if (fnName === 'key_press') {
-                    await this._executeTool('key_press', args);
-                    actionHistory.push({ iteration, summary: `KEY ${args.key}` });
-                }
 
-                this._notify('action-status', { phase: 'acting', action: actionHistory[actionHistory.length - 1]?.summary });
-                await this._wait(fnName === 'select_element' ? 1000 : 800);
                 this._trimSomMessages(somMessages);
                 if (screenshotPath) {
                     try { fs.unlinkSync(screenshotPath); } catch (e) { }
@@ -856,19 +999,43 @@ CONTEXTO DE VENTANAS:
                 'Recordatorios': 'Reminders',
                 'Mail': 'Mail',
                 'Mensajes': 'Messages',
-                'FaceTime': 'FaceTime'
+                'FaceTime': 'FaceTime',
+                'Safari': 'Safari',
+                'Chrome': 'Google Chrome',
+                'Buscador': 'Finder',
+                'Terminal': 'Terminal'
             };
 
             // Normalize app name
             const normalizedApp = appMappings[appName] || appName;
 
-            const cmd = `open -a "${normalizedApp}"`;
-            console.log(`📱 [ScreenAgent] Opening app: ${cmd}`);
-            exec(cmd, (err) => {
+            // Strategy: Open first heavily, then activate specifically
+            // 1. 'open -a' (Launches or brings forward usually)
+            const cmdOpen = `open -a "${normalizedApp}"`;
+
+            // 2. 'osascript activate' (Forces focus if already running)
+            const cmdActivate = `osascript -e 'tell application "${normalizedApp}" to activate'`;
+
+            console.log(`📱 [ScreenAgent] Opening & Forcing Focus: "${normalizedApp}"`);
+
+            exec(cmdOpen, (err) => {
                 if (err) {
-                    console.warn(`⚠️ [ScreenAgent] Could not open "${normalizedApp}":`, err.message);
+                    console.warn(`⚠️ [ScreenAgent] 'open' command failed for "${normalizedApp}":`, err.message);
                 }
-                resolve();
+
+                // Wait briefly then force activate via AppleScript
+                setTimeout(() => {
+                    exec(cmdActivate, (err2) => {
+                        if (err2) {
+                            console.warn(`⚠️ [ScreenAgent] 'activate' script failed for "${normalizedApp}":`, err2.message);
+                        } else {
+                            console.log(`👆 [ScreenAgent] Activated "${normalizedApp}" via AppleScript`);
+                        }
+
+                        // Final delay to ensure UI animation completes
+                        setTimeout(resolve, 1000);
+                    });
+                }, 500);
             });
         });
     }
