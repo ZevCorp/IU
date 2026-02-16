@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>U Face Native</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: transparent;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #face-container {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="face-container"></div>
+
+    <script type="module">
+        import UFace from './face/index.js';
+
+        const container = document.getElementById('face-container');
+        window.uFace = new UFace(container);
+
+        // Expose control methods to global scope for Swift to call
+        window.setExpression = (state) => {
+            if (window.uFace) {
+                window.uFace.setExpression(state);
+            }
+        };
+
+        window.lookAt = (x, y) => {
+            if (window.uFace) {
+                window.uFace.lookAt(x, y);
+            }
+        };
+
+        // Initialize with idle state
+        window.setExpression('idle');
+    </script>
+</body>
+
+</html>

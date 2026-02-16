@@ -1,6 +1,7 @@
 
 import Cocoa
 import Foundation
+import WebKit
 
 // Application Delegate
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -10,9 +11,41 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Parse args
         let args = ProcessInfo.processInfo.arguments
         let mode = args.count > 1 ? args[1] : "cursor"
+        
+        // Determine HTML path
+        // Priority: 
+        // 1. Passed as argument 2
+        // 2. Relative to executable (../renderer/face-standalone.html in dev)
+        // 3. Fallback
+        
+        var htmlPath = ""
+        if args.count > 2 {
+            htmlPath = args[2]
+        } else {
+            // Assume dev environment default: PROJECT_ROOT/dist/GlassWindowApp -> ../renderer/face-standalone.html
+            // Or packed app: Contents/Resources/renderer/face-standalone.html
+            
+            let bundlePath = Bundle.main.bundlePath
+            // Check for Resources folder (packaged app)
+            let resourcesPath = Bundle.main.resourcePath ?? ""
+            let packedPath = (resourcesPath as NSString).appendingPathComponent("renderer/face-standalone.html")
+            
+            // Check for Dev path (assuming binary is in dist/)
+            // We need to go up from dist/GlassWindowApp -> root -> renderer/face-standalone.html
+            let currentDirectory = FileManager.default.currentDirectoryPath
+            let devPath = (currentDirectory as NSString).strings(byAppendingPaths: ["../renderer/face-standalone.html"]).first!
+            
+            if FileManager.default.fileExists(atPath: packedPath) {
+                htmlPath = packedPath
+            } else {
+                htmlPath = devPath
+            }
+        }
+        
+        print("🔮 Loading Face from: \(htmlPath)")
 
         // Create Window (Hidden by default)
-        window = GlassWindow(mode: mode)
+        window = GlassWindow(mode: mode, htmlPath: htmlPath)
         
         // Start Input Loop
         startStandardInputReader()

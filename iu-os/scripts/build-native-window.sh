@@ -19,9 +19,11 @@ mkdir -p "$DIST_DIR"
 # Compile
 # -O: Optimization
 # -target: macOS target
-swiftc "$SOURCE_DIR/main.swift" "$SOURCE_DIR/GlassWindow.swift" "$SOURCE_DIR/GlassFace.swift" \
+swiftc "$SOURCE_DIR/main.swift" "$SOURCE_DIR/GlassWindow.swift" \
     -o "$DIST_DIR/GlassWindowApp" \
     -target x86_64-apple-macosx10.15 \
+    -framework Cocoa \
+    -framework WebKit \
     -O
 
 if [ $? -eq 0 ]; then

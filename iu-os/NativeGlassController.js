@@ -24,7 +24,11 @@ class NativeGlassController {
         console.log(`🔮 Launching Native Glass Window: ${this.binaryPath}`);
 
         try {
-            this.process = spawn(this.binaryPath, [], {
+            const htmlPath = app.isPackaged
+                ? path.join(process.resourcesPath, 'renderer', 'face-standalone.html')
+                : path.join(__dirname, 'renderer', 'face-standalone.html');
+
+            this.process = spawn(this.binaryPath, ['cursor', htmlPath], {
                 stdio: ['pipe', 'inherit', 'inherit'] // pipe stdin, inherit stdout/stderr for debug
             });
 
