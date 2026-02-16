@@ -43,7 +43,7 @@ class NativeGlassController {
             });
 
             // Keep it ready but hidden
-            this.hide();
+            // this.hide(); // 🟢 TEST: Keep visible
 
         } catch (e) {
             console.error('🔮 Failed to spawn Native Glass Window:', e);

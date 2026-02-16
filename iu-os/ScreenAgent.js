@@ -18,6 +18,7 @@ const { execFile } = require('child_process');
 const ModelSwitch = require('./ModelSwitch');
 const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
+const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window
 
 // Path to Python venv and YOLO detection script
 const YOLO_PYTHON = path.join(__dirname, 'yolo_venv', 'bin', 'python3');
@@ -271,6 +272,7 @@ class ScreenAgent {
         this.debugDir = path.join(require('os').homedir(), 'u_debug');
         this.screenWidth = 0;
         this.screenHeight = 0;
+        this.currentBubblePos = null; // Track bubble position for "drag & drop" focus strategy
 
         // Use simple deterministic agent (fast and reliable)
         // For complex future scenarios, see AxExtractionAgent.js.future
@@ -469,6 +471,16 @@ Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No ha
                     console.log(`✅ [ScreenAgent] AX Graph extracted: ${detectionResult.elements.length} nodes`);
                     // Save the successful graph
                     this._saveGraph(detectionResult.app, detectionResult.window, detectionResult.elements);
+
+                    // INTELLIGENT FOCUS: 
+                    // After extraction is done, we don't need the target app focused anymore for a moment (LLM thinking).
+                    // Refocus the Native Glass Bubble to enable the "Liquid" effect.
+                    try {
+                        console.log('🔮 [ScreenAgent] Refocusing Native Glass Bubble (Liquid Effect ON)');
+                        nativeGlass.show(); // This triggers makeKeyAndOrderFront
+                    } catch (e) {
+                        console.warn('⚠️ [ScreenAgent] Failed to refocus bubble:', e);
+                    }
                 } else {
                     console.error(`🔴 [ScreenAgent] CRITICAL: AX Failed after 3 retries. Fallback DISABLED.`);
                     // FORCE AX: fallback DISABLED per user request
@@ -651,6 +663,9 @@ ${elementsText}${historyHint}${loopWarning}
                         const subActions = args.actions;
                         console.log(`📦 [ScreenAgent] Batch executing ${subActions.length} actions...`);
 
+                        // Refocus ONCE before batch
+                        await this._ensureFocus(this.currentApp);
+
                         for (let j = 0; j < subActions.length; j++) {
                             const sub = subActions[j];
                             const stepStr = `Step ${j + 1}/${subActions.length}`;
@@ -672,15 +687,15 @@ ${elementsText}${historyHint}${loopWarning}
                                 }
                                 if (px < 1 && py < 1) { px = Math.round(px * this.screenWidth); py = Math.round(py * this.screenHeight); }
 
-                                await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` });
+                                await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
                                 await this._wait(600); // Slightly faster in batch
                             }
                             else if (sub.action === 'type') {
-                                await this._executeTool('type_text', { text: sub.text });
+                                await this._executeTool('type_text', { text: sub.text }, true);
                                 await this._wait(300);
                             }
                             else if (sub.action === 'key') {
-                                await this._executeTool('key_press', { key: sub.key });
+                                await this._executeTool('key_press', { key: sub.key }, true);
                                 await this._wait(300);
                             }
                         }
@@ -923,18 +938,155 @@ CONTEXTO DE VENTANAS:
         });
     }
 
+
+
+    /**
+     * Move mouse cursor naturally with smooth acceleration/deceleration curves (Bezier).
+     * Simulates human hand movement.
+     */
+    async _humanLikeMove(targetX, targetY, speedFactor = 1.0) {
+        try {
+            const { mouse, Point } = await this._getNutJS();
+            const start = await mouse.getPosition();
+            const startX = start.x;
+            const startY = start.y;
+
+            const dist = Math.hypot(targetX - startX, targetY - startY);
+            if (dist < 5) {
+                await mouse.setPosition(new Point(targetX, targetY));
+                return;
+            }
+
+            // Duration: 300ms to 800ms depending on distance, scaled by speed
+            const duration = Math.min(800, Math.max(300, dist * 0.6)) / speedFactor;
+            const steps = Math.floor(duration / 12); // ~12ms per step for 60fps-ish feel
+
+            // Bezier Control Point (Quadratic)
+            // Add slight randomness/arc to path to avoid robotic straight lines
+            const p0 = { x: startX, y: startY };
+            const p2 = { x: targetX, y: targetY };
+
+            // Control point P1 roughly between start and end, but offset
+            const midX = (startX + targetX) / 2;
+            const midY = (startY + targetY) / 2;
+            // Random offset perpendicular-ish? Just random is fine for "human" jitter
+            const offsetMagnitude = Math.min(dist / 3, 100);
+            const offsetX = (Math.random() - 0.5) * offsetMagnitude;
+            const offsetY = (Math.random() - 0.5) * offsetMagnitude;
+            const p1 = { x: midX + offsetX, y: midY + offsetY };
+
+            const delayPerStep = duration / steps;
+
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+
+                // Easing: EaseInOutQuad (smooth start and end)
+                // t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+                // Or slightly smoother cubic:
+                const easeT = t < 0.5 ? 4 * t * t * t : (t - 1) * (2 * t - 2) * (2 * t - 2) + 1;
+
+                const invT = 1 - easeT;
+                // Quadratic Bezier: B(t) = (1-t)^2 * P0 + 2(1-t)t * P1 + t^2 * P2
+                const bx = (invT * invT * p0.x) + (2 * invT * easeT * p1.x) + (easeT * easeT * p2.x);
+                const by = (invT * invT * p0.y) + (2 * invT * easeT * p1.y) + (easeT * easeT * p2.y);
+
+                await mouse.setPosition(new Point(bx, by));
+
+                // Manual sleep for timing loop
+                await new Promise(r => setTimeout(r, delayPerStep));
+            }
+
+            // Ensure final exact position
+            await mouse.setPosition(new Point(targetX, targetY));
+
+        } catch (e) {
+            console.warn('⚠️ [ScreenAgent] Human move failed:', e.message);
+        }
+    }
+
+    /**
+     * "Grab & Move" Strategy: Physically drag the liquid bubble to a position near the target.
+     * This forces the bubble to be focused (because we clicked it) and moves it to a relevant visual location.
+     */
+    async _dragBubbleTo(targetX, targetY) {
+        try {
+            const { mouse, Button, Point } = await this._getNutJS();
+
+            // 1. Determine start position
+            let startX, startY;
+            if (this.currentBubblePos) {
+                startX = this.currentBubblePos.x;
+                startY = this.currentBubblePos.y;
+            } else {
+                // First grab: Window is at Mouse + (20, -20) (from Swift offset)
+                // Visual bubble starts at +15 inside window.
+                // We want to grab the "top edge" of the visual bubble.
+                // Window Origin = M + (20, -20)
+                // Visual Top Center = Window Origin + (50, 15) -> (M.x + 70, M.y - 5)
+                const mousePos = await mouse.getPosition();
+                startX = mousePos.x + 60; // Slightly left of center, solid edge
+                startY = mousePos.y;      // Roughly top edge align
+            }
+
+            console.log(`🔮 [ScreenAgent] Dragging bubble from (${startX}, ${startY}) to (${targetX}, ${targetY})`);
+
+            // 2. Move to bubble (Smoothly)
+            await this._humanLikeMove(startX, startY, 1.2); // 1.2x speed to grab
+            await this._wait(100);
+
+            // 3. Grab (Mouse Down)
+            await mouse.pressButton(Button.LEFT);
+            console.log('🔮 [ScreenAgent] GRABBED bubble');
+            await this._wait(200); // Visual pause to "feel" the grab
+
+            // 4. Drag to target (Smoothly, slower to be gentle)
+            await this._humanLikeMove(targetX, targetY, 0.9);
+            await this._wait(200); // Visual pause before drop
+
+            // 5. Release (Mouse Up)
+            await mouse.releaseButton(Button.LEFT);
+            console.log('🔮 [ScreenAgent] DROPPED bubble');
+            await this._wait(100);
+
+            // Update known position
+            this.currentBubblePos = { x: targetX, y: targetY };
+
+            console.log(`🔮 [ScreenAgent] Bubble dropped at (${targetX}, ${targetY})`);
+
+        } catch (e) {
+            console.warn('⚠️ [ScreenAgent] Failed to drag bubble:', e.message);
+        }
+    }
+
     /**
      * Execute a click at exact pixel coordinates (used by SoM select_element).
      * No normalization needed — coordinates come directly from YOLO bounding boxes.
      */
-    async _executeToolDirect(fnName, args) {
+    async _executeToolDirect(fnName, args, skipFocus = false) {
         try {
+            if (!skipFocus) await this._ensureFocus(this.currentApp);
+
             const { mouse, Button, Point } = await this._getNutJS();
 
             if (fnName === 'click') {
-                console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${args.px}, ${args.py})`);
-                await mouse.setPosition(new Point(args.px, args.py));
+                // --- LIQUID BUBBLE LOGIC START ---
+                // Before clicking, drag the bubble near the target
+                // Calculate "safe" spot: 150px to the right of target, clamped to screen
+                let bubbleX = args.px + 120;
+                let bubbleY = args.py + 50;
+
+                // Clamp to screen
+                if (bubbleX > this.screenWidth - 50) bubbleX = args.px - 120; // Move to left if too far right
+                if (bubbleY > this.screenHeight - 50) bubbleY = this.screenHeight - 50;
+
+                await this._dragBubbleTo(bubbleX, bubbleY);
                 await this._wait(100);
+                // --- LIQUID BUBBLE LOGIC END ---
+
+                console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${args.px}, ${args.py})`);
+                // Use human-like move for the final approach too
+                await this._humanLikeMove(args.px, args.py, 1.1); // slightly faster for click
+                await this._wait(50);
                 await mouse.click(Button.LEFT);
             }
         } catch (e) {
@@ -1036,6 +1188,38 @@ CONTEXTO DE VENTANAS:
                         setTimeout(resolve, 1000);
                     });
                 }, 500);
+            });
+        });
+    }
+
+    /**
+     * Fast focus switching (lighter than _openApp).
+     * Uses AppleScript to activate the app without 'open -a' overhead.
+     */
+    async _ensureFocus(appName) {
+        if (!appName) return;
+        return new Promise((resolve) => {
+            // console.log(`📱 [ScreenAgent] Ensuring focus (Fast): "${appName}"`);
+            const { exec } = require('child_process');
+
+            // Map common names if needed (reuse _openApp mappings logic if moved to shared helper, 
+            // but for now assume appName is correct or we use simple mapping)
+            const appMappings = {
+                'Calculadora': 'Calculator',
+                'Calendario': 'Calendar',
+                'Contactos': 'Contacts',
+                'Notas': 'Notes',
+                'Música': 'Music',
+                'Fotos': 'Photos',
+                'Mapas': 'Maps',
+                'Terminal': 'Terminal'
+            };
+            const normalized = appMappings[appName] || appName;
+
+            exec(`osascript -e 'tell application "${normalized}" to activate'`, (err) => {
+                if (err) console.warn(`⚠️ Focus failed for ${normalized}: ${err.message}`);
+                // Small delay to allow window manager to catch up
+                setTimeout(resolve, 200);
             });
         });
     }
@@ -1146,17 +1330,35 @@ CONTEXTO DE VENTANAS:
      * Execute a tool call from the unified model.
      * Click coordinates are normalized (0-1) and denormalized to pixel coords here.
      */
-    async _executeTool(fnName, args) {
+    async _executeTool(fnName, args, skipFocus = false) {
         try {
+            if (!skipFocus) await this._ensureFocus(this.currentApp);
+
             const { mouse, keyboard, Button, Key, Point } = await this._getNutJS();
 
             if (fnName === 'click') {
                 // Denormalize from 0-1 to pixel coordinates
                 const px = Math.round(args.x * this.screenWidth);
                 const py = Math.round(args.y * this.screenHeight);
-                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
-                await mouse.setPosition(new Point(px, py));
+
+                // --- LIQUID BUBBLE LOGIC START ---
+                // Before clicking, drag the bubble near the target
+                // Calculate "safe" spot: 150px to the right of target, clamped to screen
+                let bubbleX = px + 120;
+                let bubbleY = py + 50;
+
+                // Clamp to screen
+                if (bubbleX > this.screenWidth - 50) bubbleX = px - 120; // Move to left if too far right
+                if (bubbleY > this.screenHeight - 50) bubbleY = this.screenHeight - 50;
+
+                await this._dragBubbleTo(bubbleX, bubbleY);
                 await this._wait(100);
+                // --- LIQUID BUBBLE LOGIC END ---
+
+                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
+                // Use human-like move
+                await this._humanLikeMove(px, py, 1.1);
+                await this._wait(50);
                 await mouse.click(Button.LEFT);
 
             } else if (fnName === 'type_text') {

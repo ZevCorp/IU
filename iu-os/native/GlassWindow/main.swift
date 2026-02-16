@@ -46,6 +46,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create Window (Hidden by default)
         window = GlassWindow(mode: mode, htmlPath: htmlPath)
+        window.show() // 🟢 TEST: Show immediately
         
         // Start Input Loop
         startStandardInputReader()
@@ -103,5 +104,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
-app.setActivationPolicy(.accessory) 
+app.setActivationPolicy(.regular) 
 app.run()

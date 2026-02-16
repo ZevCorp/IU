@@ -21,7 +21,6 @@ mkdir -p "$DIST_DIR"
 # -target: macOS target
 swiftc "$SOURCE_DIR/main.swift" "$SOURCE_DIR/GlassWindow.swift" \
     -o "$DIST_DIR/GlassWindowApp" \
-    -target x86_64-apple-macosx10.15 \
     -framework Cocoa \
     -framework WebKit \
     -O
