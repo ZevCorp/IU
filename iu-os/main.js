@@ -59,6 +59,7 @@ let screenAgent = null;
 // Auto-updater for automatic updates from GitHub Releases
 const { autoUpdater } = require('electron-updater');
 const nativeGlass = require('./NativeGlassController'); // Native Glass Window Controller
+const contextManager = require('./ContextManager'); // Central Knowledge System
 
 // Configure auto-updater
 autoUpdater.autoDownload = false;
@@ -269,6 +270,9 @@ ipcMain.on('chat-close', () => {
 ipcMain.on('chat-send-message', async (event, text) => {
     console.log('💬 [Chat] User sent:', text.substring(0, 60));
 
+    // 1. Add to Central Context
+    contextManager.addMessage('user', text, 'chat_ui');
+
     if (!openai) {
         if (chatWindow && !chatWindow.isDestroyed()) {
             chatWindow.webContents.send('chat-response', { error: 'OpenAI no inicializado' });
@@ -335,6 +339,11 @@ Responde en español.`
             chatWindow.webContents.send('chat-response', { reply });
         }
 
+        // 2. Add reply to Central Context
+        if (reply) {
+            contextManager.addMessage('assistant', reply, 'chat_api');
+        }
+
     } catch (e) {
         console.error('❌ [Chat] Failed:', e.message);
         if (chatWindow && !chatWindow.isDestroyed()) {
@@ -395,7 +404,12 @@ app.whenReady().then(async () => {
     if (openai) {
         actionPlanner = new ActionPlanner(openai);
         screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
+        screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
         console.log('🎯 Action System initialized (Planner + ScreenAgent)');
+
+        // Initialize Context Manager with OpenAI (for embeddings)
+        contextManager.init(openai);
+        console.log('🧠 Context Manager initialized with OpenAI');
     }
 
     // Check for updates (only in production)
@@ -680,7 +694,16 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
                 console.log('✍️ Sending greeting context...');
                 const composer = chatPage.locator('#prompt-textarea');
                 if (await composer.count() > 0) {
-                    await composer.fill('El usuario podría querer algo a continuación. Acabo de iniciar el chat de voz, saludalo!');
+                    // INJECT RECENT CONTEXT
+                    const recentContext = contextManager.getRecentContextSummary(3);
+                    let greetingMsg = 'El usuario podría querer algo a continuación. Acabo de iniciar el chat de voz, saludalo!';
+
+                    if (recentContext) {
+                        greetingMsg = `[Contexto previo del chat de texto]:\n${recentContext}\n\nEl usuario acaba de activar el modo voz. Úsalos como contexto.`;
+                        console.log('🧠 [Voice] Injecting context:', recentContext.substring(0, 50) + '...');
+                    }
+
+                    await composer.fill(greetingMsg);
 
                     // Use send button click instead of Enter
                     await chatPage.waitForTimeout(300);
@@ -794,8 +817,14 @@ function startUserVoiceMonitoring() {
 
             // If we found new user text, send to classifier for explicit suggestions
             if (cleanText && cleanText !== lastUserText && cleanText.length > 5) {
+                const isNew = lastUserText !== ''; // Don't save the very first read
                 lastUserText = cleanText;
                 console.log('🗣️ [Explicit] User said:', cleanText.substring(0, 50) + '...');
+
+                // Add to Central Context
+                if (isNew) {
+                    contextManager.addMessage('user', cleanText, 'voice_transcription');
+                }
 
                 // Use classifier to generate explicit suggestions
                 const predictions = await classifyExplicitIntent(cleanText);
@@ -807,7 +836,13 @@ function startUserVoiceMonitoring() {
 
                 // Also route to ActionPlanner for screen actions
                 if (actionPlanner && cleanText.length > 10) {
-                    const plan = await actionPlanner.planFromExplicit(cleanText);
+                    // Use Semantic Search for context
+                    const relevantContext = await contextManager.getRelevantContext(cleanText);
+                    const plan = await actionPlanner.planFromExplicit(cleanText, {
+                        recent: contextManager.getHistoryForAPI(10),
+                        longTerm: relevantContext.longTerm
+                    });
+
                     if (plan && mainWindow) {
                         console.log('🎯 [Action] Auto-planned from explicit speech:', plan.goal);
                         mainWindow.webContents.send('action-confirm-request', {
@@ -1127,6 +1162,9 @@ function startTextMonitoring() {
             if (cleanText && cleanText !== lastExtractedText) {
                 lastExtractedText = cleanText;
 
+                // Add to Central Context
+                contextManager.addMessage('assistant', cleanText, 'voice_transcription');
+
                 if (mainWindow) {
                     mainWindow.webContents.send('conversation-text', cleanText);
                 }
@@ -1187,7 +1225,12 @@ ipcMain.handle('execute-explicit-action', async (event, userText) => {
 
     try {
         // Step 1: Plan the action
-        const plan = await actionPlanner.planFromExplicit(userText);
+        const relevantContext = await contextManager.getRelevantContext(userText);
+        const plan = await actionPlanner.planFromExplicit(userText, {
+            recent: contextManager.getHistoryForAPI(10),
+            longTerm: relevantContext.longTerm
+        });
+
         if (!plan) {
             return { success: false, error: 'No actionable intent detected' };
         }
@@ -1218,7 +1261,12 @@ ipcMain.handle('execute-implicit-action', async (event, contextText, confirmedSu
     }
 
     try {
-        const plan = await actionPlanner.planFromImplicit(contextText, confirmedSuggestion);
+        const relevantContext = await contextManager.getRelevantContext(confirmedSuggestion);
+        const plan = await actionPlanner.planFromImplicit(contextText, confirmedSuggestion, {
+            recent: contextManager.getHistoryForAPI(10),
+            longTerm: relevantContext.longTerm
+        });
+
         if (!plan) {
             return { success: false, error: 'Could not plan action from suggestion' };
         }

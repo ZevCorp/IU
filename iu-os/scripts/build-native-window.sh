@@ -19,7 +19,7 @@ mkdir -p "$DIST_DIR"
 # Compile
 # -O: Optimization
 # -target: macOS target
-swiftc "$SOURCE_DIR/main.swift" "$SOURCE_DIR/GlassWindow.swift" \
+swiftc "$SOURCE_DIR/main.swift" "$SOURCE_DIR/GlassWindow.swift" "$SOURCE_DIR/FaceView.swift" \
     -o "$DIST_DIR/GlassWindowApp" \
     -framework Cocoa \
     -framework WebKit \

@@ -43,29 +43,44 @@ class ActionPlanner {
      * Plan from explicit user speech.
      * The user directly asked U to do something.
      */
-    async planFromExplicit(userText) {
+    async planFromExplicit(userText, context = { recent: [], longTerm: '' }) {
         if (!this.openai) return null;
 
         try {
             console.log('🧠 [Planner] Planning from EXPLICIT intent:', userText.substring(0, 60));
 
-            const response = await ModelSwitch.chatCompletion({
-                messages: [
-                    {
-                        role: "system",
-                        content: `Eres U, un asistente digital silencioso. Recibes lo que el usuario dice explícitamente.
+            // Format history for context (Recent RAM)
+            const historyContext = (context.recent || []).map(msg => ({
+                role: msg.role === 'user' ? 'user' : 'assistant',
+                content: msg.content
+            }));
+
+            // Add Long-Term Memory if available
+            let systemContent = `Eres U, un asistente digital silencioso. Recibes lo que el usuario dice explícitamente.
 Si detectas que quiere ejecutar algo en su computador, piensa en qué app abrir y qué pasos seguir para completar la tarea.
 Llama la función execute_screen_action con esa información.
 Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa SOLO la primera app en 'app' y describe el cambio en 'steps_hint'.
 IMPORTANTE: El campo 'app' debe ser UN SOLO nombre de aplicación (ej: "Calculadora"). NUNCA uses "Calculadora y Notas" o listas.
 Si el usuario NO está pidiendo una acción ejecutable en pantalla (solo conversa, pregunta algo, etc.), NO llames ninguna función.
-Responde en español.`
-                    },
-                    {
-                        role: "user",
-                        content: `El usuario dijo: "${userText}"`
-                    }
-                ],
+Responde en español.`;
+
+            if (context.longTerm) {
+                systemContent += `\n\nMEMORIA A LARGO PLAZO RELEVANTE:\n${context.longTerm}`;
+            }
+
+            // System instructions
+            const systemMsg = {
+                role: "system",
+                content: systemContent
+            };
+
+            const messages = [systemMsg, ...historyContext, {
+                role: "user",
+                content: `El usuario dijo: "${userText}"`
+            }];
+
+            const response = await ModelSwitch.chatCompletion({
+                messages: messages,
                 tools: this.tools,
                 tool_choice: "auto"
             });
@@ -81,27 +96,37 @@ Responde en español.`
      * Plan from implicit context.
      * Audio environment was captured, user confirmed a suggestion by nodding.
      */
-    async planFromImplicit(contextText, confirmedSuggestion) {
+    async planFromImplicit(contextText, confirmedSuggestion, context = { recent: [], longTerm: '' }) {
         if (!this.openai) return null;
 
         try {
             console.log('🧠 [Planner] Planning from IMPLICIT intent:', confirmedSuggestion.substring(0, 60));
 
-            const response = await ModelSwitch.chatCompletion({
-                messages: [
-                    {
-                        role: "system",
-                        content: `Eres U, un asistente digital que escucha el ambiente del usuario.
+            // Add Long-Term Memory if available
+            let systemContent = `Eres U, un asistente digital que escucha el ambiente del usuario.
 El usuario confirmó (asintió con la cabeza) una sugerencia que le hiciste.
 Ahora debes ejecutar esa acción. Piensa en qué app abrir y qué pasos seguir.
 Llama la función execute_screen_action con esa información.
-Responde en español.`
-                    },
-                    {
-                        role: "user",
-                        content: `Contexto ambiental: "${contextText}"\nSugerencia confirmada por el usuario: "${confirmedSuggestion}"`
-                    }
-                ],
+Responde en español.`;
+
+            if (context.longTerm) {
+                systemContent += `\n\nMEMORIA A LARGO PLAZO RELEVANTE:\n${context.longTerm}`;
+            }
+
+            const messages = [
+                {
+                    role: "system",
+                    content: systemContent
+                },
+                ...(context.recent || []).map(msg => ({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content })),
+                {
+                    role: "user",
+                    content: `Contexto ambiental: "${contextText}"\nSugerencia confirmada por el usuario: "${confirmedSuggestion}"`
+                }
+            ];
+
+            const response = await ModelSwitch.chatCompletion({
+                messages: messages,
                 tools: this.tools,
                 tool_choice: "required"
             });

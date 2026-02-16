@@ -475,12 +475,14 @@ Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No ha
                     // INTELLIGENT FOCUS: 
                     // After extraction is done, we don't need the target app focused anymore for a moment (LLM thinking).
                     // Refocus the Native Glass Bubble to enable the "Liquid" effect.
+                    /* 
                     try {
                         console.log('🔮 [ScreenAgent] Refocusing Native Glass Bubble (Liquid Effect ON)');
                         nativeGlass.show(); // This triggers makeKeyAndOrderFront
                     } catch (e) {
                         console.warn('⚠️ [ScreenAgent] Failed to refocus bubble:', e);
                     }
+                    */
                 } else {
                     console.error(`🔴 [ScreenAgent] CRITICAL: AX Failed after 3 retries. Fallback DISABLED.`);
                     // FORCE AX: fallback DISABLED per user request

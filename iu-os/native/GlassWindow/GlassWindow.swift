@@ -18,10 +18,10 @@ class PassThroughWebView: WKWebView {
     }
 }
 
-class GlassWindow: NSWindow, WKScriptMessageHandler {
+class GlassWindow: NSWindow {
     // Properties from existing app
     var glassView: NSGlassEffectView!
-    private var webView: PassThroughWebView!
+    var faceView: FaceView!
     private var trackingTimer: Timer?
     private let mode: String
     private var isVisibleState: Bool = false
@@ -72,11 +72,16 @@ class GlassWindow: NSWindow, WKScriptMessageHandler {
             glassView.trailingAnchor.constraint(equalTo: mainContainer.trailingAnchor, constant: -20)
         ])
         
+        // Face View
+        faceView = FaceView(frame: contentContainer.bounds)
+        faceView.autoresizingMask = [.width, .height]
+        contentContainer.addSubview(faceView)
+        
         setupPinchGesture(on: mainContainer)
         setupKeyMonitoring()
         
         if mode == "cursor" {
-             self.updatePosition()
+            // self.updatePosition() // DISABLED: Stand-by mode
         } else {
             self.center()
         }
@@ -149,12 +154,12 @@ class GlassWindow: NSWindow, WKScriptMessageHandler {
     // MARK: - Existing App Logic (show, hide, cursor tracking)
     
     func show() {
-        NSApp.activate(ignoringOtherApps: true)
+        // NSApp.activate(ignoringOtherApps: true) // DISABLED: Don't steal focus
         self.makeKeyAndOrderFront(nil)
         
         if !isVisibleState {
             isVisibleState = true
-            self.updatePosition()
+            // self.updatePosition() // DISABLED
         }
     }
     
@@ -166,26 +171,20 @@ class GlassWindow: NSWindow, WKScriptMessageHandler {
     }
     
     func setExpression(_ expression: String) {
-        /*
-        let js = "if(window.setExpression) window.setExpression('\(expression)');"
-        webView.evaluateJavaScript(js, completionHandler: nil)
-        */
+        faceView.setExpression(expression)
     }
     
     func updateGaze(x: CGFloat, y: CGFloat) {
-        /*
-        let js = "if(window.lookAt) window.lookAt(\(x), \(y));"
-        webView.evaluateJavaScript(js, completionHandler: nil)
-        */
+        faceView.lookAt(x: x, y: y)
     }
     
     // MARK: - Cursor Logic
     
     private func startCursorTracking() {
-        stopCursorTracking()
-        trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
-            self?.updatePosition()
-        }
+        // stopCursorTracking()
+        // trackingTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { [weak self] _ in
+        //     self?.updatePosition()
+        // }
     }
     
     private func stopCursorTracking() {
@@ -194,14 +193,9 @@ class GlassWindow: NSWindow, WKScriptMessageHandler {
     }
     
     private func updatePosition() {
-        let mouseLoc = NSEvent.mouseLocation
-        let targetX = mouseLoc.x + offset.x
-        let targetY = mouseLoc.y + offset.y
-        self.setFrameOrigin(NSPoint(x: targetX, y: targetY))
-    }
-    
-    // WKScriptMessageHandler
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        // Handle messages
+        // let mouseLoc = NSEvent.mouseLocation
+        // let targetX = mouseLoc.x + offset.x
+        // let targetY = mouseLoc.y + offset.y
+        // self.setFrameOrigin(NSPoint(x: targetX, y: targetY))
     }
 }

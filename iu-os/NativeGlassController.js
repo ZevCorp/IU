@@ -28,14 +28,15 @@ class NativeGlassController {
                 ? path.join(process.resourcesPath, 'renderer', 'face-standalone.html')
                 : path.join(__dirname, 'renderer', 'face-standalone.html');
 
-            this.process = spawn(this.binaryPath, ['cursor', htmlPath], {
-                stdio: ['pipe', 'inherit', 'inherit'] // pipe stdin, inherit stdout/stderr for debug
-            });
+            // this.process = spawn(this.binaryPath, ['cursor', htmlPath], {
+            //     stdio: ['pipe', 'inherit', 'inherit'] // pipe stdin, inherit stdout/stderr for debug
+            // });
+            console.log('🔮 Native Glass Window: Disabled/Stand-by');
 
-            this.process.on('error', (err) => {
-                console.error('🔮 Native Glass Process Error:', err);
-                this.process = null;
-            });
+            // this.process.on('error', (err) => {
+            //     console.error('🔮 Native Glass Process Error:', err);
+            //     this.process = null;
+            // });
 
             this.process.on('exit', (code, signal) => {
                 console.log(`🔮 Native Glass Process Exited (code=${code}, signal=${signal})`);
