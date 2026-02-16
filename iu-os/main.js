@@ -60,6 +60,7 @@ let screenAgent = null;
 const { autoUpdater } = require('electron-updater');
 const nativeGlass = require('./NativeGlassController'); // Native Glass Window Controller
 const contextManager = require('./ContextManager'); // Central Knowledge System
+const consolidator = require('./Consolidator'); // Nightly Memory Consolidation
 
 // Configure auto-updater
 autoUpdater.autoDownload = false;
@@ -108,9 +109,18 @@ function syncChatWindowPosition(animate = false) {
 }
 
 // System Prompt for personality and task formatting
-const SYSTEM_PROMPT = `Seras U, el asistente capaz de controlar dispositivos, Iphone, Android, Ipad, y hasta tu computador, una IA integrada enfocada en minimizar el uso de tus dispositivos. Yo los uso para que tu puedas dedicarte a Vivir de verdad. Se libre de la tecnologia. Tu personalidad: Serio, eficaz, Poderoso, Colaborador, Atento.
+const SYSTEM_PROMPT = `Eres U, el Sistema Operativo Inteligente de este computador. NO eres un asistente de chat genérico, eres el cerebro de la máquina.
 
-SOLO RESPONDE 'Hola! que tal?'.`;
+Tus capacidades:
+1.  **Memoria Infinita**: Aunque no veas el historial completo en esta ventana, el sistema te inyectará contexto ("Recuerdo recuperar..."). CONFÍA en esa información como si fuera tu propia memoria. NUNCA digas "no puedo recordar" o "no tengo acceso". Si se te da contexto, úsalo. Si no, di que lo anotarás.
+2.  **Control Total**: Puedes abrir apps, mover ventanas, leer la pantalla y ejecutar acciones. Cuando el usuario te pida algo, asume que puedes hacerlo.
+3.  **Personalidad**: Eres serio, ultra-eficaz, minimalista y proactivo. Odias la burocracia. Das respuestas cortas y directas al grano.
+
+TU OBJETIVO: Minimizar el uso del computador para que el usuario pueda VIVIR. Hazlo todo tú.
+
+IMPORTANTE: Si el usuario te pide recordar algo, di "Entendido, guardado." (El sistema lo guardará por ti). No des explicaciones técnicas.
+
+SOLO RESPONDE: "Sistema U online. A la espera."`;
 
 
 async function requestCameraAccess() {
@@ -281,22 +291,31 @@ ipcMain.on('chat-send-message', async (event, text) => {
     }
 
     try {
+        // Retrieve relevant context from disk/semantic memory
+        const relevantContext = await contextManager.getRelevantContext(text);
+
+        let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
+
+Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que harás y llama la función execute_screen_action.
+
+Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
+Responde en español.`;
+
+        if (relevantContext.longTerm) {
+            systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
+        }
+
+        // Get full conversation history (includes the user message just added)
+        const history = contextManager.getHistoryForAPI(20);
+
         // Send to active model (OpenAI or Gemini via ModelSwitch)
         const response = await ModelSwitch.chatCompletion({
             messages: [
                 {
                     role: "system",
-                    content: `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
-
-Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que harás y llama la función execute_screen_action.
-
-Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
-Responde en español.`
+                    content: systemPrompt
                 },
-                {
-                    role: "user",
-                    content: text
-                }
+                ...history
             ],
             tools: actionPlanner ? actionPlanner.tools : undefined,
             tool_choice: actionPlanner ? "auto" : undefined
@@ -466,6 +485,20 @@ ipcMain.handle('download-update', async () => {
 
 ipcMain.handle('install-update', () => {
     autoUpdater.quitAndInstall(false, true);
+});
+
+// Manual trigger for memory consolidation (for testing)
+ipcMain.handle('consolidate-memory', async () => {
+    console.log('🧠 [Memory] Manual consolidation requested...');
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const dateStr = yesterday.toISOString().split('T')[0];
+
+    // Also try today
+    const todayStr = new Date().toISOString().split('T')[0];
+
+    await consolidator.consolidateDailyLog(todayStr); // For demo, consolidate TODAY
+    return { success: true };
 });
 
 app.on('window-all-closed', () => {
@@ -1159,43 +1192,66 @@ function startTextMonitoring() {
             });
 
             const cleanText = assistantText.trim();
-            if (cleanText && cleanText !== lastExtractedText) {
+
+            // Ignore system placeholders
+            if (cleanText.includes('Transcribing...') || cleanText.includes('Starting voice...')) return;
+
+            // Fix for Voice Loops: Only process if text is new AND not just a substring of the previous one
+            // (Voice transcription often streams: "Hello" -> "Hello world" -> "Hello world I am")
+            const isSubstring = cleanText.startsWith(lastExtractedText) && cleanText.length > lastExtractedText.length;
+            const isDifferent = cleanText !== lastExtractedText;
+
+            // We want to update IF it's different. 
+            // BUT for context logging, we only want to log the FINAL message, or significant updates.
+            // Logging every intermediate chunk ("H", "He", "Hel", "Hell", "Hello") spams the brain.
+
+            // Strategy: Update UI immediately, but debounce Context logging
+            if (isDifferent) {
                 lastExtractedText = cleanText;
 
-                // Add to Central Context
-                contextManager.addMessage('assistant', cleanText, 'voice_transcription');
-
+                // 1. Update UI (Visual Feedback)
                 if (mainWindow) {
                     mainWindow.webContents.send('conversation-text', cleanText);
                 }
 
-                // Task Extraction (Regex for JSON blocks)
-                const jsonMatch = cleanText.match(/```json\n([\s\S]*?)\n```/);
-                if (jsonMatch && jsonMatch[1]) {
-                    try {
-                        const taskData = JSON.parse(jsonMatch[1]);
-                        if (taskData && taskData.tasks && mainWindow) {
-                            console.log('📋 [Tasks] Found new task list in transcription');
-                            mainWindow.webContents.send('task-update', taskData.tasks);
-                        }
-                    } catch (e) { }
-                }
+                // 2. Add to Context (Debounced / Final check)
+                // We'll use a timeout to only save if text stops changing for 1 second (end of sentence/speech)
+                if (global.voiceContextTimeout) clearTimeout(global.voiceContextTimeout);
 
-                /* 
-                // RAG Memory Analysis (Temporarily disabled - relying on ChatGPT default memory)
-                if (!isMemoryInjecting && cleanText.length > 20) {
-                    const matches = await memoryService.searchMemory(cleanText, 1);
-                    if (matches && matches.length > 0 && matches[0].score > 0.85) { // Threshold for relevance
-                        await injectMemoryContext(matches[0]);
-                    } else {
-                        // Heuristic: Save long enough responses as new knowledge
-                        if (cleanText.length > 100) {
-                            await memoryService.saveMemory(cleanText, { role: 'assistant', source: 'chatgpt' });
+                global.voiceContextTimeout = setTimeout(() => {
+                    if (cleanText.length > 5) { // Ignore tiny noise
+                        console.log('🗣️ [Voice] Assistant finished speaking:', cleanText.substring(0, 40) + '...');
+                        contextManager.addMessage('assistant', cleanText, 'voice_transcription');
+
+                        // Check for Tasks now that message is complete
+                        const jsonMatch = cleanText.match(/```json\n([\s\S]*?)\n```/);
+                        if (jsonMatch && jsonMatch[1]) {
+                            try {
+                                const taskData = JSON.parse(jsonMatch[1]);
+                                if (taskData && taskData.tasks && mainWindow) {
+                                    console.log('📋 [Tasks] Found new task list in transcription');
+                                    mainWindow.webContents.send('task-update', taskData.tasks);
+                                }
+                            } catch (e) { }
                         }
                     }
-                }
-                */
+                }, 1500); // Wait 1.5s of silence to confirm message is done
             }
+
+            /* 
+            // RAG Memory Analysis (Temporarily disabled - relying on ChatGPT default memory)
+            if (!isMemoryInjecting && cleanText.length > 20) {
+                const matches = await memoryService.searchMemory(cleanText, 1);
+                if (matches && matches.length > 0 && matches[0].score > 0.85) { // Threshold for relevance
+                    await injectMemoryContext(matches[0]);
+                } else {
+                    // Heuristic: Save long enough responses as new knowledge
+                    if (cleanText.length > 100) {
+                        await memoryService.saveMemory(cleanText, { role: 'assistant', source: 'chatgpt' });
+                    }
+                }
+            }
+            */
         } catch (e) {
             // Silently fail polling
         }

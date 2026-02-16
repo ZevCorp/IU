@@ -18,7 +18,7 @@ const { execFile } = require('child_process');
 const ModelSwitch = require('./ModelSwitch');
 const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
-const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window
+// const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window - REMOVING FOR ISOLATION
 
 // Path to Python venv and YOLO detection script
 const YOLO_PYTHON = path.join(__dirname, 'yolo_venv', 'bin', 'python3');
@@ -272,7 +272,7 @@ class ScreenAgent {
         this.debugDir = path.join(require('os').homedir(), 'u_debug');
         this.screenWidth = 0;
         this.screenHeight = 0;
-        this.currentBubblePos = null; // Track bubble position for "drag & drop" focus strategy
+        // this.currentBubblePos = null; // Track bubble position for "drag & drop" focus strategy - REMOVED
 
         // Use simple deterministic agent (fast and reliable)
         // For complex future scenarios, see AxExtractionAgent.js.future
@@ -483,6 +483,7 @@ Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No ha
                         console.warn('⚠️ [ScreenAgent] Failed to refocus bubble:', e);
                     }
                     */
+                    // REMOVED FOR ISOLATION
                 } else {
                     console.error(`🔴 [ScreenAgent] CRITICAL: AX Failed after 3 retries. Fallback DISABLED.`);
                     // FORCE AX: fallback DISABLED per user request
@@ -1007,58 +1008,13 @@ CONTEXTO DE VENTANAS:
     }
 
     /**
-     * "Grab & Move" Strategy: Physically drag the liquid bubble to a position near the target.
+     * "Grab & Move" Strategy: physically drag the liquid bubble to a position near the target.
      * This forces the bubble to be focused (because we clicked it) and moves it to a relevant visual location.
+     * REMOVED FOR ISOLATION
      */
-    async _dragBubbleTo(targetX, targetY) {
-        try {
-            const { mouse, Button, Point } = await this._getNutJS();
-
-            // 1. Determine start position
-            let startX, startY;
-            if (this.currentBubblePos) {
-                startX = this.currentBubblePos.x;
-                startY = this.currentBubblePos.y;
-            } else {
-                // First grab: Window is at Mouse + (20, -20) (from Swift offset)
-                // Visual bubble starts at +15 inside window.
-                // We want to grab the "top edge" of the visual bubble.
-                // Window Origin = M + (20, -20)
-                // Visual Top Center = Window Origin + (50, 15) -> (M.x + 70, M.y - 5)
-                const mousePos = await mouse.getPosition();
-                startX = mousePos.x + 60; // Slightly left of center, solid edge
-                startY = mousePos.y;      // Roughly top edge align
-            }
-
-            console.log(`🔮 [ScreenAgent] Dragging bubble from (${startX}, ${startY}) to (${targetX}, ${targetY})`);
-
-            // 2. Move to bubble (Smoothly)
-            await this._humanLikeMove(startX, startY, 1.2); // 1.2x speed to grab
-            await this._wait(100);
-
-            // 3. Grab (Mouse Down)
-            await mouse.pressButton(Button.LEFT);
-            console.log('🔮 [ScreenAgent] GRABBED bubble');
-            await this._wait(200); // Visual pause to "feel" the grab
-
-            // 4. Drag to target (Smoothly, slower to be gentle)
-            await this._humanLikeMove(targetX, targetY, 0.9);
-            await this._wait(200); // Visual pause before drop
-
-            // 5. Release (Mouse Up)
-            await mouse.releaseButton(Button.LEFT);
-            console.log('🔮 [ScreenAgent] DROPPED bubble');
-            await this._wait(100);
-
-            // Update known position
-            this.currentBubblePos = { x: targetX, y: targetY };
-
-            console.log(`🔮 [ScreenAgent] Bubble dropped at (${targetX}, ${targetY})`);
-
-        } catch (e) {
-            console.warn('⚠️ [ScreenAgent] Failed to drag bubble:', e.message);
-        }
-    }
+    // async _dragBubbleTo(targetX, targetY) {
+    //     // ... implementation removed ...
+    // }
 
     /**
      * Execute a click at exact pixel coordinates (used by SoM select_element).
@@ -1071,7 +1027,8 @@ CONTEXTO DE VENTANAS:
             const { mouse, Button, Point } = await this._getNutJS();
 
             if (fnName === 'click') {
-                // --- LIQUID BUBBLE LOGIC START ---
+                // --- LIQUID BUBBLE LOGIC REMOVED ---
+                /*
                 // Before clicking, drag the bubble near the target
                 // Calculate "safe" spot: 150px to the right of target, clamped to screen
                 let bubbleX = args.px + 120;
@@ -1083,6 +1040,7 @@ CONTEXTO DE VENTANAS:
 
                 await this._dragBubbleTo(bubbleX, bubbleY);
                 await this._wait(100);
+                */
                 // --- LIQUID BUBBLE LOGIC END ---
 
                 console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${args.px}, ${args.py})`);
@@ -1343,7 +1301,8 @@ CONTEXTO DE VENTANAS:
                 const px = Math.round(args.x * this.screenWidth);
                 const py = Math.round(args.y * this.screenHeight);
 
-                // --- LIQUID BUBBLE LOGIC START ---
+                // --- LIQUID BUBBLE LOGIC REMOVED ---
+                /*
                 // Before clicking, drag the bubble near the target
                 // Calculate "safe" spot: 150px to the right of target, clamped to screen
                 let bubbleX = px + 120;
@@ -1355,6 +1314,7 @@ CONTEXTO DE VENTANAS:
 
                 await this._dragBubbleTo(bubbleX, bubbleY);
                 await this._wait(100);
+                */
                 // --- LIQUID BUBBLE LOGIC END ---
 
                 console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
