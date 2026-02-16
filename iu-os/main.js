@@ -58,6 +58,7 @@ let screenAgent = null;
 
 // Auto-updater for automatic updates from GitHub Releases
 const { autoUpdater } = require('electron-updater');
+const nativeGlass = require('./NativeGlassController'); // Native Glass Window Controller
 
 // Configure auto-updater
 autoUpdater.autoDownload = false;
@@ -199,108 +200,7 @@ function createWindow() {
 // ============================================
 // Compact Action Window (Circular Liquid Glass)
 // ============================================
-function createCompactWindow() {
-    if (compactWindow) return; // Already exists
-
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.workAreaSize;
-
-    compactWindow = new BrowserWindow({
-        width: COMPACT_SIZE,
-        height: COMPACT_SIZE,
-        x: width - COMPACT_SIZE - 20,
-        y: 20,
-        frame: false,
-        transparent: true,
-        alwaysOnTop: true,
-        resizable: false,
-        movable: true,
-        minimizable: false,
-        maximizable: false,
-        fullscreenable: false,
-        skipTaskbar: true,
-        hasShadow: false,
-        vibrancy: 'hud',
-        visualEffectState: 'active',
-        show: false, // Start hidden
-        webPreferences: {
-            preload: path.join(__dirname, 'preload.js'),
-            nodeIntegration: false,
-            contextIsolation: true,
-            webSecurity: true
-        }
-    });
-
-    if (process.platform === 'darwin') {
-        compactWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    }
-    compactWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-
-    // Load compact-specific HTML
-    compactWindow.loadFile('renderer/compact.html');
-
-    compactWindow.on('closed', () => {
-        compactWindow = null;
-    });
-
-    console.log('✅ Compact action window created');
-}
-
-function showCompactWindow() {
-    if (!compactWindow) createCompactWindow();
-
-    compactWindow.webContents.once('did-finish-load', () => {
-        compactWindow.show();
-        compactWindow.setOpacity(0);
-
-        // Fade in
-        let opacity = 0;
-        const fadeIn = setInterval(() => {
-            opacity += 0.1;
-            if (opacity >= 1) {
-                compactWindow.setOpacity(1);
-                clearInterval(fadeIn);
-            } else {
-                compactWindow.setOpacity(opacity);
-            }
-        }, 30);
-    });
-
-    if (compactWindow.webContents.isLoading()) {
-        // Already handled by did-finish-load
-    } else {
-        compactWindow.show();
-        compactWindow.setOpacity(0);
-
-        let opacity = 0;
-        const fadeIn = setInterval(() => {
-            opacity += 0.1;
-            if (opacity >= 1) {
-                compactWindow.setOpacity(1);
-                clearInterval(fadeIn);
-            } else {
-                compactWindow.setOpacity(opacity);
-            }
-        }, 30);
-    }
-}
-
-function hideCompactWindow() {
-    if (!compactWindow) return;
-
-    // Fade out
-    let opacity = 1;
-    const fadeOut = setInterval(() => {
-        opacity -= 0.1;
-        if (opacity <= 0) {
-            compactWindow.hide();
-            compactWindow.setOpacity(1);
-            clearInterval(fadeOut);
-        } else {
-            compactWindow.setOpacity(opacity);
-        }
-    }, 30);
-}
+// Compact Window Code Removed - Replaced by NativeGlassController
 
 // ============================================
 // Chat Window (Direct text to GPT-5-Mini)
@@ -477,6 +377,9 @@ app.whenReady().then(async () => {
     await requestCameraAccess();
 
     createWindow();
+
+    // Launch Native Glass Window (Persistent, Hidden)
+    nativeGlass.start();
 
     // Initialize ChatGPT integration first
     await setupChatGPT();
@@ -1345,39 +1248,47 @@ ipcMain.handle('confirm-action', async (event, plan) => {
         return { success: false, error: 'Screen agent not initialized' };
     }
 
-    // SHOW COMPACT &  FADE OUT MAIN
-    showCompactWindow();
-    if (mainWindow) {
-        let op = 1;
-        const fadeOut = setInterval(() => {
-            op -= 0.1;
-            if (op <= 0) { mainWindow.setOpacity(0); clearInterval(fadeOut); }
-            else { mainWindow.setOpacity(op); }
-        }, 30);
-    }
+    // SHOW NATIVE GLASS & HIDE MAIN
+    nativeGlass.show();
+    nativeGlass.setExpression('thinking');
+
+    // Hide all electron windows
+    BrowserWindow.getAllWindows().forEach(win => {
+        // Store original opacity? Or just hide?
+        // Simple hide might be abrupt, let's fade out if possible, but keep it simple for now.
+        // Hiding mainWindow is main priority.
+        win.hide();
+    });
 
     try {
         const result = await screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
 
-        // RESTORE after 2s
+        // RESTORE after 1s
         setTimeout(() => {
-            hideCompactWindow();
-            if (mainWindow) {
-                mainWindow.setOpacity(0);
-                let op2 = 0;
-                const fadeIn = setInterval(() => {
-                    op2 += 0.1;
-                    if (op2 >= 1) { mainWindow.setOpacity(1); clearInterval(fadeIn); }
-                    else { mainWindow.setOpacity(op2); }
-                }, 30);
-            }
-        }, 2000);
+            nativeGlass.hide();
+            // Restore windows
+            BrowserWindow.getAllWindows().forEach(win => {
+                if (win.isDestroyed()) return;
+                // Only restore if it wasn't hidden before? 
+                // For now, assume we want main and chat back if they exist.
+                if (win === mainWindow || (chatWindow && win === chatWindow)) {
+                    win.show();
+                }
+            });
+        }, 1000);
 
         return result;
     } catch (e) {
         console.error('❌ [Action] Execution failed:', e);
-        hideCompactWindow();
-        if (mainWindow) mainWindow.setOpacity(1);
+        nativeGlass.setExpression('attention'); // Error state?
+        setTimeout(() => nativeGlass.hide(), 2000);
+
+        // Restore windows
+        BrowserWindow.getAllWindows().forEach(win => {
+            if (win === mainWindow || (chatWindow && win === chatWindow)) {
+                win.show();
+            }
+        });
         return { success: false, error: e.message };
     }
 });

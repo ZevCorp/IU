@@ -548,7 +548,7 @@ ${elementsText}${historyHint}${loopWarning}
                     messages: somMessages,
                     tools: SOM_TOOLS,
                     tool_choice: "required",
-                    max_tokens: 2000  // Increased for GPT-5-mini to generate complete tool calls
+                    max_tokens: 4096  // Increased for GPT-5-mini to generate complete tool calls
                 }), 3);
 
                 console.log(`📥 [ScreenAgent] LLM Response:`, JSON.stringify({
