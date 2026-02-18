@@ -51,6 +51,14 @@ contextBridge.exposeInMainWorld('iuOS', {
     onActionConfirmRequest: (callback) => ipcRenderer.on('action-confirm-request', (event, data) => callback(data)),
     onActionStatus: (callback) => ipcRenderer.on('action-status', (event, data) => callback(data)),
 
+    // Brain / Disconnection Mode
+    startDisconnectionMode: (duration) => ipcRenderer.invoke('start-disconnection-mode', duration),
+    stopDisconnectionMode: () => ipcRenderer.invoke('stop-disconnection-mode'),
+    getBrainStatus: () => ipcRenderer.invoke('get-brain-status'),
+    onBrainWakeUp: (callback) => ipcRenderer.on('brain-wake-up', (event, data) => callback(data)),
+    brainConfirmTask: (taskId) => ipcRenderer.invoke('brain-confirm-task', taskId),
+    brainScheduleTask: (task, minutes) => ipcRenderer.invoke('brain-schedule-task', task, minutes),
+
     // Auto-updater APIs
     checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
     downloadUpdate: () => ipcRenderer.invoke('download-update'),

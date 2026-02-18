@@ -397,7 +397,9 @@ class ScreenAgent {
 
             let iteration = 0;
             let goalReached = false;
+            let actionResult = null;
             const actionHistory = [];
+
 
             // Store screen dimensions for denormalization
             const primaryDisplay = screen.getPrimaryDisplay();
@@ -594,8 +596,9 @@ ${elementsText}${historyHint}${loopWarning}
                     // Handle goal_reached
                     if (fnName === 'goal_reached') {
                         goalReached = true;
+                        actionResult = args.summary;
                         console.log(`✅ [ScreenAgent] Goal reached: ${args.summary}`);
-                        this._notify('action-status', { phase: 'completed', goal });
+                        this._notify('action-status', { phase: 'completed', goal, summary: args.summary });
 
                         // Push result and break inner loop
                         somMessages.push({
@@ -606,6 +609,7 @@ ${elementsText}${historyHint}${loopWarning}
                         });
                         break;
                     }
+
 
                     // Handle actions
                     let actionSummary = '';
@@ -736,7 +740,8 @@ ${elementsText}${historyHint}${loopWarning}
                 this._notify('action-status', { phase: 'incomplete', iterations: iteration });
             }
 
-            return { success: goalReached, iterations: iteration };
+            return { success: goalReached, iterations: iteration, summary: actionResult };
+
 
         } catch (e) {
             console.error('❌ [ScreenAgent] Action loop failed:', e);

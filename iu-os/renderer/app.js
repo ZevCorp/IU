@@ -414,6 +414,12 @@ const VIEWS = ['face', 'brain', 'settings'];
 let neuralGraph = null;
 let navHudTimeout = null;
 
+// Brain / Reminder State
+let pendingReminder = null;
+let hasProposedReminder = false;
+const wakeUpSound = new Audio('assets/hey_pss_pss.mp3');
+
+
 
 function init() {
     face = new Face();
@@ -553,7 +559,27 @@ function init() {
 
         // 2. Attention State Feedback
         visionManager.setOnAttentionChange((isAttentive) => {
+            // --- REMINDER LOGIC ---
+            if (isAttentive && pendingReminder && !hasProposedReminder) {
+                console.log('👀 [App] User looked at reminder! Initiating proposal...');
+                hasProposedReminder = true;
+
+                // 1. Trigger Voice Mode
+                if (window.iuOS && window.iuOS.conversationControl) {
+                    window.iuOS.conversationControl('start');
+                }
+
+                // 2. Visual Visual Cue
+                if (face) {
+                    face.transitionTo('thinking');
+                    showToast(`🗣️ ${pendingReminder.task} (Asiente para confirmar)`);
+                }
+                return; // Prioritize reminder over standard attention flow
+            }
+            // ----------------------
+
             console.log('👀 Attention State:', isAttentive);
+
 
             // Clear any pending deep attention timer
             if (attentionDwellTimeout) {
@@ -628,7 +654,25 @@ function init() {
 
         // 3. Gesture Trigger (Gated by Attention internally)
         visionManager.setOnGesture((gesture) => {
+            // --- REMINDER CONFIRMATION ---
+            if (pendingReminder && hasProposedReminder && (gesture === 'nod' || gesture === 'call')) {
+                console.log('✅ [App] Reminder Confirmed via Gesture:', gesture);
+
+                if (window.iuOS && window.iuOS.brainConfirmTask) {
+                    window.iuOS.brainConfirmTask(pendingReminder.taskId);
+                }
+
+                showToast('✅ Iniciando tarea...');
+                pendingReminder = null;
+                hasProposedReminder = false;
+
+                if (face) face.transitionTo('action_complete');
+                return;
+            }
+            // -----------------------------
+
             if (gesture === 'call') {
+
                 console.log('📞 CALL GESTURE DETECTED (Gated)!');
 
                 // If carousel is active, ACTIVATE current intent
@@ -794,6 +838,23 @@ function init() {
         }
     }
 
+    // Check for Brain Wake Up (Reminders)
+    if (window.iuOS && window.iuOS.onBrainWakeUp) {
+        window.iuOS.onBrainWakeUp((data) => {
+            console.log('🔔 [App] WAKE UP! Reminder:', data.task);
+            wakeUpSound.play().catch(e => console.error('Audio play failed:', e));
+
+            pendingReminder = data;
+            hasProposedReminder = false;
+
+            showToast(`🔔 ${data.task}`);
+            if (face) face.emerge();
+
+            // If in PC mode (sensors off), we should probably alert user more aggressively
+            // or switch role if possible.
+        });
+    }
+
     // Chat toggle button (top-right)
     const chatToggleBtn = document.getElementById('btn-chat-toggle');
     if (chatToggleBtn) {
@@ -844,6 +905,30 @@ function init() {
             isSimpleMode = !isSimpleMode;
             simpleModeBtn.classList.toggle('active', isSimpleMode);
             showToast(isSimpleMode ? '⚡ Modo Simple: Activado' : '⚡ Modo Estándar');
+        });
+    }
+
+    // Disconnection Mode toggle
+    const disconnectBtn = document.getElementById('btn-disconnect-mode');
+    if (disconnectBtn) {
+        disconnectBtn.addEventListener('click', async () => {
+            console.log('🧠 Triggering Disconnection Mode (1h)...');
+            showToast('🧠 Iniciando Modo Desconexión...');
+            try {
+                if (window.iuOS && window.iuOS.startDisconnectionMode) {
+                    const result = await window.iuOS.startDisconnectionMode(60);
+                    if (result.success) {
+                        showToast('✅ Modo Desconexión ACTIVO');
+                    } else {
+                        showToast('❌ Error: ' + result.error);
+                    }
+                } else {
+                    console.error('❌ iuOS API not found');
+                }
+            } catch (e) {
+                console.error('Failed to start disconnection mode:', e);
+                showToast('❌ Error al iniciar');
+            }
         });
     }
 

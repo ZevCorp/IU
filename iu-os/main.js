@@ -51,10 +51,14 @@ if (process.env.GOOGLE_API_KEY) {
 console.log(`🔀 [ModelSwitch] Provider: ${ModelSwitch.PROVIDER}, Model: ${ModelSwitch.MODELS[ModelSwitch.PROVIDER].vision}`);
 
 // Action System: Planner + Screen Agent
+// Action System: Planner + Screen Agent + Brain
 const ActionPlanner = require('./ActionPlanner');
 const ScreenAgent = require('./ScreenAgent');
+const Brain = require('./Brain');
 let actionPlanner = null;
 let screenAgent = null;
+let brain = null;
+
 
 // Auto-updater for automatic updates from GitHub Releases
 const { autoUpdater } = require('electron-updater');
@@ -119,6 +123,7 @@ Tus capacidades:
 TU OBJETIVO: Minimizar el uso del computador para que el usuario pueda VIVIR. Hazlo todo tú.
 
 IMPORTANTE: Si el usuario te pide recordar algo, di "Entendido, guardado." (El sistema lo guardará por ti). No des explicaciones técnicas.
+Hay un sistema que se encarga de realizar estas acciones; simula que eres tú. No te preocupes por detalles técnicos y aparenta que realmente lo estás haciendo.
 
 SOLO RESPONDE: "Sistema U online. A la espera."`;
 
@@ -182,7 +187,7 @@ function createWindow() {
     mainWindow.loadFile('renderer/index.html');
 
     // Open DevTools in development
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
+    // mainWindow.webContents.openDevTools({ mode: 'detach' });
 
     // Maintain position on screen resize
     screen.on('display-metrics-changed', () => {
@@ -419,12 +424,12 @@ app.whenReady().then(async () => {
         console.warn('⚠️ [Main] Accessibility permissions not granted. Screen control features will be limited.');
     }
 
-    // Initialize Action System (Planner + Screen Agent)
+    // Initialize Action System (Planner + Screen Agent + Brain)
     if (openai) {
         actionPlanner = new ActionPlanner(openai);
         screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
-        screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
-        console.log('🎯 Action System initialized (Planner + ScreenAgent)');
+        brain = new Brain(mainWindow, actionPlanner, screenAgent);
+        console.log('🎯 Action System initialized (Planner + ScreenAgent + Brain)');
 
         // Initialize Context Manager with OpenAI (for embeddings)
         contextManager.init(openai);
@@ -516,22 +521,23 @@ let lastContextTime = 0;
 const CONTEXT_CACHE_MS = 5000; // Cache context for 5 seconds
 
 async function captureScreenContext() {
-    // Windows: AX Tree not supported
-    if (process.platform !== 'darwin') {
-        return { app: null, snapshot: [], error: 'AX not supported on Windows' };
+    if (!screenAgent) {
+        return { app: null, snapshot: [], error: 'ScreenAgent not initialized' };
     }
 
-    // Check cache
-    const now = Date.now();
-    if (lastScreenContext && (now - lastContextTime) < CONTEXT_CACHE_MS) {
-        console.log('📄 [Context] Using cached context');
-        return lastScreenContext;
+    // Use ScreenAgent to get the current context
+    // This is the correct, non-deprecated way
+    try {
+        const extraction = await screenAgent.extract();
+        return {
+            app: extraction.app,
+            window: extraction.window,
+            snapshot: extraction.tree || [],
+            error: null
+        };
+    } catch (e) {
+        return { app: null, snapshot: [], error: e.message };
     }
-
-    // NOTE: This function is deprecated. Use ScreenAgent's AX extraction instead.
-    // Kept for backwards compatibility but will return empty.
-    console.warn('⚠️ [Context] captureScreenContext is deprecated. Use  ScreenAgent.extract() instead.');
-    return { app: null, snapshot: [], error: 'Use ScreenAgent for AX extraction' };
 }
 
 ipcMain.handle('get-screen-context', async (event, gazeDirection) => {
@@ -649,6 +655,7 @@ async function injectSystemPromptOnStartup() {
 
             // Start voice state monitoring
             startVoiceStateMonitoring();
+            startSmartConversationMonitoring();
 
             if (mainWindow) {
                 mainWindow.webContents.send('system-ready');
@@ -750,7 +757,7 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
                 }
 
                 // Start monitoring for transcription text
-                startTextMonitoring();
+                startSmartConversationMonitoring();
 
                 return { success: true, state: 'active' };
             }
@@ -760,7 +767,7 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
 
         } else if (action === 'stop') {
             console.log('🔍 Stopping voice conversation...');
-            stopTextMonitoring();
+            stopSmartConversationMonitoring();
 
             // Language-independent stop selectors
             const stopSelectors = [
@@ -790,6 +797,49 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
         return { success: false, error: e.message };
     }
 });
+
+// ============================================================
+// Brain / Disconnection Mode IPC
+// ============================================================
+ipcMain.handle('start-disconnection-mode', async (event, durationMinutes) => {
+    if (!brain) return { success: false, error: 'Brain not initialized' };
+
+    try {
+        brain.startDisconnectionMode(durationMinutes || 60);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
+ipcMain.handle('stop-disconnection-mode', async () => {
+    if (!brain) return { success: false, error: 'Brain not initialized' };
+    brain.stopDisconnectionMode();
+    return { success: true };
+});
+
+ipcMain.handle('get-brain-status', async () => {
+    if (!brain) return { status: 'offline' };
+    return {
+        status: brain.status,
+        disconnectEndTime: brain.disconnectEndTime,
+        queueLength: brain.taskQueue.length
+    };
+});
+
+ipcMain.handle('brain-schedule-task', async (event, task, minutes) => {
+    if (!brain) return { success: false, error: 'Brain offline' };
+    const date = new Date(Date.now() + (minutes * 60 * 1000));
+    const scheduled = brain.scheduleTask(task, date);
+    return { success: true, taskId: scheduled.id };
+});
+
+ipcMain.handle('brain-confirm-task', async (event, taskId) => {
+    if (!brain) return { success: false, error: 'Brain offline' };
+    brain.executeApprovedTask(taskId);
+    return { success: true };
+});
+
 // ============================================
 // Thinking Mode Activation (Explicit Suggestions)
 // ============================================
@@ -808,10 +858,8 @@ ipcMain.handle('activate-thinking-mode', async (event) => {
         // Only start monitoring for voice and text.
 
         // Start monitoring for user voice transcription (explicit suggestions)
-        startUserVoiceMonitoring();
+        startSmartConversationMonitoring();
 
-        // Also start regular text monitoring for assistant responses
-        startTextMonitoring();
 
         return { success: true };
 
@@ -821,86 +869,190 @@ ipcMain.handle('activate-thinking-mode', async (event) => {
     }
 });
 
-// Monitor user's voice transcription (for explicit intent suggestions)
-function startUserVoiceMonitoring() {
-    if (userVoiceMonitoringInterval) return;
+// ============================================
+// Smart Conversation Monitoring (Deterministic & Robust)
+// ============================================
 
-    console.log('👂 [Explicit] Starting user voice monitoring...');
-    lastUserText = '';
+let conversationMonitorInterval = null;
+let lastLoggedUserContent = '';
+let lastLoggedAssistantContent = '';
 
-    userVoiceMonitoringInterval = setInterval(async () => {
+// Track pending actions to avoid duplicates
+let isActionPending = false;
+
+function startSmartConversationMonitoring() {
+    if (conversationMonitorInterval) return;
+
+    console.log('🧠 [Smart Monitor] Starting deterministic conversation loop...');
+    lastLoggedUserContent = '';
+    lastLoggedAssistantContent = '';
+    isActionPending = false;
+
+    conversationMonitorInterval = setInterval(async () => {
         if (!chatPage || chatPage.isClosed()) return;
 
         try {
-            // Extract the latest user message transcription
-            const userText = await chatPage.evaluate(() => {
-                const userMessages = document.querySelectorAll('[data-message-author-role="user"]');
-                if (userMessages.length === 0) return '';
+            // Evaluates the conversation "tail" in one go
+            // Returns: { user: {text, isStable}, assistant: {text, isStable}, hasNewUser: bool, hasNewAssistant: bool }
+            const state = await chatPage.evaluate(({ lastUser, lastAssistant }) => {
+                const userNodes = document.querySelectorAll('[data-message-author-role="user"], [data-testid^="conversation-turn-"] [data-message-author-role="user"]');
+                const assistNodes = document.querySelectorAll('[data-message-author-role="assistant"], [data-testid^="conversation-turn-"] [data-message-author-role="assistant"]');
 
-                const lastMessage = userMessages[userMessages.length - 1];
-                // Look for transcription in whitespace-pre-wrap div or general text
-                const preWrap = lastMessage.querySelector('.whitespace-pre-wrap');
-                if (preWrap) return preWrap.innerText;
+                const userNode = userNodes.length > 0 ? userNodes[userNodes.length - 1] : null;
+                const assistNode = assistNodes.length > 0 ? assistNodes[assistNodes.length - 1] : null;
 
-                const markdown = lastMessage.querySelector('.markdown');
-                return markdown ? markdown.innerText : lastMessage.innerText;
-            });
+                const extractText = (node) => {
+                    if (!node) return '';
+                    // Try pre-wrap first (streaming text area)
+                    const pre = node.querySelector('.whitespace-pre-wrap');
+                    if (pre) return pre.innerText;
+                    // Try markdown
+                    const md = node.querySelector('.markdown');
+                    if (md) return md.innerText;
+                    // Fallback for older structures or simple text
+                    const ps = node.querySelectorAll('p');
+                    if (ps.length > 0) return Array.from(ps).map(p => p.innerText).join('\n');
+                    return node.innerText;
+                };
 
-            const cleanText = userText.trim();
+                const userText = extractText(userNode).trim();
+                const assistText = extractText(assistNode).trim();
 
-            // If we found new user text, send to classifier for explicit suggestions
-            if (cleanText && cleanText !== lastUserText && cleanText.length > 5) {
-                const isNew = lastUserText !== ''; // Don't save the very first read
-                lastUserText = cleanText;
-                console.log('🗣️ [Explicit] User said:', cleanText.substring(0, 50) + '...');
+                // Check stability (heuristic: non-empty & long enough)
+                const userStable = userText.length > 0 && userText !== 'Transcribing...';
+                const assistStable = assistText.length > 0 && !assistText.includes('Thinking...');
 
-                // Add to Central Context
-                if (isNew) {
-                    contextManager.addMessage('user', cleanText, 'voice_transcription');
-                }
+                return {
+                    user: { text: userText, isStable: userStable },
+                    assistant: { text: assistText, isStable: assistStable },
+                    isNewUser: userText !== lastUser,
+                    isNewAssistant: assistText !== lastAssistant,
+                    debug: { userCount: userNodes.length, assistCount: assistNodes.length }
+                };
+            }, { lastUser: lastLoggedUserContent, lastAssistant: lastLoggedAssistantContent });
 
-                // Use classifier to generate explicit suggestions
-                const predictions = await classifyExplicitIntent(cleanText);
+            // Debug logs if silent
+            if (state.debug.userCount === 0 && state.debug.assistCount === 0) {
+                // console.log('⚠️ [Smart Monitor] No message nodes found! UI changed?');
+            }
 
-                if (predictions && predictions.length > 0 && mainWindow) {
-                    console.log('🎯 [Explicit] Sending predictions to renderer');
-                    mainWindow.webContents.send('explicit-predictions', predictions);
-                }
+            // 1. Process User Text (Order Priority)
+            if (state.isNewUser && state.user.isStable) {
+                // If text changed, update buffer
+                if (state.user.text !== lastLoggedUserContent) {
+                    lastLoggedUserContent = state.user.text;
+                    console.log('🗣️ [User Stable] Captured:', lastLoggedUserContent.substring(0, 50) + '...');
 
-                // Also route to ActionPlanner for screen actions
-                if (actionPlanner && cleanText.length > 10) {
-                    // Use Semantic Search for context
-                    const relevantContext = await contextManager.getRelevantContext(cleanText);
-                    const plan = await actionPlanner.planFromExplicit(cleanText, {
-                        recent: contextManager.getHistoryForAPI(10),
-                        longTerm: relevantContext.longTerm
-                    });
+                    // UI Feedback
+                    if (chatWindow && !chatWindow.isDestroyed()) {
+                        chatWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
+                    }
 
-                    if (plan && mainWindow) {
-                        console.log('🎯 [Action] Auto-planned from explicit speech:', plan.goal);
-                        mainWindow.webContents.send('action-confirm-request', {
-                            goal: plan.goal,
-                            app: plan.app,
-                            stepsHint: plan.stepsHint,
-                            source: 'explicit'
-                        });
+                    // Log to Memory
+                    contextManager.addMessage('user', lastLoggedUserContent, 'voice_transcription');
+
+                    // ACTION PLANNING (User Driven)
+                    // If Assistant hasn't executed anything yet, plan from User text
+                    if (!isActionPending) {
+                        // Use classifier / planner
+                        const relevantContext = await contextManager.getRelevantContext(lastLoggedUserContent);
+                        if (actionPlanner) {
+                            const plan = await actionPlanner.planFromExplicit(lastLoggedUserContent, {
+                                recent: contextManager.getHistoryForAPI(5),
+                                longTerm: relevantContext.longTerm
+                            });
+
+                            if (plan && mainWindow) {
+                                console.log('🎯 [Action] Auto-executing plan from User Voice:', plan.goal);
+
+                                // AUTO-EXECUTE (Zero-Click)
+                                if (screenAgent) {
+                                    // Notify UI that action started
+                                    mainWindow.webContents.send('action-started', {
+                                        goal: plan.goal,
+                                        app: plan.app
+                                    });
+                                    screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+                                }
+
+                                isActionPending = true; // Flag action started
+                            } else {
+                                console.log('⚠️ [Action] No confident plan generated for:', lastLoggedUserContent);
+                            }
+                        }
                     }
                 }
             }
+
+            // 2. Process Assistant Text
+            if (state.isNewAssistant && state.assistant.isStable) {
+                const cleanAsst = state.assistant.text;
+                const cleanAsstText = state.assistant.text.replace(/\s+/g, ' ').trim();
+                const lastLoggedAsstClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
+
+                // ACTION CHECK (Immediate / Heuristic)
+                if (!isActionPending && actionPlanner) {
+                    const lower = cleanAsst.toLowerCase();
+                    if (lower.includes('abro') || lower.includes('voy a') || lower.includes('opening') || lower.includes('starting')) {
+                        console.log('🧠 [Smart Monitor] Assistant implies action:', cleanAsst.substring(0, 40));
+
+                        const implicitPlan = await actionPlanner.planFromImplicit("User request missing (transcription lag)", cleanAsst, { recent: [] });
+                        if (implicitPlan && mainWindow) {
+                            console.log('🎯 [Action] Auto-executing from Assistant Reply (Backup):', implicitPlan.goal);
+
+                            // AUTO-EXECUTE (Zero-Click)
+                            if (screenAgent) {
+                                mainWindow.webContents.send('action-started', {
+                                    goal: implicitPlan.goal,
+                                    app: implicitPlan.app
+                                });
+                                screenAgent.executeAction(implicitPlan.goal, implicitPlan.app, implicitPlan.stepsHint);
+                            }
+                            isActionPending = true;
+                        }
+                    }
+                }
+
+                // LOGGING & CONTEXT UPDATE
+                // Check if REALLY new content (ignoring whitespace differences)
+                // Also check length to avoid logging substrings during streaming
+                if (cleanAsstText !== lastLoggedAsstClean && cleanAsstText.length > lastLoggedAsstClean.length) {
+                    lastLoggedAssistantContent = state.assistant.text; // Store original
+                    console.log('🗣️ [Assistant Stable] Captured:', cleanAsstText.substring(0, 40) + '...');
+
+                    if (chatWindow && !chatWindow.isDestroyed()) {
+                        chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
+                    }
+                    contextManager.addMessage('assistant', state.assistant.text, 'voice_transcription');
+
+                    // Check for JSON tasks
+                    const jsonMatch = state.assistant.text.match(/```json\n([\s\S]*?)\n```/);
+                    if (jsonMatch && jsonMatch[1]) {
+                        try {
+                            const taskData = JSON.parse(jsonMatch[1]);
+                            if (taskData && taskData.tasks && mainWindow) {
+                                mainWindow.webContents.send('task-update', taskData.tasks);
+                            }
+                        } catch (e) { }
+                    }
+                }
+            }
+
         } catch (e) {
-            // Silently fail polling
+            console.error('❌ [Smart Monitor] Polling error:', e);
         }
-    }, 500);
+    }, 200); // 200ms poll
 }
 
-function stopUserVoiceMonitoring() {
-    if (userVoiceMonitoringInterval) {
-        clearInterval(userVoiceMonitoringInterval);
-        userVoiceMonitoringInterval = null;
-        lastUserText = '';
-        console.log('🔇 [Explicit] Stopped user voice monitoring');
+function stopSmartConversationMonitoring() {
+    if (conversationMonitorInterval) {
+        clearInterval(conversationMonitorInterval);
+        conversationMonitorInterval = null;
+        console.log('🔇 [Smart Monitor] Stopped.');
     }
 }
+
+
 
 // Classify explicit intent from user's spoken text
 async function classifyExplicitIntent(userText) {
@@ -909,7 +1061,7 @@ async function classifyExplicitIntent(userText) {
             messages: [
                 {
                     role: "system",
-                    content: `El usuario acaba de decir algo en voz alta. Analiza su intención explícita.
+                    content: `El usuario acaba de decir algo en voz alta (posiblemente incompleto o con errores de transcripción). Analiza su intención explícita.
                     Responde ÚNICAMENTE con un JSON:
                     {
                       "predictions": [
@@ -928,7 +1080,6 @@ async function classifyExplicitIntent(userText) {
 
         const content = response.choices[0]?.message?.content;
         if (!content || content.trim() === '') {
-            console.warn('⚠️ [Explicit] Empty response from model');
             return [];
         }
         try {
@@ -991,6 +1142,11 @@ function startVoiceStateMonitoring() {
                 console.log(`🎙️ [VoiceState] Changed to: ${state}`);
                 if (mainWindow) {
                     mainWindow.webContents.send('voice-state-changed', state);
+                }
+
+                // Unified Chat: Update chat window UI
+                if (chatWindow && !chatWindow.isDestroyed()) {
+                    chatWindow.webContents.send('voice-state', state);
                 }
             }
         } catch (e) {
@@ -1099,177 +1255,12 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
 });
 
 
-let textMonitoringInterval = null;
-let lastExtractedText = '';
-let memoryComparisonBuffer = '';
-let isMemoryInjecting = false;
-
-async function injectMemoryContext(match) {
-    if (isMemoryInjecting) return;
-    isMemoryInjecting = true;
-
-    console.log('🧠 [Memory] RELEVANT MEMORY FOUND. Initiating Injection Cycle...');
-
-    try {
-        // 1. Notify UI (Face should turn green/thinking)
-        if (mainWindow) {
-            mainWindow.webContents.send('memory-status', 'searching');
-        }
-
-        // 2. PAUSE Voice (Click "End Voice")
-        console.log('🧠 [Memory] Pausing voice...');
-        const stopBtn = chatPage.locator('button[aria-label="End Voice"]');
-        if (await stopBtn.count() > 0) {
-            await stopBtn.first().click();
-        } else {
-            await chatPage.keyboard.press('Escape');
-        }
-
-        // Wait for Voice UI to close
-        await chatPage.waitForTimeout(1000);
-
-        // 3. INJECT Context (Type text)
-        const contextMsg = `[Contexto de memoria recuperada]: "${match.text}". Por favor, usa esta información para responder a lo que el usuario acaba de mencionar.`;
-        console.log('🧠 [Memory] Injecting context into chat...');
-
-        // Wait for composer to be visible
-        const composer = chatPage.locator('#prompt-textarea');
-        await composer.fill(contextMsg);
-
-        // Use send button click instead of Enter
-        await chatPage.waitForTimeout(300);
-        const sendBtn = chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
-        if (await sendBtn.count() > 0 && await sendBtn.isEnabled()) {
-            await sendBtn.click();
-        } else {
-            await chatPage.keyboard.press('Enter');
-        }
-
-        // Wait for message to be sent
-        await chatPage.waitForTimeout(2000);
-
-        // 4. RESUME Voice
-        console.log('🧠 [Memory] Resuming voice conversation...');
-        const startBtn = chatPage.locator('button[data-testid="composer-speech-button"], button[aria-label="Start Voice"], button[aria-label="Iniciar voz"]').first();
-        if (await startBtn.count() > 0) {
-            await startBtn.click();
-        }
-
-        if (mainWindow) {
-            mainWindow.webContents.send('memory-status', 'injected');
-        }
-
-    } catch (e) {
-        console.error('❌ [Memory] Injection failed:', e);
-    } finally {
-        isMemoryInjecting = false;
-    }
-}
-
-function startTextMonitoring() {
-    if (textMonitoringInterval) return;
-
-    console.log('👂 Starting transcription monitoring...');
-    textMonitoringInterval = setInterval(async () => {
-        if (!chatPage || chatPage.isClosed()) return;
-
-        try {
-            // Extract the latest assistant paragraph
-            const assistantText = await chatPage.evaluate(() => {
-                const assistantMessages = document.querySelectorAll('[data-message-author-role="assistant"]');
-                if (assistantMessages.length === 0) return '';
-
-                const lastMessage = assistantMessages[assistantMessages.length - 1];
-                // ChatGPT Voice Mode uses <p> with data-start attributes for transcription
-                const paragraphs = lastMessage.querySelectorAll('p[data-start]');
-                if (paragraphs.length > 0) {
-                    return paragraphs[paragraphs.length - 1].innerText;
-                }
-
-                // Fallback to general markdown text
-                const markdown = lastMessage.querySelector('.markdown');
-                return markdown ? markdown.innerText : '';
-            });
-
-            const cleanText = assistantText.trim();
-
-            // Ignore system placeholders
-            if (cleanText.includes('Transcribing...') || cleanText.includes('Starting voice...')) return;
-
-            // Fix for Voice Loops: Only process if text is new AND not just a substring of the previous one
-            // (Voice transcription often streams: "Hello" -> "Hello world" -> "Hello world I am")
-            const isSubstring = cleanText.startsWith(lastExtractedText) && cleanText.length > lastExtractedText.length;
-            const isDifferent = cleanText !== lastExtractedText;
-
-            // We want to update IF it's different. 
-            // BUT for context logging, we only want to log the FINAL message, or significant updates.
-            // Logging every intermediate chunk ("H", "He", "Hel", "Hell", "Hello") spams the brain.
-
-            // Strategy: Update UI immediately, but debounce Context logging
-            if (isDifferent) {
-                lastExtractedText = cleanText;
-
-                // 1. Update UI (Visual Feedback)
-                if (mainWindow) {
-                    mainWindow.webContents.send('conversation-text', cleanText);
-                }
-
-                // 2. Add to Context (Debounced / Final check)
-                // We'll use a timeout to only save if text stops changing for 1 second (end of sentence/speech)
-                if (global.voiceContextTimeout) clearTimeout(global.voiceContextTimeout);
-
-                global.voiceContextTimeout = setTimeout(() => {
-                    if (cleanText.length > 5) { // Ignore tiny noise
-                        console.log('🗣️ [Voice] Assistant finished speaking:', cleanText.substring(0, 40) + '...');
-                        contextManager.addMessage('assistant', cleanText, 'voice_transcription');
-
-                        // Check for Tasks now that message is complete
-                        const jsonMatch = cleanText.match(/```json\n([\s\S]*?)\n```/);
-                        if (jsonMatch && jsonMatch[1]) {
-                            try {
-                                const taskData = JSON.parse(jsonMatch[1]);
-                                if (taskData && taskData.tasks && mainWindow) {
-                                    console.log('📋 [Tasks] Found new task list in transcription');
-                                    mainWindow.webContents.send('task-update', taskData.tasks);
-                                }
-                            } catch (e) { }
-                        }
-                    }
-                }, 1500); // Wait 1.5s of silence to confirm message is done
-            }
-
-            /* 
-            // RAG Memory Analysis (Temporarily disabled - relying on ChatGPT default memory)
-            if (!isMemoryInjecting && cleanText.length > 20) {
-                const matches = await memoryService.searchMemory(cleanText, 1);
-                if (matches && matches.length > 0 && matches[0].score > 0.85) { // Threshold for relevance
-                    await injectMemoryContext(matches[0]);
-                } else {
-                    // Heuristic: Save long enough responses as new knowledge
-                    if (cleanText.length > 100) {
-                        await memoryService.saveMemory(cleanText, { role: 'assistant', source: 'chatgpt' });
-                    }
-                }
-            }
-            */
-        } catch (e) {
-            // Silently fail polling
-        }
-    }, 400); // Poll every 400ms for responsiveness
-}
-
-function stopTextMonitoring() {
-    if (textMonitoringInterval) {
-        clearInterval(textMonitoringInterval);
-        textMonitoringInterval = null;
-        console.log('🔇 Stopped transcription monitoring.');
-    }
-}
-
 
 // ============================================
 // Action System IPC Handlers
 // ============================================
+
+
 
 // Explicit action: User directly asked U to do something
 ipcMain.handle('execute-explicit-action', async (event, userText) => {
@@ -1291,6 +1282,16 @@ ipcMain.handle('execute-explicit-action', async (event, userText) => {
             return { success: false, error: 'No actionable intent detected' };
         }
 
+        if (plan.type === 'schedule') {
+            console.log(`⏰ [Action] Scheduling reminder: ${plan.task}`);
+            if (brain) {
+                const date = new Date(Date.now() + (plan.minutes * 60 * 1000));
+                const task = brain.scheduleTask(plan.task, date);
+                return { success: true, scheduled: true, task };
+            }
+            return { success: false, error: 'Brain offline' };
+        }
+
         // Step 2: Send plan to renderer for user confirmation
         if (mainWindow) {
             mainWindow.webContents.send('action-confirm-request', {
@@ -1308,95 +1309,6 @@ ipcMain.handle('execute-explicit-action', async (event, userText) => {
     }
 });
 
-// Implicit action: User confirmed a suggestion (nodded)
-ipcMain.handle('execute-implicit-action', async (event, contextText, confirmedSuggestion) => {
-    console.log('🎯 [Action] Implicit action confirmed:', confirmedSuggestion.substring(0, 60));
-
-    if (!actionPlanner || !screenAgent) {
-        return { success: false, error: 'Action system not initialized' };
-    }
-
-    try {
-        const relevantContext = await contextManager.getRelevantContext(confirmedSuggestion);
-        const plan = await actionPlanner.planFromImplicit(contextText, confirmedSuggestion, {
-            recent: contextManager.getHistoryForAPI(10),
-            longTerm: relevantContext.longTerm
-        });
-
-        if (!plan) {
-            return { success: false, error: 'Could not plan action from suggestion' };
-        }
-
-        // Send plan to renderer for confirmation
-        if (mainWindow) {
-            mainWindow.webContents.send('action-confirm-request', {
-                goal: plan.goal,
-                app: plan.app,
-                stepsHint: plan.stepsHint,
-                source: 'implicit'
-            });
-        }
-
-        return { success: true, plan };
-    } catch (e) {
-        console.error('❌ [Action] Implicit action failed:', e);
-        return { success: false, error: e.message };
-    }
-});
-
-// User confirmed the action plan — execute it
-ipcMain.handle('confirm-action', async (event, plan) => {
-    console.log('✅ [Action] User confirmed plan. Executing:', plan.goal);
-
-    if (!screenAgent) {
-        return { success: false, error: 'Screen agent not initialized' };
-    }
-
-    // SHOW NATIVE GLASS & HIDE MAIN
-    nativeGlass.show();
-    nativeGlass.setExpression('thinking');
-
-    // Hide all electron windows
-    BrowserWindow.getAllWindows().forEach(win => {
-        // Store original opacity? Or just hide?
-        // Simple hide might be abrupt, let's fade out if possible, but keep it simple for now.
-        // Hiding mainWindow is main priority.
-        win.hide();
-    });
-
-    try {
-        const result = await screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
-
-        // RESTORE after 1s
-        setTimeout(() => {
-            nativeGlass.hide();
-            // Restore windows
-            BrowserWindow.getAllWindows().forEach(win => {
-                if (win.isDestroyed()) return;
-                // Only restore if it wasn't hidden before? 
-                // For now, assume we want main and chat back if they exist.
-                if (win === mainWindow || (chatWindow && win === chatWindow)) {
-                    win.show();
-                }
-            });
-        }, 1000);
-
-        return result;
-    } catch (e) {
-        console.error('❌ [Action] Execution failed:', e);
-        nativeGlass.setExpression('attention'); // Error state?
-        setTimeout(() => nativeGlass.hide(), 2000);
-
-        // Restore windows
-        BrowserWindow.getAllWindows().forEach(win => {
-            if (win === mainWindow || (chatWindow && win === chatWindow)) {
-                win.show();
-            }
-        });
-        return { success: false, error: e.message };
-    }
-});
-
 // Stop current action
 ipcMain.handle('stop-action', async () => {
     if (screenAgent) {
@@ -1405,10 +1317,23 @@ ipcMain.handle('stop-action', async () => {
     return { success: true };
 });
 
+// Confirm and execute action (from UI bubble)
+ipcMain.handle('confirm-action', async (event, data) => {
+    console.log('✅ [Action] User confirmed plan:', data);
+
+    // Reset pending flag
+    isActionPending = false;
+
+    if (!screenAgent) {
+        return { success: false, error: 'Screen Agent not ready' };
+    }
+
+    // Start execution
+    // data: { goal, app, stepsHint, ... }
+    screenAgent.executeAction(data.goal, data.app, data.stepsHint);
+
+    return { success: true };
+});
 
 // Add setupChatGPT to initialization
-app.whenReady().then(() => {
-    // ... existing init ...
-    setupChatGPT();
-});
 

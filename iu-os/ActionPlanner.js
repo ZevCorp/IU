@@ -35,6 +35,21 @@ class ActionPlanner {
                         required: ["goal", "app", "steps_hint"]
                     }
                 }
+            },
+            {
+                type: "function",
+                function: {
+                    name: "schedule_reminder",
+                    description: "Schedule a future task or reminder for the user. Use this when the user says 'Remind me to...' or 'In 10 minutes...'.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            task: { type: "string", description: " The task description." },
+                            minutes: { type: "integer", description: "Minutes from now to trigger." }
+                        },
+                        required: ["task", "minutes"]
+                    }
+                }
             }
         ];
     }
@@ -56,12 +71,20 @@ class ActionPlanner {
             }));
 
             // Add Long-Term Memory if available
-            let systemContent = `Eres U, un asistente digital silencioso. Recibes lo que el usuario dice explícitamente.
-Si detectas que quiere ejecutar algo en su computador, piensa en qué app abrir y qué pasos seguir para completar la tarea.
+            let systemContent = `Eres U, un asistente digital silencioso.
+FECHA Y HORA ACTUAL: ${new Date().toLocaleString('es-ES')}
+
+Recibes lo que el usuario dice explícitamente.
+Si detectas una petición de RECORDATORIO ("Recuérdame...", "Mañana a las..."), usa la función 'schedule_reminder' y calcula el parámetro 'minutes' basándote en la hora actual.
+Si detectas que quiere ejecutar algo AHORA en su computador, piensa en qué app abrir y qué pasos seguir.
 Llama la función execute_screen_action con esa información.
 Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa SOLO la primera app en 'app' y describe el cambio en 'steps_hint'.
 IMPORTANTE: El campo 'app' debe ser UN SOLO nombre de aplicación (ej: "Calculadora"). NUNCA uses "Calculadora y Notas" o listas.
-Si el usuario NO está pidiendo una acción ejecutable en pantalla (solo conversa, pregunta algo, etc.), NO llames ninguna función.
+
+SIEMPRE PRIORIZA LA ACCIÓN:
+Si el usuario dice frases como "Quiero que...", "Abre...", "Busca...", "Revisa...", "Lee...", "Escribe...", INTERPRÉTALO COMO UNA ORDEN DE EJECUCIÓN y llama a 'execute_screen_action'.
+Ignora si el usuario combina la orden con conversación (ej: "Sí puedes hacerlo, abre WhatsApp"). Enfócate en la parte de la orden.
+Solo si el usuario está CLARAMENTE solo conversando o haciendo preguntas generales ("¿Cómo estás?", "¿Qué es la vida?"), entonces NO llames ninguna función.
 Responde en español.`;
 
             if (context.longTerm) {
@@ -139,6 +162,54 @@ Responde en español.`;
     }
 
     /**
+     * Plan from autonomous trigger (Brain).
+     * No user present. System decided to act based on schedule or notification.
+     */
+    async planAutonomousAction(goal, contextPreferences = []) {
+        if (!this.openai) return null;
+
+        try {
+            console.log('🧠 [Planner] Planning AUTONOMOUS action:', goal);
+
+            const prefsText = Array.isArray(contextPreferences) ? contextPreferences.join('\n') : contextPreferences;
+
+            const systemContent = `Eres U, un asistente autónomo operando en "Modo Desconexión".
+El usuario no está disponible. Debes realizar tareas de mantenimiento o responder mensajes urgentes por él.
+OBJETIVO: "${goal}"
+
+PREFERENCIAS DEL USUARIO:
+${prefsText}
+
+Piensa en qué app abrir y qué pasos seguir para cumplir este objetivo de forma eficiente y segura.
+Llama la función execute_screen_action con el plan.
+Si la tarea requiere múltiples apps, usa 'app' para la primera y describe el resto en 'steps_hint'.
+Responde en español.`;
+
+            const messages = [
+                {
+                    role: "system",
+                    content: systemContent
+                },
+                {
+                    role: "user",
+                    content: `Ejecuta la tarea autónoma: "${goal}"`
+                }
+            ];
+
+            const response = await ModelSwitch.chatCompletion({
+                messages: messages,
+                tools: this.tools,
+                tool_choice: "required"
+            });
+
+            return this._extractAction(response);
+        } catch (e) {
+            console.error('❌ [Planner] Autonomous planning failed:', e.message);
+            return null;
+        }
+    }
+
+    /**
      * Extract the function call result from the API response.
      */
     _extractAction(response) {
@@ -162,12 +233,19 @@ Responde en español.`;
                 }
 
                 console.log(`🎯 [Planner] Action planned (raw): ${args.app} -> (sanitized): ${cleanApp}`);
-                console.log(JSON.stringify(args, null, 2));
 
                 return {
                     goal: args.goal,
                     app: cleanApp, // Return the sanitized single app name
                     stepsHint: args.steps_hint
+                };
+            } else if (call.function.name === 'schedule_reminder') {
+                const args = JSON.parse(call.function.arguments);
+                console.log(`⏰ [Planner] Scheduled Reminder: ${args.task} in ${args.minutes} min`);
+                return {
+                    type: 'schedule',
+                    task: args.task,
+                    minutes: args.minutes
                 };
             }
         }

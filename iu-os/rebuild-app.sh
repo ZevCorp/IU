@@ -10,7 +10,7 @@ rm -rf /Applications/IU.app dist/mac-arm64
 
 # Rebuild
 # Build Native Window first
-./scripts/build-native-window.sh
+# ./scripts/build-native-window.sh
 
 npx node-gyp rebuild
 npm run pack:mac

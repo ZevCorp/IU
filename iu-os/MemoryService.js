@@ -133,6 +133,31 @@ class MemoryService {
             return [];
         }
     }
+
+    /**
+     * Store a user preference explicitly
+     */
+    async savePreference(text) {
+        return this.saveMemory(text, { type: 'preference', active: true });
+    }
+
+    /**
+     * Get all active user preferences (limit 50 by default)
+     */
+    async getPreferences(limit = 50) {
+        if (!this.isInitialized) await this.init();
+        if (!this.isInitialized) return [];
+
+        try {
+            return await this.collection.find({ "metadata.type": "preference", "metadata.active": true })
+                .limit(limit)
+                .map(doc => doc.text)
+                .toArray();
+        } catch (error) {
+            console.error('❌ Get Preferences Failed:', error);
+            return [];
+        }
+    }
 }
 
 module.exports = new MemoryService();

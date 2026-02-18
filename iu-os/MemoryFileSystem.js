@@ -12,9 +12,9 @@ const { app } = require('electron');
 
 class MemoryFileSystem {
     constructor() {
-        // Determine brain path: try user's Documents/U/brain first, fallback to userData
-        const homeDir = app.getPath('home');
-        this.brainDir = path.join(homeDir, 'Documents', 'U', 'brain');
+        // Production storage: ~/Library/Application Support/iu-os/brain
+        const userData = app.getPath('userData');
+        this.brainDir = path.join(userData, 'brain');
         this.episodicDir = path.join(this.brainDir, 'episodic');
 
         this.ensureDirectories();

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -102,8 +103,15 @@
     }
 
     @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(4px); }
-      to { opacity: 1; transform: translateY(0); }
+      from {
+        opacity: 0;
+        transform: translateY(4px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
     .message.user {
@@ -137,6 +145,35 @@
       border: 1px solid rgba(17, 17, 24, 0.08);
     }
 
+    .message.voice-message {
+      font-style: italic;
+      opacity: 0.9;
+      /* Add a little mic icon or something later */
+    }
+
+    .listening {
+      background: #FF3B30 !important;
+      /* iOS Red for recording */
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7);
+      }
+
+      70% {
+        transform: scale(1.05);
+        box-shadow: 0 0 0 10px rgba(255, 59, 48, 0);
+      }
+
+      100% {
+        transform: scale(1);
+        box-shadow: 0 0 0 0 rgba(255, 59, 48, 0);
+      }
+    }
+
     /* Typing indicator */
     .typing {
       align-self: flex-start;
@@ -158,12 +195,27 @@
       animation: typingBounce 1.2s infinite;
     }
 
-    .typing-dot:nth-child(2) { animation-delay: 0.15s; }
-    .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+    .typing-dot:nth-child(2) {
+      animation-delay: 0.15s;
+    }
+
+    .typing-dot:nth-child(3) {
+      animation-delay: 0.3s;
+    }
 
     @keyframes typingBounce {
-      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-      30% { transform: translateY(-4px); opacity: 1; }
+
+      0%,
+      60%,
+      100% {
+        transform: translateY(0);
+        opacity: 0.4;
+      }
+
+      30% {
+        transform: translateY(-4px);
+        opacity: 1;
+      }
     }
 
     /* Input area */
@@ -285,6 +337,7 @@
     }
   </style>
 </head>
+
 <body>
   <div class="titlebar">
     <button class="titlebar-close" id="close-btn"></button>
@@ -309,7 +362,9 @@
     <textarea class="input-field" id="input" placeholder="escribeme" rows="1"></textarea>
     <button class="send-btn" id="send-btn" disabled>
       enviar
-      <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+      <svg viewBox="0 0 24 24">
+        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+      </svg>
     </button>
   </div>
 
@@ -394,7 +449,39 @@
           addMessage(`Error: ${data.error}`, 'system');
         }
       });
+
+      // Unified: Voice inputs
+      // Unified: Voice inputs
+      window.uChat.onVoiceText((data) => {
+        typingEl.classList.remove('visible');
+        if (welcomeEl) welcomeEl.style.display = 'none';
+
+        const lastMsg = messagesEl.lastElementChild;
+        // Check if last message is a voice bubble from the same role
+        const isVoice = lastMsg && lastMsg.classList.contains('voice-message') && lastMsg.classList.contains(data.role);
+
+        if (isVoice) {
+          // Update existing bubble (Streaming effect)
+          lastMsg.textContent = data.text;
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        } else {
+          // New bubble
+          addMessage(data.text, data.role + ' voice-message');
+        }
+      });
+
+      // Voice state indicator
+      window.uChat.onVoiceState((state) => {
+        if (state === 'active') {
+          inputEl.placeholder = "Escuchando...";
+          sendBtn.classList.add('listening');
+        } else {
+          inputEl.placeholder = "escribeme";
+          sendBtn.classList.remove('listening');
+        }
+      });
     }
   </script>
 </body>
+
 </html>

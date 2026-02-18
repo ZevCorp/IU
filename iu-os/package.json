@@ -39,10 +39,6 @@
             {
                 "from": "build/Release",
                 "to": "build/Release"
-            },
-            {
-                "from": "dist/GlassWindowApp",
-                "to": "dist/GlassWindowApp"
             }
         ],
         "asar": true,
