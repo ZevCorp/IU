@@ -37,18 +37,18 @@ class ContextManager extends EventEmitter {
 
     /**
      * Add a message to the shared history AND persist to disk
-     * @param {string} role - 'user', 'assistant', 'system'
+     * @param {string} role - 'user', 'assistant', 'system', 'tool'
      * @param {string} text - The message content
      * @param {string} source - 'chat_ui', 'voice_transcription', 'action_result', 'implicit'
+     * @param {object} metadata - Extra fields like tool_calls, tool_call_id, name
      */
-    addMessage(role, text, source = 'unknown') {
-        if (!text || typeof text !== 'string') return;
-
+    addMessage(role, text, source = 'unknown', metadata = {}) {
         const message = {
             role,
-            text: text.trim(),
+            text: text !== null && text !== undefined ? String(text).trim() : null, // Allow null for tool calls
             source,
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            ...metadata // Spread metadata: tool_calls, tool_call_id, name
         };
 
         // 1. Update RAM (Working Memory)
@@ -57,7 +57,7 @@ class ContextManager extends EventEmitter {
             this.history.shift();
         }
 
-        console.log(`🧠 [Context] Added ${role} message from ${source}: "${text.substring(0, 40)}..."`);
+        console.log(`🧠 [Context] Added ${role} message from ${source}: "${(message.text || '').substring(0, 40)}..."`);
         this.emit('history-updated', this.history);
 
         // 2. Persist to Disk (Episodic Memory)
@@ -65,11 +65,7 @@ class ContextManager extends EventEmitter {
         if (role === 'user' || role === 'assistant') {
             memoryFS.appendToDailyLog(message).then(success => {
                 if (success) {
-                    console.log(`💾 [Context] Persisted to daily log`);
-                    // TODO: Ideally we'd incrementally update the index here
-                    // For now, next startup or search will catch it?
-                    // Let's do a lazy index update for this chunk
-                    // vectorIndex.addEmbeddingForText... (Future optimization)
+                    // console.log(`💾 [Context] Persisted to daily log`); 
                 }
             });
         }
@@ -82,10 +78,19 @@ class ContextManager extends EventEmitter {
     getHistoryForAPI(limit = 10) {
         const recent = this.history.slice(-limit);
 
-        return recent.map(msg => ({
-            role: msg.role === 'action_result' ? 'system' : msg.role,
-            content: msg.text
-        }));
+        return recent.map(msg => {
+            const apiMsg = {
+                role: msg.role === 'action_result' ? 'system' : msg.role,
+                content: msg.text
+            };
+
+            // Add tool-specific fields if present
+            if (msg.tool_calls) apiMsg.tool_calls = msg.tool_calls;
+            if (msg.tool_call_id) apiMsg.tool_call_id = msg.tool_call_id;
+            if (msg.name) apiMsg.name = msg.name; // Function name for tool results
+
+            return apiMsg;
+        });
     }
 
     /**

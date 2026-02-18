@@ -2,7 +2,7 @@
  * ModelSwitch.js
  * Switch fácil entre OpenAI (GPT-5-mini) y Google Gemini (2.5 Flash).
  * 
- * Para cambiar de provider, modifica PROVIDER abajo o usa env var VISION_PROVIDER.
+ * Para cambiar de provider, modifica PROVIDER abajo o usa env var BRAIN_PROVIDER.
  * 
  * Uso:
  *   const { chatCompletion, visionCompletion, PROVIDER } = require('./ModelSwitch');
@@ -11,21 +11,22 @@
 
 // ============================================================
 // 🔀 SWITCH: Cambia aquí o con env vars
-//    VISION_PROVIDER: "openai" | "gemini"
-//    VISION_MODEL: "nano" | "mini" | "full" (solo para OpenAI)
+//    BRAIN_PROVIDER: "openai" | "gemini" | "anthropic"
+//    BRAIN_MODEL: "nano" | "mini" | "full" | "haiku"
 // 
 // Ejemplos en .env:
-//    VISION_PROVIDER=openai
-//    VISION_MODEL=full      # gpt-5.2 (más preciso, más caro)
-//    VISION_MODEL=mini      # gpt-5-mini (balance)
-//    VISION_MODEL=nano      # gpt-5-nano (rápido, barato)
+//    BRAIN_PROVIDER=openai
+//    BRAIN_MODEL=full      # gpt-5.2 (más preciso, más caro)
+//    BRAIN_MODEL=mini      # gpt-5-mini (balance)
+//    BRAIN_MODEL=nano      # gpt-5-nano (rápido, barato)
 // ============================================================
-const PROVIDER = process.env.VISION_PROVIDER || 'openai';
-const VISION_MODEL = process.env.VISION_MODEL || 'nano'; // nano | mini | full
+const PROVIDER = process.env.BRAIN_PROVIDER || 'openai';
+const BRAIN_MODEL = process.env.BRAIN_MODEL || 'nano'; // nano | mini | full | haiku
 
 // Clients — se inicializan desde main.js
 let _openai = null;
 let _gemini = null;
+let _anthropic = null;
 
 function initOpenAI(openaiClient) {
     _openai = openaiClient;
@@ -36,6 +37,13 @@ function initGemini(apiKey) {
     const { GoogleGenerativeAI } = require('@google/generative-ai');
     _gemini = new GoogleGenerativeAI(apiKey);
     console.log('✅ Gemini initialized (ModelSwitch)');
+}
+
+function initAnthropic(apiKey) {
+    if (!apiKey) return;
+    const Anthropic = require('@anthropic-ai/sdk');
+    _anthropic = new Anthropic({ apiKey });
+    console.log('✅ Anthropic initialized (ModelSwitch)');
 }
 
 // ============================================================
@@ -49,12 +57,16 @@ const OPENAI_MODELS = {
 
 const MODELS = {
     openai: {
-        chat: OPENAI_MODELS[VISION_MODEL] || OPENAI_MODELS.nano,
-        vision: OPENAI_MODELS[VISION_MODEL] || OPENAI_MODELS.nano
+        chat: OPENAI_MODELS[BRAIN_MODEL] || OPENAI_MODELS.nano,
+        vision: OPENAI_MODELS[BRAIN_MODEL] || OPENAI_MODELS.nano
     },
     gemini: {
         chat: 'gemini-2.5-flash',
         vision: 'gemini-2.5-flash'
+    },
+    anthropic: {
+        chat: 'claude-3-5-haiku-20241022',
+        vision: 'claude-3-5-haiku-20241022'
     }
 };
 
@@ -66,6 +78,8 @@ const MODELS = {
 async function chatCompletion({ messages, tools, tool_choice, max_tokens }) {
     if (PROVIDER === 'openai') {
         return _chatOpenAI({ messages, tools, tool_choice, max_tokens });
+    } else if (PROVIDER === 'anthropic') {
+        return _chatAnthropic({ messages, tools, tool_choice, max_tokens });
     } else {
         return _chatGemini({ messages, tools, tool_choice, max_tokens });
     }
@@ -78,6 +92,8 @@ async function chatCompletion({ messages, tools, tool_choice, max_tokens }) {
 async function visionCompletion({ messages, tools, tool_choice, max_tokens }) {
     if (PROVIDER === 'openai') {
         return _visionOpenAI({ messages, tools, tool_choice, max_tokens });
+    } else if (PROVIDER === 'anthropic') {
+        return _visionAnthropic({ messages, tools, tool_choice, max_tokens });
     } else {
         return _visionGemini({ messages, tools, tool_choice, max_tokens });
     }
@@ -299,6 +315,246 @@ module.exports = {
     MODELS,
     initOpenAI,
     initGemini,
+    initAnthropic,
     chatCompletion,
-    visionCompletion
+    visionCompletion,
+    embedding,
+    isReady,
+    transcription
 };
+
+function isReady() {
+    if (PROVIDER === 'openai') return !!_openai;
+    if (PROVIDER === 'gemini') return !!_gemini;
+    if (PROVIDER === 'anthropic') return !!_anthropic;
+    return false;
+}
+
+// ============================================================
+// Transcription — audio to text
+// ============================================================
+async function transcription({ filePath, buffer, mimeType }) {
+    if (PROVIDER === 'openai') {
+        return _transcriptionOpenAI(filePath);
+    } else {
+        return _transcriptionGemini({ buffer, mimeType });
+    }
+}
+
+async function _transcriptionOpenAI(filePath) {
+    if (!_openai) return { text: "" };
+    const fs = require('fs');
+    return await _openai.audio.transcriptions.create({
+        file: fs.createReadStream(filePath),
+        model: "whisper-1",
+    });
+}
+
+async function _transcriptionGemini({ buffer, mimeType }) {
+    if (!_gemini) return { text: "" };
+    try {
+        // Gemini 1.5 Flash supports audio input
+        const model = _gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const result = await model.generateContent([
+            {
+                inlineData: {
+                    mimeType: mimeType || "audio/webm",
+                    data: buffer.toString("base64")
+                }
+            },
+            { text: "Transcribe this audio exactly as spoken. Return only the text." }
+        ]);
+        return { text: result.response.text().trim() };
+    } catch (e) {
+        console.error('❌ [ModelSwitch] Gemini transcription failed:', e.message);
+        return { text: "" };
+    }
+}
+
+// ============================================================
+// Anthropic implementations — adapta formato OpenAI → Anthropic → OpenAI
+// ============================================================
+
+async function _chatAnthropic({ messages, tools, tool_choice, max_tokens }) {
+    if (!_anthropic) throw new Error("Anthropic not initialized");
+
+    const system = messages.find(m => m.role === 'system')?.content;
+
+    // 1. Map OpenAI messages to Anthropic format
+    let rawAnthropicMessages = messages.filter(m => m.role !== 'system').map(m => {
+        if (m.role === 'user') {
+            if (Array.isArray(m.content)) {
+                return {
+                    role: 'user',
+                    content: m.content.map(c => {
+                        if (c.type === 'image_url') {
+                            const match = c.image_url.url.match(/^data:([^;]+);base64,(.+)$/);
+                            return {
+                                type: 'image',
+                                source: {
+                                    type: 'base64',
+                                    media_type: match ? match[1] : 'image/jpeg',
+                                    data: match ? match[2] : ''
+                                }
+                            };
+                        }
+                        return { type: 'text', text: c.text };
+                    })
+                };
+            }
+            return { role: 'user', content: [{ type: 'text', text: m.content }] };
+        }
+        if (m.role === 'assistant') {
+            const content = [];
+            if (m.content !== null && m.content !== undefined) {
+                content.push({ type: 'text', text: m.content });
+            }
+            if (m.tool_calls) {
+                m.tool_calls.forEach(tc => {
+                    content.push({
+                        type: 'tool_use',
+                        id: tc.id,
+                        name: tc.function.name,
+                        input: JSON.parse(tc.function.arguments)
+                    });
+                });
+            }
+            return { role: 'assistant', content };
+        }
+        if (m.role === 'tool') {
+            return {
+                role: 'user',
+                content: [{
+                    type: 'tool_result',
+                    tool_use_id: m.tool_call_id,
+                    content: m.content // content string matches Anthropic expectation
+                }]
+            };
+        }
+        return null;
+    }).filter(m => m !== null);
+
+    // 2. Merge consecutive messages with the same role AND ensure alternation
+    const anthropicMessages = [];
+    for (const msg of rawAnthropicMessages) {
+        if (anthropicMessages.length > 0) {
+            const lastMsg = anthropicMessages[anthropicMessages.length - 1];
+
+            // Case 1: Same role -> Merge content
+            if (lastMsg.role === msg.role) {
+                lastMsg.content = lastMsg.content.concat(msg.content);
+                continue;
+            }
+
+            // Case 2: Alternating roles -> Normal append
+            anthropicMessages.push(msg);
+        } else {
+            // First message
+            anthropicMessages.push(msg);
+        }
+    }
+
+    // 3. Final cleanup: Ensure it starts with User (if system is separate) and doesn't end with User if we expect Assistant response? 
+    // Actually Anthropic requires User -> Assistant -> User ... 
+    // If we have User -> User (merged above) -> Assistant -> User -> User (merged) ... it should be fine.
+    // The previous error `unexpected tool_use_id found in tool_result blocks` suggests a mismatch between tool_use and tool_result.
+    // Each tool_result MUST follow the Assistant message that requested it.
+    // If we have: User, Assistant(tool_use), User(tool_result), User(text) -> This is valid if merged to User(tool_result + text).
+    // The merging above handles this.
+
+
+    const anthropicTools = tools?.map(t => ({
+        name: t.function.name,
+        description: t.function.description,
+        input_schema: t.function.parameters
+    }));
+
+    // Tool choice handling
+    let anthropicToolChoice = undefined;
+    if (tool_choice) {
+        if (tool_choice === 'auto') anthropicToolChoice = { type: 'auto' };
+        else if (tool_choice === 'required') anthropicToolChoice = { type: 'any' };
+        else if (typeof tool_choice === 'object' && tool_choice.function) {
+            anthropicToolChoice = { type: 'tool', name: tool_choice.function.name };
+        }
+    }
+
+    const msgOptions = {
+        model: MODELS.anthropic.chat,
+        max_tokens: max_tokens || 1024,
+        messages: anthropicMessages,
+        system: system,
+        tools: anthropicTools,
+        tool_choice: anthropicToolChoice
+    };
+
+    // DEBUG: Log payload size and structure (truncated)
+    // console.log('📤 [ModelSwitch] Anthropic Payload:', JSON.stringify(msgOptions, null, 2).substring(0, 1000) + '...');
+
+    let response;
+    try {
+        response = await _anthropic.messages.create(msgOptions);
+    } catch (e) {
+        console.error('❌ [ModelSwitch] Anthropic API Error:', e);
+        console.error('Payload causing error:', JSON.stringify(msgOptions, null, 2));
+        throw e;
+    }
+
+    // Convert response back to OpenAI format
+    const content = response.content.find(c => c.type === 'text')?.text || null;
+    const toolCalls = response.content.filter(c => c.type === 'tool_use').map(tc => ({
+        id: tc.id,
+        type: 'function',
+        function: {
+            name: tc.name,
+            arguments: JSON.stringify(tc.input)
+        }
+    }));
+
+    return {
+        choices: [{
+            message: {
+                content,
+                tool_calls: toolCalls.length > 0 ? toolCalls : null
+            }
+        }]
+    };
+}
+
+async function _visionAnthropic(params) {
+    return _chatAnthropic(params); // Anthropic handles vision natively in chat
+}
+
+// ============================================================
+// Embedding — vector generation
+// Interfaz unificada: retorna number[] (el vector)
+// ============================================================
+async function embedding(text) {
+    if (PROVIDER === 'openai') {
+        return _embeddingOpenAI(text);
+    } else {
+        return _embeddingGemini(text);
+    }
+}
+
+async function _embeddingOpenAI(text) {
+    if (!_openai) return null;
+    const response = await _openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: text,
+    });
+    return response.data[0].embedding;
+}
+
+async function _embeddingGemini(text) {
+    if (!_gemini) return null;
+    try {
+        // Updated to official "gemini-embedding-001" (July 2025 release)
+        const model = _gemini.getGenerativeModel({ model: "gemini-embedding-001" });
+        const result = await model.embedContent(text);
+        return result.embedding.values;
+    } catch (e) {
+        console.error('❌ [ModelSwitch] Gemini embedding failed:', e.message);
+        return null;
+    }
+}

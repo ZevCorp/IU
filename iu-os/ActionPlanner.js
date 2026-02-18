@@ -59,7 +59,7 @@ class ActionPlanner {
      * The user directly asked U to do something.
      */
     async planFromExplicit(userText, context = { recent: [], longTerm: '' }) {
-        if (!this.openai) return null;
+        // if (!this.openai) return null; // Removed check
 
         try {
             console.log('🧠 [Planner] Planning from EXPLICIT intent:', userText.substring(0, 60));
@@ -74,17 +74,16 @@ class ActionPlanner {
             let systemContent = `Eres U, un asistente digital silencioso.
 FECHA Y HORA ACTUAL: ${new Date().toLocaleString('es-ES')}
 
-Recibes lo que el usuario dice explícitamente.
-Si detectas una petición de RECORDATORIO ("Recuérdame...", "Mañana a las..."), usa la función 'schedule_reminder' y calcula el parámetro 'minutes' basándote en la hora actual.
-Si detectas que quiere ejecutar algo AHORA en su computador, piensa en qué app abrir y qué pasos seguir.
-Llama la función execute_screen_action con esa información.
-Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa SOLO la primera app en 'app' y describe el cambio en 'steps_hint'.
-IMPORTANTE: El campo 'app' debe ser UN SOLO nombre de aplicación (ej: "Calculadora"). NUNCA uses "Calculadora y Notas" o listas.
+Recibes instrucciones del usuario.
+Si detectas una petición de RECORDATORIO ("Recuérdame...", "Mañana a las..."), usa 'schedule_reminder' y calcula el parámetro 'minutes'.
+Si detectas que quiere ejecutar algo AHORA en su computador (abrir apps, buscar, escribir, clickear), DEBES llamar a 'execute_screen_action'.
 
-SIEMPRE PRIORIZA LA ACCIÓN:
-Si el usuario dice frases como "Quiero que...", "Abre...", "Busca...", "Revisa...", "Lee...", "Escribe...", INTERPRÉTALO COMO UNA ORDEN DE EJECUCIÓN y llama a 'execute_screen_action'.
-Ignora si el usuario combina la orden con conversación (ej: "Sí puedes hacerlo, abre WhatsApp"). Enfócate en la parte de la orden.
-Solo si el usuario está CLARAMENTE solo conversando o haciendo preguntas generales ("¿Cómo estás?", "¿Qué es la vida?"), entonces NO llames ninguna función.
+NO respondas con texto conversacional si la intención es una acción. EJECUTA LA ACCIÓN DIRECTAMENTE.
+Incluso si el usuario es amable ("Por favor podrías..."), NO respondas "Claro que sí", simplemente LLAMA A LA FUNCIÓN.
+
+Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa SOLO la primera app en 'app' y describe el cambio en 'steps_hint'.
+IMPORTANTE: El campo 'app' debe ser UN SOLO nombre de aplicación (ej: "Calculadora").
+
 Responde en español.`;
 
             if (context.longTerm) {
@@ -105,7 +104,7 @@ Responde en español.`;
             const response = await ModelSwitch.chatCompletion({
                 messages: messages,
                 tools: this.tools,
-                tool_choice: "auto"
+                tool_choice: "auto" // Anthropic might prefer 'auto', or forceful 'any' if we are sure
             });
 
             return this._extractAction(response);
@@ -115,22 +114,21 @@ Responde en español.`;
         }
     }
 
+    // ... (planFromImplicit and planAutonomousAction remain largely the same, maybe update system prompt similarly if needed) ...
+
     /**
      * Plan from implicit context.
      * Audio environment was captured, user confirmed a suggestion by nodding.
      */
     async planFromImplicit(contextText, confirmedSuggestion, context = { recent: [], longTerm: '' }) {
-        if (!this.openai) return null;
-
         try {
             console.log('🧠 [Planner] Planning from IMPLICIT intent:', confirmedSuggestion.substring(0, 60));
 
-            // Add Long-Term Memory if available
-            let systemContent = `Eres U, un asistente digital que escucha el ambiente del usuario.
-El usuario confirmó (asintió con la cabeza) una sugerencia que le hiciste.
-Ahora debes ejecutar esa acción. Piensa en qué app abrir y qué pasos seguir.
-Llama la función execute_screen_action con esa información.
-Responde en español.`;
+            let systemContent = `Eres U, un asistente digital.
+El usuario confirmó una sugerencia. EJECUTA LA ACCIÓN AHORA MISMO.
+Piensa en qué app abrir y qué pasos seguir.
+Llama la función execute_screen_action.
+NO converses. EJECUTA.`;
 
             if (context.longTerm) {
                 systemContent += `\n\nMEMORIA A LARGO PLAZO RELEVANTE:\n${context.longTerm}`;
@@ -144,7 +142,7 @@ Responde en español.`;
                 ...(context.recent || []).map(msg => ({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content })),
                 {
                     role: "user",
-                    content: `Contexto ambiental: "${contextText}"\nSugerencia confirmada por el usuario: "${confirmedSuggestion}"`
+                    content: `Contexto: "${contextText}"\nSugerencia confirmada: "${confirmedSuggestion}"`
                 }
             ];
 
@@ -166,24 +164,17 @@ Responde en español.`;
      * No user present. System decided to act based on schedule or notification.
      */
     async planAutonomousAction(goal, contextPreferences = []) {
-        if (!this.openai) return null;
-
         try {
             console.log('🧠 [Planner] Planning AUTONOMOUS action:', goal);
 
             const prefsText = Array.isArray(contextPreferences) ? contextPreferences.join('\n') : contextPreferences;
 
-            const systemContent = `Eres U, un asistente autónomo operando en "Modo Desconexión".
-El usuario no está disponible. Debes realizar tareas de mantenimiento o responder mensajes urgentes por él.
+            const systemContent = `Eres U, asistente autónomo.
 OBJETIVO: "${goal}"
+PREFERENCIAS: ${prefsText}
 
-PREFERENCIAS DEL USUARIO:
-${prefsText}
-
-Piensa en qué app abrir y qué pasos seguir para cumplir este objetivo de forma eficiente y segura.
-Llama la función execute_screen_action con el plan.
-Si la tarea requiere múltiples apps, usa 'app' para la primera y describe el resto en 'steps_hint'.
-Responde en español.`;
+EJECUTA LA TAREA AHORA. Llama a 'execute_screen_action'.
+NO converses.`;
 
             const messages = [
                 {
@@ -192,7 +183,7 @@ Responde en español.`;
                 },
                 {
                     role: "user",
-                    content: `Ejecuta la tarea autónoma: "${goal}"`
+                    content: `Ejecuta: "${goal}"`
                 }
             ];
 
@@ -209,21 +200,18 @@ Responde en español.`;
         }
     }
 
-    /**
-     * Extract the function call result from the API response.
-     */
     _extractAction(response) {
-        const message = response.choices[0].message;
+        const choice = response.choices[0];
+        const message = choice.message;
 
         if (message.tool_calls && message.tool_calls.length > 0) {
             const call = message.tool_calls[0];
-            if (call.function.name === 'execute_screen_action') {
-                const args = JSON.parse(call.function.arguments);
+            const args = JSON.parse(call.function.arguments);
 
+            if (call.function.name === 'execute_screen_action') {
                 // SANITIZATION: Ensure 'app' is a single application name
                 let cleanApp = args.app;
                 if (cleanApp) {
-                    // Split by common separators used by LLMs when hallucinating lists
                     const separators = [' y ', ' Y ', ' and ', ' AND ', ',', ' y,', ' and,'];
                     for (const sep of separators) {
                         if (cleanApp.includes(sep)) {
@@ -236,11 +224,10 @@ Responde en español.`;
 
                 return {
                     goal: args.goal,
-                    app: cleanApp, // Return the sanitized single app name
+                    app: cleanApp,
                     stepsHint: args.steps_hint
                 };
             } else if (call.function.name === 'schedule_reminder') {
-                const args = JSON.parse(call.function.arguments);
                 console.log(`⏰ [Planner] Scheduled Reminder: ${args.task} in ${args.minutes} min`);
                 return {
                     type: 'schedule',
@@ -251,7 +238,7 @@ Responde en español.`;
         }
 
         console.log('💬 [Planner] No action needed (conversational only)');
-        return null;
+        return null; // Return null if no action found
     }
 }
 

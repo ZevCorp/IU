@@ -27,6 +27,7 @@
    │           AI MODEL PROVIDERS                    │
    │  • OpenAI API (gpt-5-nano/mini/5.2)            │
    │  • Google Gemini (gemini-2.5-flash)            │
+   │  • Anthropic Claude (claude-3-5-haiku)         │
    │  • ChatGPT Web (chat.openai.com via Playwright)│
    └─────────────────────────────────────────────────┘
 ```
@@ -40,8 +41,8 @@
 
 ```javascript
 // Configuration
-VISION_PROVIDER: "openai" | "gemini"
-VISION_MODEL: "nano" | "mini" | "full"
+BRAIN_PROVIDER: "openai" | "gemini" | "anthropic"
+BRAIN_MODEL: "nano" | "mini" | "full" | "haiku"
 
 // OpenAI Models
 nano → gpt-5-nano      (fastest, cheapest)
@@ -50,6 +51,9 @@ full → gpt-5.2         (most capable)
 
 // Gemini Models
 chat/vision → gemini-2.5-flash
+
+// Anthropic Models
+chat/vision → claude-3-5-haiku-20241022
 ```
 
 **Functions**:
@@ -285,10 +289,11 @@ User Speech → ActionPlanner → execute_screen_action()
 **Configuration**:
 ```bash
 # .env file
-VISION_PROVIDER=openai          # or "gemini"
-VISION_MODEL=mini               # nano | mini | full
+BRAIN_PROVIDER=openai          # or "gemini", "anthropic"
+BRAIN_MODEL=mini               # nano | mini | full | haiku
 OPENAI_API_KEY=sk-...
 GOOGLE_API_KEY=...              # optional for Gemini
+ANTHROPIC_API_KEY=...           # optional for Anthropic
 ```
 
 ---

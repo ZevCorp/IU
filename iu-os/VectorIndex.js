@@ -8,8 +8,8 @@ const fs = require('fs');
 const path = require('path');
 const { app } = require('electron');
 const memoryFS = require('./MemoryFileSystem');
-// We need OpenAI instance, will be passed in init() or required from a shared module if available.
-// For now, we'll accept it in search/index methods or constructor.
+const ModelSwitch = require('./ModelSwitch');
+// Removed OpenAI instance dependency for embeddings, now using ModelSwitch.
 
 class VectorIndex {
     constructor() {
@@ -64,13 +64,9 @@ class VectorIndex {
      * Generate embedding for a text string
      */
     async getEmbedding(text) {
-        if (!this.openai) return null;
         try {
-            const response = await this.openai.embeddings.create({
-                model: "text-embedding-3-small",
-                input: text,
-            });
-            return response.data[0].embedding;
+            const embedding = await ModelSwitch.embedding(text);
+            return embedding;
         } catch (e) {
             console.error('❌ [VectorIndex] Embedding failed:', e.message);
             return null;
@@ -84,7 +80,7 @@ class VectorIndex {
      * For simplicity/prototype: Re-index all (clean slate).
      */
     async rebuildIndex() {
-        if (!this.openai) return;
+        // if (!this.openai) return; // Removed, now using ModelSwitch
 
         console.log('🔄 [VectorIndex] Rebuilding index from files...');
         const files = memoryFS.getAllMemoryFiles();
@@ -126,7 +122,7 @@ class VectorIndex {
      * Semantic Search
      */
     async search(query, limit = 3) {
-        if (!this.openai || this.index.length === 0) return [];
+        if (this.index.length === 0) return [];
 
         const queryEmbedding = await this.getEmbedding(query);
         if (!queryEmbedding) return [];

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('iuOS', {
 
     // Platform info
     platform: process.platform,
+    getEnvDeviceId: () => ipcRenderer.invoke('get-env-device-id'),
 
     // Performance monitoring
     getPerformanceMetrics: () => ({

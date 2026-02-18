@@ -30,6 +30,11 @@ if (!envLoaded) {
     console.log('⚠️ No .env file found. Some features may be disabled.');
 }
 
+// IPC: Get Device ID from env
+ipcMain.handle('get-env-device-id', () => {
+    return process.env.DEVICE_ID || null;
+});
+
 // Initialize OpenAI (handle missing API key gracefully)
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
@@ -41,6 +46,7 @@ if (process.env.OPENAI_API_KEY) {
 }
 
 // ModelSwitch: permite alternar entre OpenAI y Gemini con una sola línea
+// ModelSwitch: permite alternar entre OpenAI y Gemini con una sola línea
 const ModelSwitch = require('./ModelSwitch');
 if (openai) ModelSwitch.initOpenAI(openai);
 if (process.env.GOOGLE_API_KEY) {
@@ -48,7 +54,14 @@ if (process.env.GOOGLE_API_KEY) {
 } else {
     console.log('⚠️ GOOGLE_API_KEY not set. Gemini provider disabled.');
 }
-console.log(`🔀 [ModelSwitch] Provider: ${ModelSwitch.PROVIDER}, Model: ${ModelSwitch.MODELS[ModelSwitch.PROVIDER].vision}`);
+
+if (process.env.ANTHROPIC_API_KEY) {
+    ModelSwitch.initAnthropic(process.env.ANTHROPIC_API_KEY);
+} else {
+    console.log('⚠️ ANTHROPIC_API_KEY not set. Anthropic provider disabled.');
+}
+
+console.log(`🔀 [ModelSwitch] Provider: ${ModelSwitch.PROVIDER}, Model: ${ModelSwitch.MODELS[ModelSwitch.PROVIDER]?.vision || ModelSwitch.MODELS[ModelSwitch.PROVIDER]?.chat}`);
 
 // Action System: Planner + Screen Agent
 // Action System: Planner + Screen Agent + Brain
@@ -288,9 +301,9 @@ ipcMain.on('chat-send-message', async (event, text) => {
     // 1. Add to Central Context
     contextManager.addMessage('user', text, 'chat_ui');
 
-    if (!openai) {
+    if (!ModelSwitch.isReady()) {
         if (chatWindow && !chatWindow.isDestroyed()) {
-            chatWindow.webContents.send('chat-response', { error: 'OpenAI no inicializado' });
+            chatWindow.webContents.send('chat-response', { error: 'Model provider no inicializado (OpenAI o Gemini)' });
         }
         return;
     }
@@ -364,9 +377,9 @@ Responde en español.`;
         }
 
         // 2. Add reply to Central Context
-        if (reply) {
-            contextManager.addMessage('assistant', reply, 'chat_api');
-        }
+        contextManager.addMessage('assistant', reply || null, 'chat_api', {
+            tool_calls: message.tool_calls
+        });
 
     } catch (e) {
         console.error('❌ [Chat] Failed:', e.message);
@@ -425,15 +438,15 @@ app.whenReady().then(async () => {
     }
 
     // Initialize Action System (Planner + Screen Agent + Brain)
-    if (openai) {
-        actionPlanner = new ActionPlanner(openai);
+    if (ModelSwitch.isReady()) {
+        actionPlanner = new ActionPlanner(openai); // Pass openai (can be null if Gemini)
         screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
         brain = new Brain(mainWindow, actionPlanner, screenAgent);
         console.log('🎯 Action System initialized (Planner + ScreenAgent + Brain)');
 
-        // Initialize Context Manager with OpenAI (for embeddings)
+        // Initialize Context Manager with OpenAI/Gemini
         contextManager.init(openai);
-        console.log('🧠 Context Manager initialized with OpenAI');
+        console.log('🧠 Context Manager initialized');
     }
 
     // Check for updates (only in production)
@@ -1197,11 +1210,13 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
 
                 console.log(`🎤 [Audio] Saved temp file: ${tempFile} (${buffer.length} bytes)`);
 
-                // 3. Transcribe with Whisper
-                const transcription = await openai.audio.transcriptions.create({
-                    file: fs.createReadStream(tempFile),
-                    model: "whisper-1",
+                // 3. Transcribe with Unified Model (OpenAI Whisper or Gemini Multimodal)
+                const transcription = await ModelSwitch.transcription({
+                    filePath: tempFile,
+                    buffer: buffer,
+                    mimeType: "audio/webm"
                 });
+
                 transcript = transcription.text;
                 console.log('🎤 [Transcription]:', transcript);
 
@@ -1210,7 +1225,7 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
             }
         }
 
-        // 4. Reasoning with ModelSwitch (respects VISION_PROVIDER)
+        // 4. Reasoning with ModelSwitch (respects BRAIN_PROVIDER)
         const response = await ModelSwitch.chatCompletion({
             messages: [
                 {

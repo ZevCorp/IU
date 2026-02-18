@@ -428,9 +428,13 @@ function init() {
     if (typeof VisionManager !== 'undefined') {
         visionManager = new VisionManager();
 
-        // Initialize AudioLoop
         if (typeof AudioLoop !== 'undefined') {
             window.audioLoop = new AudioLoop();
+
+            // Voice Wake Word Handler
+            window.audioLoop.setOnWakeWord((type, text) => {
+                handleWakeWord(type, text);
+            });
         }
 
         // --- AUTO-DETECT WINDOW POSITION ---
@@ -716,6 +720,10 @@ function init() {
         if (localRole === role) {
             localRole = null;
             console.log('[App] Role deactivated');
+            // Stop Sensors if toggled off
+            if (role === 'sensors' && visionManager) {
+                // visionManager.stop(); // Optional: Keep running?
+            }
         } else {
             localRole = role;
             console.log(`[App] Role set to: ${role}`);
@@ -738,8 +746,12 @@ function init() {
         if (localRole === 'sensors') {
             // Activate VisionManager and AudioLoop
             if (visionManager) {
-                visionManager.start();
+                // visionManager.start(); // It starts by default
                 console.log('[App] 🎥 Sensors ACTIVATED (camera/audio)');
+            }
+            if (window.audioLoop) {
+                console.log('[App] 🎤 Audio Loop ensured active');
+                // window.audioLoop.start(); // It also starts by default
             }
             showToast('🎙️ Sensores activados');
         } else if (localRole === 'pc') {
@@ -763,6 +775,10 @@ function init() {
         roleSensors.addEventListener('click', () => setRole('sensors'));
     }
 
+    // Default to Sensors role for immediate functionality
+    setTimeout(() => {
+        if (!localRole) setRole('sensors');
+    }, 1000);
 
     // Initialize DeviceSync
     if (typeof getDeviceSync === 'function') {
@@ -771,6 +787,19 @@ function init() {
         // Set up connection status callbacks
         deviceSync.setOnConnectionChange((connected, devices) => {
             updateConnectionStatus(connected, devices);
+        });
+
+        // Handle Remote Instructions (Zapier + Context)
+        deviceSync.setOnRemoteInstruction((instruction, context) => {
+            console.log('⚡ [App] Remote instruction:', instruction, 'Context:', context);
+            const userCommand = context ? `[Contexto: ${context}] ${instruction}` : instruction;
+
+            showToast(`⚡ Instrucción remota: ${instruction}`);
+
+            // Execute via main process
+            if (window.iuOS && window.iuOS.executeExplicitAction) {
+                window.iuOS.executeExplicitAction(userCommand);
+            }
         });
 
         // Connect to Render server
@@ -1899,3 +1928,69 @@ function showActionConfirmation(plan) {
         }
     }, 15000);
 }
+
+// ============================================
+// Voice & Gaze Control Logic
+// ============================================
+
+let lastInteractionTime = Date.now();
+
+function handleWakeWord(type, text) {
+    if (conversationState === 'active') {
+        // If already active, just reset timer
+        lastInteractionTime = Date.now();
+        return;
+    }
+
+    console.log(`🎤 [App] Handle Wake Word: ${type} ("${text}")`);
+
+    // 1. Global Activation
+    if (type === 'global') {
+        toggleConversation();
+        showToast('🗣️ Escuchando...');
+        return;
+    }
+
+    // 2. Gated Activation (Check Gaze)
+    if (type === 'gated') {
+        // Reuse VisionManager state
+        if (visionManager && visionManager.state.isAttentive) {
+            console.log('👁️ [App] Gaze Confirmation: PASS');
+            if (face) {
+                face.transitionTo('listening');
+                setTimeout(() => face.transitionTo('thinking'), 1000);
+            }
+            toggleConversation();
+            showToast('🗣️ Escuchando...');
+        } else {
+            console.log('👁️ [App] Gaze Confirmation: FAIL (Not looking)');
+        }
+    }
+}
+
+// Inactivity Monitor (Auto-Stop)
+setInterval(() => {
+    if (conversationState !== 'active') return;
+
+    const now = Date.now();
+
+    // Check Gaze via VisionManager
+    if (visionManager) {
+        // If looking at U, reset timer
+        if (visionManager.state.isAttentive) {
+            lastInteractionTime = now;
+            return;
+        }
+
+        // If looking AWAY (but at screen), timer ticks.
+    }
+
+    // Timeout: 10 seconds of not looking at U
+    if (now - lastInteractionTime > 10000) {
+        console.log('💤 [App] Auto-deactivating due to inactivity (Gaze)');
+        toggleConversation(); // Stop
+        showToast('💤 Suspendido por inactividad');
+        if (face) face.transitionTo('idle');
+    }
+
+}, 1000);

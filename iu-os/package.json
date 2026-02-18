@@ -95,8 +95,11 @@
         "node-gyp": "^10.0.0"
     },
     "dependencies": {
+        "@anthropic-ai/sdk": "^0.76.0",
         "@google/generative-ai": "^0.24.1",
         "@nut-tree-fork/nut-js": "^4.2.6",
+        "@picovoice/porcupine-web": "^4.0.0",
+        "@picovoice/web-voice-processor": "^4.0.9",
         "axios": "^1.13.4",
         "dotenv": "^17.2.3",
         "electron-updater": "^6.1.7",

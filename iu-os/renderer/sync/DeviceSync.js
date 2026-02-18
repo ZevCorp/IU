@@ -25,6 +25,7 @@ class DeviceSync {
         this.onFaceReceived = null;
         this.onSharedStateChange = null;
         this.onRoleChange = null;
+        this.onRemoteInstruction = null;
 
         // Device role: 'pc' | 'sensors' | null
         this.deviceRole = null;
@@ -57,8 +58,21 @@ class DeviceSync {
     }
 
     async connect() {
-        return new Promise((resolve) => {
+        return new Promise(async (resolve) => {
             try {
+                // Check for static Device ID from .env (overrides localStorage)
+                if (window.iuOS && window.iuOS.getEnvDeviceId) {
+                    try {
+                        const envId = await window.iuOS.getEnvDeviceId();
+                        if (envId) {
+                            console.log('[DeviceSync] Using static Device ID from .env:', envId);
+                            this.deviceId = envId;
+                        }
+                    } catch (e) {
+                        console.warn('[DeviceSync] Failed to get env Device ID:', e);
+                    }
+                }
+
                 console.log(`[DeviceSync] Connecting to: ${this.serverUrl}`);
                 this.ws = new WebSocket(this.serverUrl);
 
@@ -173,7 +187,21 @@ class DeviceSync {
             case 'role_change':
                 this.handleRoleChange(message);
                 break;
+            case 'remote_instruction':
+                this.handleRemoteInstruction(message);
+                break;
         }
+    }
+
+    handleRemoteInstruction(message) {
+        console.log('[DeviceSync] Received remote instruction:', message.payload);
+        if (this.onRemoteInstruction && message.payload && message.payload.instruction) {
+            this.onRemoteInstruction(message.payload.instruction, message.payload.context);
+        }
+    }
+
+    setOnRemoteInstruction(callback) {
+        this.onRemoteInstruction = callback;
     }
 
     handleDeviceRegister(message) {

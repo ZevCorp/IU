@@ -75,66 +75,6 @@ const SOM_TOOLS = [
             }
         }
     },
-    // TEMPORARILY DISABLED TO SAVE TOKENS - Need visual inspection fallback
-    /*
-    {
-        type: "function",
-        function: {
-            name: "need_visual_inspection",
-            description: "Request to see the actual screenshot when the detected elements list is incomplete or unclear. Use this when you suspect there are important UI elements not detected by the detector, or when you need to visually verify the current state of the screen. This will show you the real screenshot so you can provide precise coordinates.",
-            parameters: {
-                type: "object",
-                properties: {
-                    reason: { type: "string", description: "Why you need to see the screenshot (e.g., 'The search bar should be visible but is not in the detected elements')" }
-                },
-                required: ["reason"]
-            }
-        }
-    },
-    */
-    {
-        type: "function",
-        function: {
-            name: "perform_set_of_actions",
-            description: "Execute a sequence of actions in order (batch execution). Use this when you are confident about multiple steps (e.g. typing then pressing enter, or clicking multiple known buttons like a calculator). This is MUCH faster than doing one action at a time.",
-            parameters: {
-                type: "object",
-                properties: {
-                    actions: {
-                        type: "array",
-                        items: {
-                            type: "object",
-                            properties: {
-                                action: { type: "string", enum: ["click", "type", "key"], description: "Type of action to perform" },
-                                element_id: { type: "number", description: "If action=click, the ID of the element" },
-                                text: { type: "string", description: "If action=type, the text to type" },
-                                key: { type: "string", description: "If action=key, the key to press" },
-                                reasoning: { type: "string", description: "Why this action is needed" }
-                            },
-                            required: ["action", "reasoning"]
-                        }
-                    },
-                    reasoning: { type: "string", description: "Reason for the entire batch" }
-                },
-                required: ["actions", "reasoning"]
-            }
-        }
-    },
-    {
-        type: "function",
-        function: {
-            name: "switch_app",
-            description: "Switch focus to a different application or open it if closed. Use this when the goal requires interacting with multiple apps (e.g. copying from Notes to Calendar).",
-            parameters: {
-                type: "object",
-                properties: {
-                    app_name: { type: "string", description: "Name of the app to switch to (e.g. 'Calculator', 'Notes', 'Calendar')" },
-                    reasoning: { type: "string", description: "Why switching apps helps achieve the goal" }
-                },
-                required: ["app_name", "reasoning"]
-            }
-        }
-    },
     {
         type: "function",
         function: {
@@ -1062,17 +1002,33 @@ CONTEXTO DE VENTANAS:
     /**
      * Trim SoM conversation to keep it manageable (keep last N user messages).
      */
+    /**
+     * Trim SoM conversation to keep it manageable (keep last N user messages).
+     * Ensures we don't break the conversation flow (User -> Assistant -> Tool).
+     */
     _trimSomMessages(messages) {
         const maxUserMessages = 6; // keep last 6 iterations
-        let userCount = 0;
-        for (let i = messages.length - 1; i >= 1; i--) {
+
+        let userIndices = [];
+        for (let i = 0; i < messages.length; i++) {
             if (messages[i].role === 'user') {
-                userCount++;
-                if (userCount > maxUserMessages) {
-                    // Remove this message and everything before it (except system)
-                    messages.splice(1, i);
-                    break;
-                }
+                userIndices.push(i);
+            }
+        }
+
+        const tokensToRemove = userIndices.length - maxUserMessages;
+
+        if (tokensToRemove > 0) {
+            // We need to keep the user message at index `userIndices[tokensToRemove]`
+            // and remove everything before it (except System at 0).
+            const cutOffIndex = userIndices[tokensToRemove];
+
+            // Validate cutoff (must be > 1 to preserve system)
+            if (cutOffIndex > 1) {
+                // Remove from index 1 up to (but not including) cutOffIndex
+                // deleteCount = cutOffIndex - 1
+                messages.splice(1, cutOffIndex - 1);
+                console.log(`✂️ [ScreenAgent] Trimmed history. New first user message was at index ${cutOffIndex}.`);
             }
         }
     }
