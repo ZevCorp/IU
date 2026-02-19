@@ -18,6 +18,7 @@ const { execFile } = require('child_process');
 const ModelSwitch = require('./ModelSwitch');
 const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
+const WhatsAppContext = require('./WhatsAppContext');
 // const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window - REMOVING FOR ISOLATION
 
 // Path to Python venv and YOLO detection script
@@ -67,7 +68,7 @@ const SOM_TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right"], description: "The key to press" },
+                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "pageup", "pagedown", "home", "end"], description: "The key to press" },
                     label: { type: "string", description: "Short description of why pressing this key" },
                     reasoning: { type: "string", description: "Why this key press advances the goal" }
                 },
@@ -131,6 +132,22 @@ const SOM_TOOLS = [
                 required: ["summary"]
             }
         }
+    },
+    {
+        type: "function",
+        function: {
+            name: "scroll",
+            description: "Scroll the page up or down to reveal hidden content.",
+            parameters: {
+                type: "object",
+                properties: {
+                    direction: { type: "string", enum: ["up", "down"], description: "Direction to scroll" },
+                    amount: { type: "string", enum: ["small", "medium", "large"], description: "Amount of scroll" },
+                    reasoning: { type: "string", description: "Why scrolling is needed" }
+                },
+                required: ["direction", "reasoning"]
+            }
+        }
     }
 ];
 
@@ -177,7 +194,7 @@ const VISUAL_TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right"], description: "The key to press" },
+                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "pageup", "pagedown", "home", "end"], description: "The key to press" },
                     label: { type: "string", description: "Short description" },
                     reasoning: { type: "string", description: "Why this key press advances the goal" }
                 },
@@ -196,6 +213,22 @@ const VISUAL_TOOLS = [
                     summary: { type: "string", description: "Brief summary of what was accomplished" }
                 },
                 required: ["summary"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
+            name: "scroll",
+            description: "Scroll the page",
+            parameters: {
+                type: "object",
+                properties: {
+                    direction: { type: "string", enum: ["up", "down"] },
+                    amount: { type: "string", enum: ["small", "medium", "large"] },
+                    reasoning: { type: "string" }
+                },
+                required: ["direction", "reasoning"]
             }
         }
     }
@@ -237,12 +270,31 @@ class ScreenAgent {
      * Get app-specific instructions for the LLM.
      * Crucial for messaging apps to force context reading.
      */
-    _getAppSpecificInstructions(appName) {
+    _getAppSpecificInstructions(appName, elements = []) {
         if (!appName) return '';
         const normalized = appName.toLowerCase();
 
         if (normalized.includes('whatsapp') || normalized.includes('telegram') || normalized.includes('slack') || normalized.includes('messages') || normalized.includes('discord')) {
-            return `\n\n⚠️ CONTEXTO DE CHAT (${appName}):\nAntes de actuar, LEE los mensajes visibles (elementos de texto) para entender la conversación. Tu respuesta debe ser coherente con los últimos mensajes recibidos.`;
+            let contextInstruction = `\n\n⚠️ CONTEXTO DE CHAT (${appName}):\nAntes de actuar, LEE los mensajes visibles para entender la conversación.`;
+
+            // USE WHATSAPP CONTEXT PARSER
+            if (normalized.includes('whatsapp')) {
+                const context = WhatsAppContext.parse(elements);
+                const formattedHistory = WhatsAppContext.formatForPrompt(context);
+                contextInstruction += `\n${formattedHistory}`;
+
+                if (context.analysis.suggestion === 'SCROLL_UP') {
+                    contextInstruction += `\n\n🛑 ALERTA DE CONTEXTO LIMITADO:
+Parece que no hay suficientes mensajes anteriores para entender el contexto completo (o no se ve la fecha de hoy).
+ACCIONES RECOMENDADAS:
+1. Si el usuario pide "leer contexto" o responder coherentemente, PRIMERO haz scroll hacia arriba (key_press "pageup") para cargar más mensajes.
+2. Luego, vuelve a leer.`;
+                }
+            } else {
+                contextInstruction += `\nTu respuesta debe ser coherente con los últimos mensajes visibles.`;
+            }
+
+            return contextInstruction;
         }
         return '';
     }
@@ -502,7 +554,7 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                     : '  (No se detectaron elementos UI relevantes)';
 
                 // 6. Send element list to LLM (text-only, no image)
-                const appInstructions = this._getAppSpecificInstructions(this.currentApp);
+                const appInstructions = this._getAppSpecificInstructions(this.currentApp, elements);
 
                 somMessages.push({
                     role: "user",
@@ -1325,7 +1377,8 @@ CONTEXTO DE VENTANAS:
                 const keyMap = {
                     enter: Key.Enter, tab: Key.Tab, escape: Key.Escape,
                     backspace: Key.Backspace, delete: Key.Delete,
-                    up: Key.Up, down: Key.Down, left: Key.Left, right: Key.Right
+                    up: Key.Up, down: Key.Down, left: Key.Left, right: Key.Right,
+                    pageup: Key.PageUp, pagedown: Key.PageDown, home: Key.Home, end: Key.End
                 };
                 const key = keyMap[args.key];
                 if (key) {
@@ -1335,6 +1388,14 @@ CONTEXTO DE VENTANAS:
                 } else {
                     console.warn(`⚠️ [ScreenAgent] Unknown key: ${args.key}`);
                 }
+
+            } else if (fnName === 'scroll') {
+                const amountMap = { small: 100, medium: 500, large: 1500 };
+                const pixels = amountMap[args.amount || 'medium'];
+                const direction = args.direction === 'up' ? mouse.scrollUp(pixels) : mouse.scrollDown(pixels);
+
+                console.log(`📜 [ScreenAgent] Scrolling ${args.direction} (${pixels}px)`);
+                await direction;
             }
 
         } catch (e) {
