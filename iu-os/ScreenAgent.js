@@ -233,6 +233,20 @@ class ScreenAgent {
         return this.nutjs;
     }
 
+    /**
+     * Get app-specific instructions for the LLM.
+     * Crucial for messaging apps to force context reading.
+     */
+    _getAppSpecificInstructions(appName) {
+        if (!appName) return '';
+        const normalized = appName.toLowerCase();
+
+        if (normalized.includes('whatsapp') || normalized.includes('telegram') || normalized.includes('slack') || normalized.includes('messages') || normalized.includes('discord')) {
+            return `\n\n⚠️ CONTEXTO DE CHAT (${appName}):\nAntes de actuar, LEE los mensajes visibles (elementos de texto) para entender la conversación. Tu respuesta debe ser coherente con los últimos mensajes recibidos.`;
+        }
+        return '';
+    }
+
 
     /**
      * Run AX Accessibility detection (JXA).
@@ -488,12 +502,14 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                     : '  (No se detectaron elementos UI relevantes)';
 
                 // 6. Send element list to LLM (text-only, no image)
+                const appInstructions = this._getAppSpecificInstructions(this.currentApp);
+
                 somMessages.push({
                     role: "user",
                     content: `Iteración ${iteration}/${this.maxIterations}. Objetivo: "${goal}"
 
 Elementos UI detectados en pantalla (${elements.length} total) [Fuente: ${detectionResult.source || 'VISION'}]:
-${elementsText}${historyHint}${loopWarning}
+${elementsText}${historyHint}${loopWarning}${appInstructions}
 
 ¿Qué acción ejecutar?`
                 });
@@ -998,11 +1014,11 @@ CONTEXTO DE VENTANAS:
                 // Calculate "safe" spot: 150px to the right of target, clamped to screen
                 let bubbleX = args.px + 120;
                 let bubbleY = args.py + 50;
-
+    
                 // Clamp to screen
                 if (bubbleX > this.screenWidth - 50) bubbleX = args.px - 120; // Move to left if too far right
                 if (bubbleY > this.screenHeight - 50) bubbleY = this.screenHeight - 50;
-
+    
                 await this._dragBubbleTo(bubbleX, bubbleY);
                 await this._wait(100);
                 */
@@ -1285,11 +1301,11 @@ CONTEXTO DE VENTANAS:
                 // Calculate "safe" spot: 150px to the right of target, clamped to screen
                 let bubbleX = px + 120;
                 let bubbleY = py + 50;
-
+    
                 // Clamp to screen
                 if (bubbleX > this.screenWidth - 50) bubbleX = px - 120; // Move to left if too far right
                 if (bubbleY > this.screenHeight - 50) bubbleY = this.screenHeight - 50;
-
+    
                 await this._dragBubbleTo(bubbleX, bubbleY);
                 await this._wait(100);
                 */

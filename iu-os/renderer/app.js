@@ -753,7 +753,26 @@ function init() {
                 console.log('[App] 🎤 Audio Loop ensured active');
                 // window.audioLoop.start(); // It also starts by default
             }
-            showToast('Sensores activados');
+            // showToast('Sensores activados');
+            // Show "Sensores activados" in intent carousel (same style as "Empezando conversación")
+            const container = document.getElementById('intent-carousel');
+            const track = document.getElementById('intent-track');
+            const label = document.getElementById('intent-label');
+            const details = document.getElementById('intent-details');
+
+            if (container && track && label) {
+                container.classList.remove('hidden');
+                isCarouselActive = false; // Not interactive
+
+                track.innerHTML = ''; // No icon for this message
+                label.textContent = 'Sensores activados';
+                if (details) details.classList.add('hidden');
+
+                // Hide after 3 seconds
+                setTimeout(() => {
+                    container.classList.add('hidden');
+                }, 3000);
+            }
         } else if (localRole === 'pc') {
             // PC role: Playwright is controlled by main process
             // Optionally stop sensors if they were running
