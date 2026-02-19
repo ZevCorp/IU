@@ -424,11 +424,27 @@ const wakeUpSound = new Audio('assets/hey_pss_pss.mp3');
 function init() {
     face = new Face();
 
+    // Check for Sticky Mode (Automation Cursor Follower)
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('mode') === 'sticky') {
+        console.log('🤖 [App] Starting in Sticky Mode (Automation)');
+        document.body.classList.add('sticky-mode');
+        // Ensure face is BLACK as requested
+        face.setEyeColor('#000000');
+
+        // Disable controls panel
+        const controls = document.getElementById('controls-panel');
+        if (controls) controls.style.display = 'none';
+
+        // Hide scrollbars
+        document.body.style.overflow = 'hidden';
+    }
+
     // Initialize VisionManager
     if (typeof VisionManager !== 'undefined') {
         visionManager = new VisionManager();
 
-        if (typeof AudioLoop !== 'undefined') {
+        if (typeof AudioLoop !== 'undefined' && urlParams.get('mode') !== 'sticky') { // No audio loop in sticky mode to avoid self-echo/conflicts
             window.audioLoop = new AudioLoop();
 
             // Voice Wake Word Handler

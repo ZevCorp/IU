@@ -10,7 +10,7 @@
  *   5. Repeat
  */
 
-const { screen } = require('electron');
+const { screen, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const sharp = require('sharp');
@@ -19,6 +19,7 @@ const ModelSwitch = require('./ModelSwitch');
 const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
 const WhatsAppContext = require('./WhatsAppContext');
+const stickyFace = require('./StickyFaceController'); // Sticky Face Controller for Automation Mode
 // const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window - REMOVING FOR ISOLATION
 
 // Path to Python venv and YOLO detection script
@@ -396,6 +397,28 @@ ACCIONES RECOMENDADAS:
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
 
         this._notify('action-status', { phase: 'starting', goal, app });
+
+        // HIDE ALL OWN WINDOWS & SHOW STICKY FACE
+        this.hiddenWindows = [];
+        try {
+            console.log('🙈 [ScreenAgent] Hiding all windows for automation mode...');
+            const allWindows = BrowserWindow.getAllWindows();
+            for (const win of allWindows) {
+                if (!win.isDestroyed() && win.isVisible()) {
+                    // Don't hide the sticky face window itself!
+                    if (stickyFace.window && win.id === stickyFace.window.id) continue;
+
+                    // Actually, let's just make sure we don't hide it if we can identify it.
+                    // But stickyFace hasn't started yet, so create window might be called.
+                    win.hide();
+                    this.hiddenWindows.push(win);
+                }
+            }
+
+            stickyFace.start();
+        } catch (e) {
+            console.error('⚠️ [ScreenAgent] Failed to manage windows:', e);
+        }
 
         try {
             await this._openApp(app);
@@ -777,8 +800,23 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
             return { success: false, error: e.message };
         } finally {
             this.isRunning = false;
-            if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                this.mainWindow.show();
+
+            // RESTORE WINDOWS & HIDE STICKY FACE
+            try {
+                stickyFace.stop();
+
+                if (this.hiddenWindows) {
+                    for (const win of this.hiddenWindows) {
+                        if (!win.isDestroyed()) win.show();
+                    }
+                }
+
+                // Ensure mainWindow is visible if it wasn't captured
+                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+                    this.mainWindow.show();
+                }
+            } catch (e) {
+                console.error('⚠️ [ScreenAgent] Failed to restore windows:', e);
             }
         }
     }

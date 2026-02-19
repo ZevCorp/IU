@@ -118,7 +118,64 @@ body {
   height: 100%;
   max-width: 300px;
   max-height: 400px;
+  max-height: 400px;
   transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* =====================================================
+   Automation Sticky Mode (The cursor follower)
+   ===================================================== */
+body.sticky-mode {
+  background: transparent !important;
+  overflow: hidden;
+  border-radius: 50%;
+  /* Make window circular */
+}
+
+body.sticky-mode #app {
+  background: transparent !important;
+  border-radius: 50%;
+}
+
+/* Hide UI in sticky mode */
+body.sticky-mode #controls-panel,
+body.sticky-mode .menu-toggle,
+body.sticky-mode .chat-toggle-btn,
+body.sticky-mode .transfer-btn-top,
+body.sticky-mode #intent-carousel,
+body.sticky-mode #transcript-container,
+body.sticky-mode #nav-hud,
+body.sticky-mode #checklist-container,
+body.sticky-mode #neural-canvas {
+  display: none !important;
+}
+
+/* Ensure face is centered and scaled appropriately */
+body.sticky-mode #face-container {
+  padding: 0;
+  margin: 0;
+  overflow: visible;
+  /* Let SVG overflow if needed */
+}
+
+/* Scale the ENTIRE SVG to zoom in on the face features */
+body.sticky-mode #face-svg {
+  transform: scale(2.8);
+  /* Massive zoom to make face fill 77x77 window */
+  transform-origin: center 48%;
+  /* Adjust origin slightly up to center features vertically */
+  max-width: none !important;
+  max-height: none !important;
+}
+
+/* Increase stroke width for visibility at small size */
+body.sticky-mode .face-stroke {
+  stroke-width: 1.8px !important;
+  /* Thinner relative to zoom (2.8 * 1.8 ~ 5px visual) */
+  stroke: #000000 !important;
+  /* EXACTLY BLACK */
+  filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.4));
+  /* Subtle outline */
 }
 
 /* =====================================================
