@@ -523,7 +523,27 @@ ${elementsText}${historyHint}${loopWarning}
                     break;
                 }
 
-                somMessages.push(somChoice.message);
+                // Explicitly construct the assistant message to ensure tool_calls are preserved
+                // and to avoid any reference/mutation issues.
+                const assistantMsg = {
+                    role: "assistant",
+                    content: somChoice.message.content || null,
+                    tool_calls: toolCalls.map(tc => ({
+                        id: tc.id,
+                        type: tc.type,
+                        function: {
+                            name: tc.function.name,
+                            arguments: tc.function.arguments // Keep as string for OpenAI format
+                        }
+                    }))
+                };
+
+                // Verify tool calls are present if we think they are
+                if (toolCalls.length > 0 && (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0)) {
+                    console.error('🔴 [ScreenAgent] CRITICAL: Tool calls lost during message construction!');
+                }
+
+                somMessages.push(assistantMsg);
 
                 // Iterate over all tool calls (BATCH EXECUTION)
                 for (let i = 0; i < toolCalls.length; i++) {
@@ -999,9 +1019,6 @@ CONTEXTO DE VENTANAS:
         }
     }
 
-    /**
-     * Trim SoM conversation to keep it manageable (keep last N user messages).
-     */
     /**
      * Trim SoM conversation to keep it manageable (keep last N user messages).
      * Ensures we don't break the conversation flow (User -> Assistant -> Tool).

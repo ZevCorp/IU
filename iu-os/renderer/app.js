@@ -753,7 +753,7 @@ function init() {
                 console.log('[App] 🎤 Audio Loop ensured active');
                 // window.audioLoop.start(); // It also starts by default
             }
-            showToast('🎙️ Sensores activados');
+            showToast('Sensores activados');
         } else if (localRole === 'pc') {
             // PC role: Playwright is controlled by main process
             // Optionally stop sensors if they were running
@@ -1969,28 +1969,13 @@ function handleWakeWord(type, text) {
 }
 
 // Inactivity Monitor (Auto-Stop)
-setInterval(() => {
-    if (conversationState !== 'active') return;
-
-    const now = Date.now();
-
-    // Check Gaze via VisionManager
-    if (visionManager) {
-        // If looking at U, reset timer
-        if (visionManager.state.isAttentive) {
-            lastInteractionTime = now;
-            return;
-        }
-
-        // If looking AWAY (but at screen), timer ticks.
-    }
-
-    // Timeout: 10 seconds of not looking at U
-    if (now - lastInteractionTime > 10000) {
-        console.log('💤 [App] Auto-deactivating due to inactivity (Gaze)');
-        toggleConversation(); // Stop
-        showToast('💤 Suspendido por inactividad');
-        if (face) face.transitionTo('idle');
-    }
-
-}, 1000);
+// Inactivity Monitor (DISABLED by user request)
+// setInterval(() => {
+//     if (conversationState !== 'active') return;
+//     const now = Date.now();
+//     if (visionManager && visionManager.state.isAttentive) {
+//         lastInteractionTime = now;
+//         return;
+//     }
+//     // Timeout disabled.
+// }, 1000);

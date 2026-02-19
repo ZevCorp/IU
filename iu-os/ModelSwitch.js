@@ -406,18 +406,23 @@ async function _chatAnthropic({ messages, tools, tool_choice, max_tokens }) {
         }
         if (m.role === 'assistant') {
             const content = [];
-            if (m.content !== null && m.content !== undefined) {
+            if (m.content !== null && m.content !== undefined && m.content !== "") {
                 content.push({ type: 'text', text: m.content });
             }
-            if (m.tool_calls) {
+            if (m.tool_calls && Array.isArray(m.tool_calls)) {
                 m.tool_calls.forEach(tc => {
                     content.push({
                         type: 'tool_use',
                         id: tc.id,
                         name: tc.function.name,
-                        input: JSON.parse(tc.function.arguments)
+                        input: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments
                     });
                 });
+            }
+
+            if (content.length === 0) {
+                // console.warn('⚠️ [ModelSwitch] Assistant message has empty content, skipping...');
+                return null;
             }
             return { role: 'assistant', content };
         }
