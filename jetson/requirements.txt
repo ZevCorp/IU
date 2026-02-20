@@ -1,0 +1,59 @@
+# ==============================================================================
+# HRM Service - Dependencies for Jetson Orin Nano
+# ==============================================================================
+#
+# SETUP NOTES:
+# 
+# 1. PyTorch: Should be pre-installed at SYSTEM LEVEL on Jetson.
+#    Use venv with --system-site-packages to inherit it.
+#    
+#    If not installed, use Jetson AI Lab mirror:
+#    pip install torch torchvision --index-url https://pypi.jetson-ai-lab.io/simple
+#
+# 2. HRM: Clone the repo (NOT pip install):
+#    git clone https://github.com/sapientinc/HRM.git
+#    export PYTHONPATH="${PYTHONPATH}:$(pwd)/HRM"
+#
+# 3. For ARM64/Jetson, use:
+#    pip install -r requirements.txt --extra-index-url https://pypi.jetson-ai-lab.io/simple
+#
+# ==============================================================================
+
+# ========================================
+# WebSocket Client (for connecting to Render backend)
+# ========================================
+websockets>=12.0
+
+# ========================================
+# HuggingFace Hub (for downloading model checkpoints)
+# ========================================
+huggingface_hub>=0.20.0
+
+# ========================================
+# YAML parsing (for HRM config files)
+# ========================================
+PyYAML>=6.0
+
+# ========================================
+# HRM Core Dependencies
+# These are from HRM/requirements.txt
+# ========================================
+einops>=0.7.0
+tqdm>=4.66.0
+coolname>=2.2.0
+pydantic>=2.0.0
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+
+# ========================================
+# Optional: adam-atan2 (training only)
+# Requires CUDA for compilation - may fail on some systems
+# Not needed for inference
+# ========================================
+# adam-atan2>=0.0.1
+
+# ========================================
+# Optional: FlashAttention (better GPU performance)
+# Requires building from source on ARM64
+# ========================================
+# flash-attn

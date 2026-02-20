@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+yolo_venv/
+.yolo_model_cache/
