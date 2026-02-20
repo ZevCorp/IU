@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Demo de Autenticación Biométrica - Transferencias Bancarias</title>
+    <meta name="description"
+        content="Demostración de sistema de autenticación biométrica para transferencias bancarias seguras">
+    <link rel="stylesheet" href="/src/styles/BiometricUI.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 100%);
+            color: #ffffff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .demo-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .demo-header {
+            text-align: center;
+            margin-bottom: 50px;
+            padding: 40px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            border: 1px solid rgba(79, 172, 254, 0.2);
+        }
+
+        .demo-header h1 {
+            font-size: 42px;
+            font-weight: 800;
+            margin-bottom: 15px;
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .demo-header p {
+            font-size: 18px;
+            color: rgba(255, 255, 255, 0.7);
+            max-width: 700px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        .demo-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .demo-card {
+            background: linear-gradient(135deg, rgba(79, 172, 254, 0.1) 0%, rgba(0, 242, 254, 0.05) 100%);
+            border-radius: 20px;
+            padding: 35px;
+            border: 1px solid rgba(79, 172, 254, 0.2);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .demo-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
+            transform: scaleX(0);
+            transition: transform 0.3s ease;
+        }
+
+        .demo-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(79, 172, 254, 0.2);
+        }
+
+        .demo-card:hover::before {
+            transform: scaleX(1);
+        }
+
+        .demo-card h2 {
+            font-size: 24px;
+            margin-bottom: 15px;
+            color: #4facfe;
+        }
+
+        .demo-card p {
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 20px;
+        }
+
+        .status-badge.enrolled {
+            background: rgba(0, 255, 136, 0.2);
+            color: #00ff88;
+            border: 1px solid rgba(0, 255, 136, 0.3);
+        }
+
+        .status-badge.not-enrolled {
+            background: rgba(255, 165, 2, 0.2);
+            color: #ffa502;
+            border: 1px solid rgba(255, 165, 2, 0.3);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+            font-weight: 500;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(79, 172, 254, 0.3);
+            border-radius: 10px;
+            color: #ffffff;
+            font-size: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #4facfe;
+            box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.1);
+        }
+
+        .demo-btn {
+            width: 100%;
+            padding: 16px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .demo-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.1);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        .demo-btn:hover::before {
+            width: 400px;
+            height: 400px;
+        }
+
+        .demo-btn-primary {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: #ffffff;
+            box-shadow: 0 4px 20px rgba(79, 172, 254, 0.3);
+        }
+
+        .demo-btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 30px rgba(79, 172, 254, 0.5);
+        }
+
+        .demo-btn-secondary {
+            background: rgba(255, 71, 87, 0.2);
+            color: #ff4757;
+            border: 1px solid rgba(255, 71, 87, 0.3);
+            margin-top: 10px;
+        }
+
+        .demo-btn-secondary:hover:not(:disabled) {
+            background: rgba(255, 71, 87, 0.3);
+        }
+
+        .demo-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .transfer-result {
+            margin-top: 25px;
+            padding: 20px;
+            border-radius: 12px;
+            display: none;
+        }
+
+        .transfer-result.success {
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid rgba(0, 255, 136, 0.3);
+            color: #00ff88;
+        }
+
+        .transfer-result.error {
+            background: rgba(255, 71, 87, 0.1);
+            border: 1px solid rgba(255, 71, 87, 0.3);
+            color: #ff4757;
+        }
+
+        .transfer-result h3 {
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+
+        .transfer-result p {
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .config-section {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+        }
+
+        .config-section h3 {
+            font-size: 18px;
+            margin-bottom: 20px;
+            color: #4facfe;
+        }
+
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .config-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .config-item label {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .config-item input[type="range"] {
+            width: 150px;
+        }
+
+        .config-value {
+            font-weight: 600;
+            color: #4facfe;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        @media (max-width: 768px) {
+            .demo-header h1 {
+                font-size: 32px;
+            }
+
+            .demo-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="demo-container">
+        <!-- Header -->
+        <div class="demo-header">
+            <h1>🔐 Autenticación Biométrica</h1>
+            <p>Sistema de verificación facial para transferencias bancarias seguras. Registra tu perfil biométrico y
+                realiza transferencias protegidas con reconocimiento facial.</p>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="demo-grid">
+            <!-- Enrollment Card -->
+            <div class="demo-card">
+                <span class="status-badge not-enrolled" id="enrollment-status">No registrado</span>
+                <h2>📸 Registro Biométrico</h2>
+                <p>Registra tu perfil facial para poder realizar transferencias bancarias de forma segura. El sistema
+                    capturará 3 imágenes de tu rostro.</p>
+                <button class="demo-btn demo-btn-primary" id="btn-enroll">
+                    Registrar Perfil
+                </button>
+                <button class="demo-btn demo-btn-secondary" id="btn-delete-profile" style="display: none;">
+                    Eliminar Perfil
+                </button>
+            </div>
+
+            <!-- Transfer Card -->
+            <div class="demo-card">
+                <h2>💸 Transferencia Bancaria</h2>
+                <p>Realiza una transferencia bancaria simulada. Se requiere verificación biométrica antes de procesar.
+                </p>
+
+                <div class="form-group">
+                    <label for="transfer-amount">Monto (USD)</label>
+                    <input type="number" id="transfer-amount" placeholder="1000.00" min="0" step="0.01">
+                </div>
+
+                <div class="form-group">
+                    <label for="transfer-recipient">Destinatario</label>
+                    <input type="text" id="transfer-recipient" placeholder="Juan Pérez">
+                </div>
+
+                <div class="form-group">
+                    <label for="transfer-account">Número de cuenta</label>
+                    <input type="text" id="transfer-account" placeholder="1234-5678-9012">
+                </div>
+
+                <button class="demo-btn demo-btn-primary" id="btn-transfer" disabled>
+                    🔒 Realizar Transferencia
+                </button>
+
+                <div class="transfer-result" id="transfer-result"></div>
+            </div>
+        </div>
+
+        <!-- Configuration Section -->
+        <div class="config-section">
+            <h3>⚙️ Configuración del Sistema</h3>
+
+            <div class="config-item">
+                <label>Umbral de Confianza Mínimo</label>
+                <div>
+                    <input type="range" id="config-threshold" min="50" max="95" value="75" step="5">
+                    <span class="config-value" id="threshold-value">75%</span>
+                </div>
+            </div>
+
+            <div class="config-item">
+                <label>Intentos Máximos de Verificación</label>
+                <div>
+                    <input type="range" id="config-attempts" min="1" max="5" value="3">
+                    <span class="config-value" id="attempts-value">3</span>
+                </div>
+            </div>
+
+            <div class="config-item">
+                <label>Calidad Mínima de Captura</label>
+                <div>
+                    <input type="range" id="config-quality" min="40" max="80" value="60" step="10">
+                    <span class="config-value" id="quality-value">60%</span>
+                </div>
+            </div>
+
+            <div class="config-item">
+                <label>Detección de Vivacidad (Anti-Fotos)</label>
+                <div>
+                    <input type="checkbox" id="config-liveness" style="width: auto; height: 20px;">
+                    <span class="config-value" id="liveness-value">Desactivado</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { getBankTransferDemo } from '/src/demo/BankTransferDemo.ts';
+        import '/src/styles/BiometricUI.css';
+
+        // Initialize demo
+        const demo = getBankTransferDemo();
+
+        // UI Elements
+        const enrollBtn = document.getElementById('btn-enroll');
+        const deleteBtn = document.getElementById('btn-delete-profile');
+        const transferBtn = document.getElementById('btn-transfer');
+        const enrollmentStatus = document.getElementById('enrollment-status');
+        const transferResult = document.getElementById('transfer-result');
+
+        const amountInput = document.getElementById('transfer-amount');
+        const recipientInput = document.getElementById('transfer-recipient');
+        const accountInput = document.getElementById('transfer-account');
+
+        // Configuration sliders
+        const thresholdSlider = document.getElementById('config-threshold');
+        const attemptsSlider = document.getElementById('config-attempts');
+        const qualitySlider = document.getElementById('config-quality');
+
+        const thresholdValue = document.getElementById('threshold-value');
+        const attemptsValue = document.getElementById('attempts-value');
+        const qualityValue = document.getElementById('quality-value');
+
+        // Update UI based on enrollment status
+        function updateEnrollmentStatus() {
+            const isEnrolled = demo.isUserEnrolled();
+
+            if (isEnrolled) {
+                enrollmentStatus.textContent = '✓ Registrado';
+                enrollmentStatus.className = 'status-badge enrolled';
+                enrollBtn.textContent = 'Re-registrar Perfil';
+                deleteBtn.style.display = 'block';
+                transferBtn.disabled = false;
+            } else {
+                enrollmentStatus.textContent = 'No registrado';
+                enrollmentStatus.className = 'status-badge not-enrolled';
+                enrollBtn.textContent = 'Registrar Perfil';
+                deleteBtn.style.display = 'none';
+                transferBtn.disabled = true;
+            }
+        }
+
+        // Enrollment
+        enrollBtn.addEventListener('click', async () => {
+            await demo.startEnrollment();
+        });
+
+        // Listen for UI controller close to update status
+        demo.getUIController().setOnClose(() => {
+            updateEnrollmentStatus();
+        });
+
+        // Delete profile
+        deleteBtn.addEventListener('click', async () => {
+            if (confirm('¿Estás seguro de que deseas eliminar tu perfil biométrico?')) {
+                await demo.deleteProfile();
+                updateEnrollmentStatus();
+            }
+        });
+
+        // Transfer
+        transferBtn.addEventListener('click', async () => {
+            const amount = parseFloat(amountInput.value);
+            const recipient = recipientInput.value.trim();
+            const accountNumber = accountInput.value.trim();
+
+            if (!amount || amount <= 0) {
+                showTransferResult(false, 'Por favor, ingresa un monto válido');
+                return;
+            }
+
+            if (!recipient) {
+                showTransferResult(false, 'Por favor, ingresa el nombre del destinatario');
+                return;
+            }
+
+            // Hide previous result
+            transferResult.style.display = 'none';
+
+            // Request transfer with biometric verification
+            await demo.requestTransfer(
+                {
+                    amount,
+                    recipient,
+                    accountNumber,
+                    description: 'Transferencia desde demo biométrico'
+                },
+                (data) => {
+                    // Transfer approved
+                    showTransferResult(true, `Transferencia de $${data.amount} a ${data.recipient} completada exitosamente.`);
+
+                    // Clear form
+                    amountInput.value = '';
+                    recipientInput.value = '';
+                    accountInput.value = '';
+                },
+                (reason) => {
+                    // Transfer rejected
+                    showTransferResult(false, `Transferencia cancelada: ${reason}`);
+                }
+            );
+        });
+
+        // Show transfer result
+        function showTransferResult(success, message) {
+            transferResult.innerHTML = `
+                <h3>${success ? '✅ Transferencia Exitosa' : '❌ Transferencia Fallida'}</h3>
+                <p>${message}</p>
+            `;
+            transferResult.className = `transfer-result ${success ? 'success' : 'error'}`;
+            transferResult.style.display = 'block';
+        }
+
+        // Configuration sliders
+        thresholdSlider.addEventListener('input', (e) => {
+            const value = e.target.value;
+            thresholdValue.textContent = `${value}%`;
+
+            // Update biometric config
+            demo.authManager?.updateConfig({ minConfidenceThreshold: parseInt(value) });
+        });
+
+        attemptsSlider.addEventListener('input', (e) => {
+            const value = e.target.value;
+            attemptsValue.textContent = value;
+
+            // Update biometric config
+            demo.authManager?.updateConfig({ maxVerificationAttempts: parseInt(value) });
+        });
+
+        qualitySlider.addEventListener('input', (e) => {
+            const value = e.target.value;
+            qualityValue.textContent = `${value}%`;
+
+            // Update biometric config
+            demo.authManager?.updateConfig({ minEnrollmentQuality: parseInt(value) });
+        });
+
+        // Liveness detection toggle
+        const livenessCheckbox = document.getElementById('config-liveness');
+        const livenessValue = document.getElementById('liveness-value');
+
+        livenessCheckbox.addEventListener('change', (e) => {
+            const isEnabled = e.target.checked;
+            livenessValue.textContent = isEnabled ? 'Activado' : 'Desactivado';
+            livenessValue.style.color = isEnabled ? '#00ff88' : '#ffa502';
+
+            // Update biometric config
+            demo.authManager?.updateConfig({ requireLiveness: isEnabled });
+        });
+
+        // Initialize
+        updateEnrollmentStatus();
+
+        console.log('🔐 Biometric Transfer Demo Ready');
+        console.log('1. Click "Registrar Perfil" to enroll');
+        console.log('2. Fill transfer form and click "Realizar Transferencia"');
+        console.log('3. Verify your face to complete the transfer');
+    </script>
+</body>
+
+</html>
