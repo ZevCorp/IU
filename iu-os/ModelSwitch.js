@@ -56,10 +56,10 @@ const OPENAI_MODELS = {
 };
 
 const ANTHROPIC_DEFAULT_MODEL_BY_TIER = {
-    nano: 'claude-3-5-haiku-latest',
-    mini: 'claude-3-7-sonnet-latest',
-    full: 'claude-sonnet-4-20250514',
-    haiku: 'claude-3-5-haiku-latest'
+    nano: 'claude-haiku-4-5-20251001',
+    mini: 'claude-sonnet-4-6',
+    full: 'claude-sonnet-4-6',
+    haiku: 'claude-haiku-4-5-20251001'
 };
 
 const MODELS = {
@@ -550,8 +550,8 @@ function _anthropicFallbackModels(primaryModel) {
         .filter(Boolean);
 
     const defaults = [
-        'claude-3-5-haiku-latest',
-        'claude-3-7-sonnet-latest',
+        'claude-haiku-4-5-20251001',
+        'claude-sonnet-4-6',
         'claude-sonnet-4-20250514'
     ];
 

@@ -124,7 +124,7 @@ const SOM_TOOLS = [
         type: "function",
         function: {
             name: "goal_reached",
-            description: "Call this when the objective has been fully completed based on the detected elements and previous actions.",
+            description: "Call this ONLY after YOU have personally executed ALL required actions in this session and verified the result. Do NOT call this if you merely observe a pre-existing screen state that appears to match the goal — you must have actually performed the actions yourself. For multi-step goals, ALL steps must be completed before calling this.",
             parameters: {
                 type: "object",
                 properties: {
@@ -207,7 +207,7 @@ const VISUAL_TOOLS = [
         type: "function",
         function: {
             name: "goal_reached",
-            description: "Call this when the objective has been fully completed.",
+            description: "Call this ONLY after YOU have personally executed ALL required actions in this session. Do NOT call if you observe a pre-existing state — you must have performed the actions yourself.",
             parameters: {
                 type: "object",
                 properties: {
@@ -462,8 +462,13 @@ IMPORTANTE SOBRE MULTI-APP:
 Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa 'switch_app' cuando termines con la primera.
 
 IMPORTANTE SOBRE VELOCIDAD:
-¡USA 'perform_set_of_actions' SIEMPRE QUE SEA SEGURO! 
-Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No hagas uno por uno.`
+¡USA 'perform_set_of_actions' SIEMPRE QUE SEA SEGURO!
+Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No hagas uno por uno.
+
+CRÍTICO — NO LLAMES goal_reached PREMATURAMENTE:
+Si en la iteración 1 ves una pantalla que "ya parece completada", NO es suficiente.
+Puede ser un estado residual de sesiones anteriores. DEBES ejecutar las acciones tú mismo antes de declarar goal_reached.
+Para tareas multi-app: NUNCA llames goal_reached hasta haber completado TODOS los pasos en TODAS las apps.`
                 }
             ];
 

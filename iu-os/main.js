@@ -275,8 +275,8 @@ function getWindowBounds(mode) {
             y = 20;
             break;
         case WINDOW_MODES.MEDIUM:
-            w = SIDEBAR_WIDTH; // Match chat window width (300px)
-            h = Math.floor(height * 0.5);
+            w = 260;
+            h = Math.floor(height * 0.38);
             x = width - w - 20;
             y = 20;
             break;
@@ -325,6 +325,12 @@ function applyWindowMode(mode, animate = true) {
     // Update isCompactMode for legacy logic
     isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM);
 
+    // In SMALL mode: remove vibrancy so the background square is fully invisible.
+    // The window must still exist (for CSS box-shadow to composite correctly on desktop).
+    if (process.platform === 'darwin') {
+        mainWindow.setVibrancy(mode === WINDOW_MODES.SMALL ? null : 'hud');
+    }
+
     // Send mode change to renderer
     mainWindow.webContents.send('window-mode-changed', mode);
 
@@ -349,7 +355,8 @@ function createWindow() {
         fullscreenable: false,
         skipTaskbar: true,
         hasShadow: false,
-        vibrancy: 'hud', // macOS vibrancy for glassmorphism
+        // Vibrancy is managed dynamically: null in SMALL mode (invisible square), 'hud' in other modes
+        vibrancy: currentWindowMode === WINDOW_MODES.SMALL ? null : 'hud',
         visualEffectState: 'active',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
