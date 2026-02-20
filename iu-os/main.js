@@ -35,6 +35,13 @@ ipcMain.handle('get-env-device-id', () => {
     return process.env.DEVICE_ID || null;
 });
 
+ipcMain.handle('get-picovoice-config', () => {
+    return {
+        accessKey: process.env.PICOVOICE_API_KEY || null,
+        heyKeywordPath: process.env.PICOVOICE_HEY_KEYWORD_PATH || null
+    };
+});
+
 // Initialize OpenAI (handle missing API key gracefully)
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
@@ -94,6 +101,22 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
 let mainWindow = null;
 let chatWindow = null;
 let compactWindow = null; // Mini circular window for action mode
+let handWindow = null; // Floating hand-tracking window
+let handFluidWindow = null; // Dedicated fluid-particle hand window
+let isMainWindowMouseDragging = false;
+let mouseDragReleaseTimer = null;
+const mainWindowPinchDrag = {
+    active: false,
+    startHandX: 0,
+    startHandY: 0,
+    lastHandX: 0,
+    lastHandY: 0,
+    startWindowX: 0,
+    startWindowY: 0,
+    targetX: 0,
+    targetY: 0
+};
+let pinchSnapTimer = null;
 
 // Window modes
 const WINDOW_MODES = {
@@ -133,7 +156,55 @@ loadSettings();
 const COMPACT_SIZE = 150;  // Legacy compact mode size
 const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
 const CHAT_GAP = 7;
+const HAND_WINDOW_WIDTH = 420;
+const HAND_WINDOW_HEIGHT = 560;
+const HAND_FLUID_WINDOW_WIDTH = 540;
+const HAND_FLUID_WINDOW_HEIGHT = 420;
+const PINCH_MOVE_GAIN = 14.0;
+const PINCH_SMOOTHING = 0.2;
+const PINCH_SNAP_MIN_DISTANCE = 36;
+const PINCH_SNAP_MARGIN = 10;
 let isCompactMode = (currentWindowMode === WINDOW_MODES.SMALL || currentWindowMode === WINDOW_MODES.MEDIUM);
+
+function stopPinchSnapAnimation() {
+    if (pinchSnapTimer) {
+        clearInterval(pinchSnapTimer);
+        pinchSnapTimer = null;
+    }
+}
+
+function animateMainWindowTo(x, y) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    stopPinchSnapAnimation();
+
+    pinchSnapTimer = setInterval(() => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            stopPinchSnapAnimation();
+            return;
+        }
+        if (mainWindowPinchDrag.active) {
+            stopPinchSnapAnimation();
+            return;
+        }
+
+        const bounds = mainWindow.getBounds();
+        const dx = x - bounds.x;
+        const dy = y - bounds.y;
+        const dist = Math.hypot(dx, dy);
+
+        if (dist < 2) {
+            mainWindow.setPosition(Math.round(x), Math.round(y));
+            syncChatWindowPosition(false);
+            stopPinchSnapAnimation();
+            return;
+        }
+
+        const nx = Math.round(bounds.x + (dx * 0.24));
+        const ny = Math.round(bounds.y + (dy * 0.24));
+        mainWindow.setPosition(nx, ny);
+        syncChatWindowPosition(false);
+    }, 16);
+}
 
 function getChatBounds() {
     if (!mainWindow) {
@@ -233,7 +304,22 @@ function applyWindowMode(mode, animate = true) {
     currentWindowMode = mode;
     saveSettings();
 
-    const bounds = getWindowBounds(mode);
+    const modeBounds = getWindowBounds(mode);
+    const currentBounds = mainWindow.getBounds();
+    const currentDisplay = screen.getDisplayMatching(currentBounds);
+    const area = currentDisplay.workArea;
+
+    const maxX = area.x + area.width - modeBounds.width;
+    const maxY = area.y + area.height - modeBounds.height;
+    const clampedX = Math.max(area.x, Math.min(currentBounds.x, maxX));
+    const clampedY = Math.max(area.y, Math.min(currentBounds.y, maxY));
+
+    const bounds = {
+        width: modeBounds.width,
+        height: modeBounds.height,
+        x: clampedX,
+        y: clampedY
+    };
     mainWindow.setBounds(bounds, animate);
 
     // Update isCompactMode for legacy logic
@@ -290,8 +376,35 @@ function createWindow() {
 
     // Maintain position on screen resize
     screen.on('display-metrics-changed', () => {
-        const bounds = getWindowBounds(currentWindowMode);
-        mainWindow.setBounds(bounds);
+        const modeBounds = getWindowBounds(currentWindowMode);
+        const currentBounds = mainWindow.getBounds();
+        const currentDisplay = screen.getDisplayMatching(currentBounds);
+        const area = currentDisplay.workArea;
+        const maxX = area.x + area.width - modeBounds.width;
+        const maxY = area.y + area.height - modeBounds.height;
+        const x = Math.max(area.x, Math.min(currentBounds.x, maxX));
+        const y = Math.max(area.y, Math.min(currentBounds.y, maxY));
+        mainWindow.setBounds({
+            width: modeBounds.width,
+            height: modeBounds.height,
+            x,
+            y
+        });
+        if (handWindow && !handWindow.isDestroyed()) {
+            const handBounds = handWindow.getBounds();
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { width, height } = primaryDisplay.workAreaSize;
+            const x = Math.max(0, Math.min(handBounds.x, width - handBounds.width));
+            const y = Math.max(0, Math.min(handBounds.y, height - handBounds.height));
+            handWindow.setPosition(x, y);
+        }
+        if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+            const fluidBounds = handFluidWindow.getBounds();
+            const primaryDisplay = screen.getPrimaryDisplay();
+            const { width } = primaryDisplay.workAreaSize;
+            const x = Math.max(20, Math.floor((width - fluidBounds.width) / 2));
+            handFluidWindow.setPosition(x, 20);
+        }
     });
 
     mainWindow.on('move', () => {
@@ -365,6 +478,111 @@ function createChatWindow() {
     });
 
     console.log('💬 Chat window created');
+}
+
+// ============================================
+// Hand Tracking Window (Floating)
+// ============================================
+
+function createHandWindow() {
+    if (handWindow && !handWindow.isDestroyed()) {
+        handWindow.focus();
+        return;
+    }
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width } = primaryDisplay.workAreaSize;
+
+    handWindow = new BrowserWindow({
+        width: HAND_WINDOW_WIDTH,
+        height: HAND_WINDOW_HEIGHT,
+        x: Math.max(20, width - HAND_WINDOW_WIDTH - SIDEBAR_WIDTH - 40),
+        y: 40,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: true,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        hasShadow: true,
+        show: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            webSecurity: true
+        }
+    });
+
+    if (process.platform === 'darwin') {
+        handWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
+    handWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+
+    handWindow.loadFile('renderer/hands.html');
+
+    handWindow.once('ready-to-show', () => {
+        handWindow.show();
+    });
+
+    handWindow.on('closed', () => {
+        handWindow = null;
+    });
+
+    console.log('🖐️ Hand tracking window created');
+}
+
+function createHandFluidWindow() {
+    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+        handFluidWindow.focus();
+        return;
+    }
+
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width, height } = primaryDisplay.workAreaSize;
+
+    handFluidWindow = new BrowserWindow({
+        width: HAND_FLUID_WINDOW_WIDTH,
+        height: HAND_FLUID_WINDOW_HEIGHT,
+        x: Math.max(20, Math.floor((width - HAND_FLUID_WINDOW_WIDTH) / 2)),
+        y: 20,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: true,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        hasShadow: true,
+        show: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            webSecurity: true
+        }
+    });
+
+    if (process.platform === 'darwin') {
+        handFluidWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    }
+    handFluidWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    handFluidWindow.loadFile('renderer/hands-fluid.html');
+
+    handFluidWindow.once('ready-to-show', () => {
+        handFluidWindow.show();
+    });
+
+    handFluidWindow.on('closed', () => {
+        handFluidWindow = null;
+    });
+
+    console.log('🌊 Hand fluid window created');
 }
 
 // Chat window IPC
@@ -502,6 +720,18 @@ ipcMain.on('window-drag-start', (event, { mouseX, mouseY }) => {
 ipcMain.on('window-move', (event, { x, y }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win) {
+        if (win === mainWindow) {
+            isMainWindowMouseDragging = true;
+            stopPinchSnapAnimation();
+            mainWindowPinchDrag.active = false;
+            if (mouseDragReleaseTimer) {
+                clearTimeout(mouseDragReleaseTimer);
+            }
+            mouseDragReleaseTimer = setTimeout(() => {
+                isMainWindowMouseDragging = false;
+                mouseDragReleaseTimer = null;
+            }, 140);
+        }
         win.setPosition(Math.round(x), Math.round(y));
     }
 });
@@ -516,12 +746,168 @@ ipcMain.handle('toggle-chat-window', () => {
     return { success: true };
 });
 
+ipcMain.handle('toggle-hand-window', () => {
+    if (handWindow && !handWindow.isDestroyed()) {
+        if (handWindow.isVisible()) {
+            handWindow.hide();
+        } else {
+            handWindow.show();
+            handWindow.focus();
+        }
+    } else {
+        createHandWindow();
+    }
+    return { success: true };
+});
+
+ipcMain.handle('get-hand-window-state', () => {
+    if (!handWindow || handWindow.isDestroyed()) {
+        return { created: false, visible: false };
+    }
+    return { created: true, visible: handWindow.isVisible() };
+});
+
+ipcMain.handle('toggle-hand-fluid-window', () => {
+    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+        if (handFluidWindow.isVisible()) {
+            handFluidWindow.hide();
+        } else {
+            handFluidWindow.show();
+            handFluidWindow.focus();
+        }
+    } else {
+        createHandFluidWindow();
+    }
+    return { success: true };
+});
+
+ipcMain.on('hands-frame', (event, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('hands-frame', payload);
+    }
+    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+        handFluidWindow.webContents.send('hands-frame', payload);
+    }
+});
+
+ipcMain.on('hands-landmarks', (event, payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('hands-landmarks', payload);
+    }
+    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+        handFluidWindow.webContents.send('hands-landmarks', payload);
+    }
+});
+
+ipcMain.on('hands-presence', (event, present) => {
+    if (!handWindow || handWindow.isDestroyed()) return;
+
+    if (present) {
+        handWindow.setOpacity(1);
+        handWindow.setIgnoreMouseEvents(false);
+    } else {
+        handWindow.setOpacity(0);
+        handWindow.setIgnoreMouseEvents(true, { forward: true });
+    }
+
+    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+        if (present) {
+            handFluidWindow.setOpacity(1);
+            handFluidWindow.setIgnoreMouseEvents(false);
+        } else {
+            handFluidWindow.setOpacity(0);
+            handFluidWindow.setIgnoreMouseEvents(true, { forward: true });
+        }
+    }
+});
+
+ipcMain.on('main-window-pinch-drag', (event, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!handWindow || handWindow.isDestroyed()) return;
+    if (!payload || typeof payload !== 'object') return;
+
+    const phase = payload.phase;
+    const xNorm = Number(payload.xNorm);
+    const yNorm = Number(payload.yNorm);
+
+    if (phase === 'end') {
+        const dragDx = mainWindowPinchDrag.lastHandX - mainWindowPinchDrag.startHandX;
+        const dragDy = mainWindowPinchDrag.lastHandY - mainWindowPinchDrag.startHandY;
+        const movedEnough = Math.hypot(dragDx, dragDy) >= PINCH_SNAP_MIN_DISTANCE;
+
+        if (movedEnough && mainWindow && !mainWindow.isDestroyed()) {
+            const bounds = mainWindow.getBounds();
+            const display = screen.getDisplayMatching(bounds);
+            const area = display.workArea;
+            const goRight = dragDx >= 0;
+            const goBottom = dragDy >= 0;
+
+            const snapX = goRight
+                ? (area.x + area.width - bounds.width - PINCH_SNAP_MARGIN)
+                : (area.x + PINCH_SNAP_MARGIN);
+            const snapY = goBottom
+                ? (area.y + area.height - bounds.height - PINCH_SNAP_MARGIN)
+                : (area.y + PINCH_SNAP_MARGIN);
+
+            animateMainWindowTo(snapX, snapY);
+        }
+
+        mainWindowPinchDrag.active = false;
+        return;
+    }
+
+    if (isMainWindowMouseDragging) return;
+
+    if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) return;
+
+    const handBounds = handWindow.getBounds();
+    const handX = handBounds.x + (xNorm * handBounds.width);
+    const handY = handBounds.y + (yNorm * handBounds.height);
+
+    const currentBounds = mainWindow.getBounds();
+
+    if (phase === 'start' || !mainWindowPinchDrag.active) {
+        stopPinchSnapAnimation();
+        mainWindowPinchDrag.active = true;
+        mainWindowPinchDrag.startHandX = handX;
+        mainWindowPinchDrag.startHandY = handY;
+        mainWindowPinchDrag.lastHandX = handX;
+        mainWindowPinchDrag.lastHandY = handY;
+        mainWindowPinchDrag.startWindowX = currentBounds.x;
+        mainWindowPinchDrag.startWindowY = currentBounds.y;
+        mainWindowPinchDrag.targetX = currentBounds.x;
+        mainWindowPinchDrag.targetY = currentBounds.y;
+    }
+    mainWindowPinchDrag.lastHandX = handX;
+    mainWindowPinchDrag.lastHandY = handY;
+    const deltaX = (handX - mainWindowPinchDrag.startHandX) * PINCH_MOVE_GAIN;
+    const deltaY = (handY - mainWindowPinchDrag.startHandY) * PINCH_MOVE_GAIN;
+    const targetX = Math.round(mainWindowPinchDrag.startWindowX + deltaX);
+    const targetY = Math.round(mainWindowPinchDrag.startWindowY + deltaY);
+
+    const display = screen.getDisplayNearestPoint({ x: handX, y: handY });
+    const workArea = display.workArea;
+    const maxX = workArea.x + workArea.width - currentBounds.width;
+    const maxY = workArea.y + workArea.height - currentBounds.height;
+
+    const clampedX = Math.max(workArea.x, Math.min(targetX, maxX));
+    const clampedY = Math.max(workArea.y, Math.min(targetY, maxY));
+    mainWindowPinchDrag.targetX = clampedX;
+    mainWindowPinchDrag.targetY = clampedY;
+
+    const smoothX = Math.round(currentBounds.x + ((mainWindowPinchDrag.targetX - currentBounds.x) * PINCH_SMOOTHING));
+    const smoothY = Math.round(currentBounds.y + ((mainWindowPinchDrag.targetY - currentBounds.y) * PINCH_SMOOTHING));
+    mainWindow.setPosition(smoothX, smoothY);
+    syncChatWindowPosition(false);
+});
+
 // App lifecycle
 app.whenReady().then(async () => {
     // Request camera access first
     await requestCameraAccess();
 
     createWindow();
+    createHandWindow();
 
     // Launch Native Glass Window (Persistent, Hidden)
     nativeGlass.start();

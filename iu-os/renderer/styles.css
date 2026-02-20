@@ -1180,16 +1180,19 @@ body.compact-mode-active #face-container {
   transition: all 1.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Fade out all elements when entering action mode */
+/* Hide all UI overlays while action mode is active; keep only the face visible. */
 #app.compact-action-mode #controls-panel,
 #app.compact-action-mode .menu-toggle,
 #app.compact-action-mode .chat-toggle-btn,
 #app.compact-action-mode .transfer-btn-top,
 #app.compact-action-mode #intent-carousel,
-#app.compact-action-mode #transcript-container {
-  opacity: 0;
-  transition: opacity 0.6s ease-out;
-  pointer-events: none;
+#app.compact-action-mode #transcript-container,
+#app.compact-action-mode #nav-hud,
+#app.compact-action-mode #checklist-container,
+#app.compact-action-mode #neural-canvas,
+#app.compact-action-mode #compact-popup {
+  display: none !important;
+  pointer-events: none !important;
 }
 
 /* =====================================================

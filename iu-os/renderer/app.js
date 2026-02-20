@@ -388,15 +388,23 @@ class Face {
 // Theme Toggle
 // =====================================================
 
-function setTheme(theme) {
+function setTheme(theme, shouldBroadcast = true) {
     document.documentElement.setAttribute('data-theme', theme);
 
     document.querySelectorAll('.theme-btn').forEach(btn => {
         btn.classList.toggle('active', btn.id === `btn-${theme}`);
     });
 
+    // Keep face strokes visible after theme switch (fixes light mode invisibility).
+    if (face) {
+        face.setEyeColor(theme === 'light' ? '#0a0a0a' : '#ffffff');
+    }
+    if (window.currentActiveWindowMode) {
+        applyVisualMode(window.currentActiveWindowMode);
+    }
+
     // Broadcast theme change
-    if (deviceSync && deviceSync.isConnected()) {
+    if (shouldBroadcast && deviceSync && deviceSync.isConnected()) {
         deviceSync.broadcastSharedState({ theme });
     }
 }
@@ -883,12 +891,7 @@ function init() {
             // Theme Sync
             if (sharedState.theme) {
                 console.log('[App] Received theme sync:', sharedState.theme);
-                document.documentElement.setAttribute('data-theme', sharedState.theme);
-
-                // Update buttons locally
-                document.querySelectorAll('.theme-btn').forEach(btn => {
-                    btn.classList.toggle('active', btn.id === `btn-${sharedState.theme}`);
-                });
+                setTheme(sharedState.theme, false);
             }
 
             // Sync Active Preset (Expression)
@@ -1195,24 +1198,27 @@ function setupManualDrag() {
     const dragTarget = document.getElementById('app'); // Entire window area
     if (!dragTarget) return;
 
+    const shouldSkipDrag = (target) => {
+        if (!(target instanceof Element)) return false;
+        return !!target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel');
+    };
+
+    const endDrag = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.body.style.cursor = '';
+    };
+
     dragTarget.addEventListener('mousedown', (e) => {
-        // Only trigger on left click
-        if (e.button !== 0) return;
+        if (e.button !== 0) return; // Left click only
+        if (shouldSkipDrag(e.target)) return;
 
-        // Don't drag if clicking buttons or specific UI
-        if (e.target.closest('button') || e.target.closest('#controls-panel')) return;
-
+        e.preventDefault();
         isDragging = true;
-
-        // We use screen coordinates for global movement
         startMouseX = e.screenX;
         startMouseY = e.screenY;
-
-        // Window current position
         startWinX = window.screenX;
         startWinY = window.screenY;
-
-        // Change cursor
         document.body.style.cursor = 'grabbing';
     });
 
@@ -1230,12 +1236,8 @@ function setupManualDrag() {
         }
     });
 
-    window.addEventListener('mouseup', () => {
-        if (isDragging) {
-            isDragging = false;
-            document.body.style.cursor = '';
-        }
-    });
+    window.addEventListener('mouseup', endDrag);
+    window.addEventListener('blur', endDrag);
 }
 
 /**
@@ -1246,6 +1248,21 @@ function setupWindowModes() {
     let lastScaleChange = 0;
     const PINCH_THRESHOLD = 8; // Even more sensitive for "very easy" level
     let modeDebounce = false;
+    let gestureLatched = false;
+    let lastModeChangeAt = 0;
+    const MODE_STEP_COOLDOWN_MS = 320;
+
+    const tryChangeMode = (delta) => {
+        const now = Date.now();
+        if (modeDebounce || (now - lastModeChangeAt) < MODE_STEP_COOLDOWN_MS) return false;
+        const changed = changeMode(delta);
+        if (changed) {
+            lastModeChangeAt = now;
+            modeDebounce = true;
+            setTimeout(() => { modeDebounce = false; }, 180);
+        }
+        return changed;
+    };
 
     // 1. Detect Pinch (Wheel + Ctrl)
     window.addEventListener('wheel', (e) => {
@@ -1253,12 +1270,10 @@ function setupWindowModes() {
             e.preventDefault();
             lastScaleChange += e.deltaY;
 
-            if (Math.abs(lastScaleChange) > PINCH_THRESHOLD && !modeDebounce) {
+            if (Math.abs(lastScaleChange) > PINCH_THRESHOLD) {
                 const delta = lastScaleChange > 0 ? -1 : 1; // Pinch in (deltaY > 0) -> Smaller
-                changeMode(delta);
+                tryChangeMode(delta);
                 lastScaleChange = 0;
-                modeDebounce = true;
-                setTimeout(() => { modeDebounce = false; }, 250); // Faster recovery
             }
         }
     }, { passive: false });
@@ -1266,16 +1281,17 @@ function setupWindowModes() {
     // 2. Detect Native Mac Pinch
     window.addEventListener('gesturechange', (e) => {
         e.preventDefault();
-        if (modeDebounce) return;
+        // Arm again only when gesture scale returns near neutral.
+        if (e.scale > 0.99 && e.scale < 1.01) {
+            gestureLatched = false;
+            return;
+        }
+        if (gestureLatched) return;
 
-        if (e.scale > 1.05) { // Barely need to move fingers (was 1.1)
-            changeMode(1); // Pinch out -> Larger
-            modeDebounce = true;
-            setTimeout(() => { modeDebounce = false; }, 250);
-        } else if (e.scale < 0.95) { // Barely need to move fingers (was 0.9)
-            changeMode(-1); // Pinch in -> Smaller
-            modeDebounce = true;
-            setTimeout(() => { modeDebounce = false; }, 250);
+        if (e.scale > 1.05) { // Barely need to move fingers
+            if (tryChangeMode(1)) gestureLatched = true; // Pinch out -> Larger
+        } else if (e.scale < 0.95) { // Barely need to move fingers
+            if (tryChangeMode(-1)) gestureLatched = true; // Pinch in -> Smaller
         }
     });
 
@@ -1292,7 +1308,9 @@ function setupWindowModes() {
         if (nextIdx !== idx) {
             console.log(`📡 Requesting window mode: ${MODES_CYCLE[nextIdx]}`);
             window.iuOS.setWindowMode(MODES_CYCLE[nextIdx]);
+            return true;
         }
+        return false;
     }
 
     // 3. Listen for Mode Changes from Main Process
@@ -1325,12 +1343,12 @@ function applyVisualMode(mode) {
     if (mode === 'small') {
         // Mini Mode: Pure Liquid Glass Circle
         document.body.classList.add('mode-small');
-        if (face) face.setEyeColor('#ffffff');
+        if (face) face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
         svg.setAttribute('viewBox', '50 80 300 340');
     } else if (mode === 'medium') {
         document.body.classList.remove('mode-small');
         // Medium Mode: 50% Size
-        svg.setAttribute('viewBox', '50 80 300 340');
+        svg.setAttribute('viewBox', '0 0 400 500');
     } else if (mode === 'large') {
         document.body.classList.remove('mode-small');
         // Large Mode: Sidebar
@@ -2157,6 +2175,37 @@ function showActionConfirmation(plan) {
 // ============================================
 
 let lastInteractionTime = Date.now();
+const WAKE_FUSION_WINDOW_MS = 700;
+let lastHeyAt = 0;
+let lastWaveAt = 0;
+
+function triggerWakeFusion(source) {
+    if (conversationState === 'active') {
+        lastInteractionTime = Date.now();
+        return;
+    }
+
+    console.log(`🧩 [WakeFusion] Activated by ${source}`);
+    if (face) {
+        face.transitionTo('listening');
+        setTimeout(() => {
+            if (conversationState === 'idle') face.transitionTo('thinking');
+        }, 900);
+    }
+    toggleConversation();
+    showToast('🗣️ Escuchando...');
+}
+
+function evaluateWakeFusion(source) {
+    const now = Date.now();
+    const hasHey = now - lastHeyAt <= WAKE_FUSION_WINDOW_MS;
+    const hasWave = now - lastWaveAt <= WAKE_FUSION_WINDOW_MS;
+    if (hasHey && hasWave) {
+        triggerWakeFusion(source);
+        lastHeyAt = 0;
+        lastWaveAt = 0;
+    }
+}
 
 function handleWakeWord(type, text) {
     if (conversationState === 'active') {
@@ -2166,6 +2215,12 @@ function handleWakeWord(type, text) {
     }
 
     console.log(`🎤 [App] Handle Wake Word: ${type} ("${text}")`);
+
+    if (type === 'hey') {
+        lastHeyAt = Date.now();
+        evaluateWakeFusion('voice+gesture');
+        return;
+    }
 
     // 1. Global Activation
     if (type === 'global') {
@@ -2189,6 +2244,16 @@ function handleWakeWord(type, text) {
             console.log('👁️ [App] Gaze Confirmation: FAIL (Not looking)');
         }
     }
+}
+
+if (window.iuOS && window.iuOS.onHandsFrame) {
+    window.iuOS.onHandsFrame((payload) => {
+        if (!payload) return;
+        if (payload.waveGesture || payload.palmOpen) {
+            lastWaveAt = Date.now();
+            evaluateWakeFusion('gesture+voice');
+        }
+    });
 }
 
 // Inactivity Monitor (Auto-Stop)

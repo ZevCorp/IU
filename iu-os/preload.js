@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('iuOS', {
     // Platform info
     platform: process.platform,
     getEnvDeviceId: () => ipcRenderer.invoke('get-env-device-id'),
+    getPicovoiceConfig: () => ipcRenderer.invoke('get-picovoice-config'),
 
     // Performance monitoring
     getPerformanceMetrics: () => ({
@@ -43,6 +44,9 @@ contextBridge.exposeInMainWorld('iuOS', {
 
     // Chat Window
     toggleChatWindow: () => ipcRenderer.invoke('toggle-chat-window'),
+    toggleHandWindow: () => ipcRenderer.invoke('toggle-hand-window'),
+    getHandWindowState: () => ipcRenderer.invoke('get-hand-window-state'),
+    toggleHandFluidWindow: () => ipcRenderer.invoke('toggle-hand-fluid-window'),
 
     // Action System
     executeExplicitAction: (userText) => ipcRenderer.invoke('execute-explicit-action', userText),
@@ -72,6 +76,14 @@ contextBridge.exposeInMainWorld('iuOS', {
     onWindowModeChanged: (callback) => ipcRenderer.on('window-mode-changed', (event, mode) => callback(mode)),
     startDrag: () => ipcRenderer.send('window-drag-start'),
     windowMove: (pos) => ipcRenderer.send('window-move', pos),
+
+    // Hand tracking bridge (for floating hand window + future Ü integration)
+    publishHandsFrame: (payload) => ipcRenderer.send('hands-frame', payload),
+    onHandsFrame: (callback) => ipcRenderer.on('hands-frame', (event, payload) => callback(payload)),
+    publishHandsPresence: (present) => ipcRenderer.send('hands-presence', present),
+    pinchDragMainWindow: (payload) => ipcRenderer.send('main-window-pinch-drag', payload),
+    publishHandsLandmarks: (payload) => ipcRenderer.send('hands-landmarks', payload),
+    onHandsLandmarks: (callback) => ipcRenderer.on('hands-landmarks', (event, payload) => callback(payload)),
 });
 
 

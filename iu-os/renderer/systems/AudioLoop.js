@@ -12,6 +12,10 @@ class AudioLoop {
         this.restartIntervalMs = 30000; // 30 seconds per cycle
         this.restartTimer = null;
         this.stream = null;
+        this.porcupine = null;
+        this.webVoiceProcessor = null;
+        this.speechRecognition = null;
+        this.lastHeyDetection = 0;
 
         // Keep previous cycle's blob for continuity
         this.previousBlob = null;
@@ -25,8 +29,8 @@ class AudioLoop {
     async start() {
         if (this.isRecording) return;
 
-        // Initialize Speech Recognition for Wake Words
-        this._initSpeechRecognition();
+        // Initialize local wake engines
+        this._initWakeEngines();
 
         try {
             console.log('[AudioLoop] Requesting microphone access...');
@@ -44,61 +48,108 @@ class AudioLoop {
         }
     }
 
-    async _initSpeechRecognition() {
-        if (!('webkitSpeechRecognition' in window)) {
-            console.warn('[AudioLoop] Web Speech API not supported');
-            // return; // Don't return, we want to try Porcupine even if webkit is missing
-        }
-        console.log('[AudioLoop] Initializing Porcupine Wake Word Engine...');
+    async _initWakeEngines() {
+        await this._initPorcupineIfAvailable();
+        this._initHeySpeechFallback();
+    }
 
+    async _initPorcupineIfAvailable() {
         try {
-            // We need the Access Key from main process env
-            const accessKey = 'YOUR_ACCESS_KEY_HERE'; // Placeholder, user will provide key
-
-            if (accessKey === 'YOUR_ACCESS_KEY_HERE') {
-                console.warn('[AudioLoop] ⚠️ Missing PICOVOICE_API_KEY. Wake word disabled.');
+            if (typeof PorcupineWeb === 'undefined' || typeof WebVoiceProcessor === 'undefined') {
+                console.warn('[AudioLoop] Porcupine/WebVoiceProcessor not available in renderer.');
                 return;
             }
 
-            // check if Porcupine is loaded (we will add script tags to index.html)
-            if (typeof PorcupineWeb === 'undefined') {
-                console.warn('[AudioLoop] PorcupineWeb library not loaded.');
+            const cfg = await (window.iuOS?.getPicovoiceConfig?.() || Promise.resolve(null));
+            const accessKey = cfg?.accessKey;
+            const heyKeywordPath = cfg?.heyKeywordPath;
+
+            if (!accessKey) {
+                console.warn('[AudioLoop] No PICOVOICE_API_KEY found. Skipping Porcupine.');
                 return;
             }
 
-            // Initialize Porcupine with built-in keywords for now:
-            // "Porcupine" -> maps to "Hey U"
-            // "Bumblebee" -> maps to "Pss Pss"
+            const keywordConfig = heyKeywordPath
+                ? [{ publicPath: heyKeywordPath, label: 'hey_local' }]
+                : ['porcupine']; // fallback built-in
+
             this.porcupine = await PorcupineWeb.PorcupineWorker.create(
                 accessKey,
-                ['porcupine', 'bumblebee']
+                keywordConfig
             );
 
-            console.log('🦔 [Porcupine] Engine Ready');
-
             this.porcupine.onmessage = (msg) => {
-                switch (msg.data.command) {
-                    case 'keyword':
-                        this._handleKeyword(msg.data.keywordLabel);
-                        break;
+                if (msg?.data?.command === 'keyword') {
+                    const label = msg.data.keywordLabel || 'hey_local';
+                    if (label === 'hey_local' || label === 'porcupine') {
+                        this._handleKeyword('hey');
+                    } else {
+                        this._handleKeyword(label);
+                    }
                 }
             };
-
-            // Start processing audio stream
-            if (typeof WebVoiceProcessor === 'undefined') {
-                console.warn('[AudioLoop] WebVoiceProcessor library not loaded.');
-                return;
-            }
 
             this.webVoiceProcessor = await WebVoiceProcessor.WebVoiceProcessor.create({
                 engines: [this.porcupine],
                 start: true
             });
 
-            console.log('🦔 [Porcupine] Listening for wake words...');
-
+            console.log('🦔 [Porcupine] Wake engine active');
         } catch (e) {
-            console.error('[AudioLoop] Porcupine Init Failed:', e);
+            console.error('[AudioLoop] Porcupine init failed:', e);
+        }
+    }
+
+    _initHeySpeechFallback() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) {
+            console.warn('[AudioLoop] No SpeechRecognition fallback available.');
+            return;
+        }
+
+        try {
+            const recognition = new SR();
+            recognition.continuous = true;
+            recognition.interimResults = true;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = (event) => {
+                let transcript = '';
+                for (let i = event.resultIndex; i < event.results.length; i += 1) {
+                    transcript += `${event.results[i][0].transcript} `;
+                }
+                transcript = transcript.trim().toLowerCase();
+                if (!transcript) return;
+
+                const hasHey = /\bhey\b/.test(transcript);
+                if (hasHey) {
+                    const now = Date.now();
+                    if (now - this.lastHeyDetection > 500) {
+                        this.lastHeyDetection = now;
+                        this._handleKeyword('hey');
+                    }
+                }
+            };
+
+            recognition.onerror = (e) => {
+                console.warn('[AudioLoop] Speech fallback error:', e.error);
+            };
+
+            recognition.onend = () => {
+                if (this.isRecording) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        // ignored
+                    }
+                }
+            };
+
+            recognition.start();
+            this.speechRecognition = recognition;
+            console.log('[AudioLoop] Speech fallback active for \"Hey\"');
+        } catch (e) {
+            console.warn('[AudioLoop] Failed to start speech fallback:', e);
         }
     }
 
@@ -107,8 +158,10 @@ class AudioLoop {
 
         let wakeType = null;
 
-        if (label === 'porcupine') {
-            wakeType = 'global'; // "Hey Ü"
+        if (label === 'hey') {
+            wakeType = 'hey';
+        } else if (label === 'porcupine') {
+            wakeType = 'global'; // legacy
         } else if (label === 'bumblebee') {
             wakeType = 'gated'; // "Pss Pss"
         }
@@ -180,6 +233,15 @@ class AudioLoop {
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
+        }
+
+        if (this.speechRecognition) {
+            try {
+                this.speechRecognition.stop();
+            } catch (e) {
+                // ignored
+            }
+            this.speechRecognition = null;
         }
 
         this.isRecording = false;

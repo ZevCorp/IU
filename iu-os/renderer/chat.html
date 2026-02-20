@@ -63,22 +63,30 @@
 
     .titlebar-close {
       position: absolute;
-      left: 14px;
+      left: 10px;
       top: 50%;
       transform: translateY(-50%);
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #e7e7ea;
+      width: 24px;
+      height: 24px;
+      border-radius: 0;
+      background: transparent;
       border: none;
       cursor: pointer;
       -webkit-app-region: no-drag;
-      transition: opacity 0.15s, background 0.2s;
+      transition: color 0.16s ease, opacity 0.16s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: rgba(17, 17, 24, 0.55);
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 300;
+      padding: 0;
     }
 
     .titlebar-close:hover {
-      opacity: 0.85;
-      background: #d9d9de;
+      color: rgba(17, 17, 24, 0.9);
+      opacity: 1;
     }
 
     /* Messages area */
@@ -360,7 +368,7 @@
 
 <body>
   <div class="titlebar">
-    <button class="titlebar-close" id="close-btn"></button>
+    <button class="titlebar-close" id="close-btn" aria-label="Cerrar">×</button>
     <span class="titlebar-text">The new User Interface, I<span class="ampersand">&</span>Ü</span>
   </div>
 
