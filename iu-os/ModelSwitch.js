@@ -55,6 +55,13 @@ const OPENAI_MODELS = {
     full: 'gpt-5.2'           // GPT-5.2 - Most capable premium model
 };
 
+const ANTHROPIC_DEFAULT_MODEL_BY_TIER = {
+    nano: 'claude-3-5-haiku-latest',
+    mini: 'claude-3-7-sonnet-latest',
+    full: 'claude-sonnet-4-20250514',
+    haiku: 'claude-3-5-haiku-latest'
+};
+
 const MODELS = {
     openai: {
         chat: OPENAI_MODELS[BRAIN_MODEL] || OPENAI_MODELS.nano,
@@ -65,8 +72,8 @@ const MODELS = {
         vision: 'gemini-2.5-flash'
     },
     anthropic: {
-        chat: 'claude-3-5-haiku-20241022',
-        vision: 'claude-3-5-haiku-20241022'
+        chat: process.env.ANTHROPIC_MODEL || ANTHROPIC_DEFAULT_MODEL_BY_TIER[BRAIN_MODEL] || ANTHROPIC_DEFAULT_MODEL_BY_TIER.haiku,
+        vision: process.env.ANTHROPIC_MODEL || ANTHROPIC_DEFAULT_MODEL_BY_TIER[BRAIN_MODEL] || ANTHROPIC_DEFAULT_MODEL_BY_TIER.haiku
     }
 };
 
@@ -353,8 +360,8 @@ async function _transcriptionOpenAI(filePath) {
 async function _transcriptionGemini({ buffer, mimeType }) {
     if (!_gemini) return { text: "" };
     try {
-        // Gemini 1.5 Flash supports audio input
-        const model = _gemini.getGenerativeModel({ model: "gemini-1.5-flash" });
+        // Use active Gemini family model to avoid 1.5 deprecation breakages
+        const model = _gemini.getGenerativeModel({ model: MODELS.gemini.chat });
         const result = await model.generateContent([
             {
                 inlineData: {
@@ -498,7 +505,7 @@ async function _chatAnthropic({ messages, tools, tool_choice, max_tokens }) {
 
     let response;
     try {
-        response = await _anthropic.messages.create(msgOptions);
+        response = await _createAnthropicWithFallback(msgOptions);
     } catch (e) {
         console.error('❌ [ModelSwitch] Anthropic API Error:', e);
         console.error('Payload causing error:', JSON.stringify(msgOptions, null, 2));
@@ -528,6 +535,53 @@ async function _chatAnthropic({ messages, tools, tool_choice, max_tokens }) {
 
 async function _visionAnthropic(params) {
     return _chatAnthropic(params); // Anthropic handles vision natively in chat
+}
+
+function _anthropicIsModelNotFoundError(error) {
+    const type = error?.error?.error?.type || error?.error?.type;
+    const message = error?.error?.error?.message || error?.error?.message || error?.message || '';
+    return error?.status === 404 && (type === 'not_found_error' || message.includes('model:'));
+}
+
+function _anthropicFallbackModels(primaryModel) {
+    const configured = (process.env.ANTHROPIC_FALLBACK_MODELS || '')
+        .split(',')
+        .map(m => m.trim())
+        .filter(Boolean);
+
+    const defaults = [
+        'claude-3-5-haiku-latest',
+        'claude-3-7-sonnet-latest',
+        'claude-sonnet-4-20250514'
+    ];
+
+    return [...new Set([primaryModel, ...configured, ...defaults])];
+}
+
+async function _createAnthropicWithFallback(msgOptions) {
+    const candidates = _anthropicFallbackModels(msgOptions.model);
+    let lastError = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+        const candidateModel = candidates[i];
+        try {
+            if (candidateModel !== msgOptions.model) {
+                console.warn(`⚠️ [ModelSwitch] Retrying Anthropic with fallback model: ${candidateModel}`);
+            }
+            return await _anthropic.messages.create({
+                ...msgOptions,
+                model: candidateModel
+            });
+        } catch (e) {
+            lastError = e;
+            const canRetry = _anthropicIsModelNotFoundError(e) && i < candidates.length - 1;
+            if (!canRetry) {
+                throw e;
+            }
+        }
+    }
+
+    throw lastError;
 }
 
 // ============================================================

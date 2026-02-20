@@ -307,6 +307,12 @@ class Face {
     }
 
     vanish() {
+        // DISABLE VANISH IN STICKY MODE (Automation)
+        if (document.body.classList.contains('sticky-mode')) {
+            console.log('🛑 [Face] Vanish blocked in Sticky Mode');
+            return;
+        }
+
         // 1. Transition to neutral first for smooth exit
         this.transitionTo('neutral', 100);
 
@@ -429,8 +435,21 @@ function init() {
     if (urlParams.get('mode') === 'sticky') {
         console.log('🤖 [App] Starting in Sticky Mode (Automation)');
         document.body.classList.add('sticky-mode');
-        // Ensure face is BLACK as requested
-        face.setEyeColor('#000000');
+        // Ensure face is WHITE on BLACK background
+        face.setEyeColor('#ffffff');
+
+        // ZOOM IN: Crop view tightly around face features
+        // Face center ~ 200,250. 
+        // Showing range ~ 125-275 (x), 175-325 (y) --> NOW SLIGHTLY ZOOMED OUT: 110-290, 160-340
+        const svg = document.getElementById('face-svg');
+        if (svg) {
+            // Updated ViewBox for "un poco mas pequeña" + "bajala 2px" (shift y up)
+            // Previous: 90 140 220 220
+            // New:      90 135 220 220 (Shift Y up by 5 units = Face moves DOWN)
+            svg.setAttribute('viewBox', '90 135 220 220');
+            svg.style.transform = 'none'; // Remove any CSS scaling to avoid double-scaling
+        }
+
 
         // Disable controls panel
         const controls = document.getElementById('controls-panel');
@@ -933,24 +952,29 @@ function init() {
     const menuToggle = document.getElementById('menu-toggle');
     const controlsPanel = document.getElementById('controls-panel');
 
-    menuToggle.addEventListener('click', () => {
-        panelCollapsed = !panelCollapsed;
-        controlsPanel.classList.toggle('collapsed', panelCollapsed);
-        menuToggle.classList.toggle('active', !panelCollapsed);
-    });
+    if (menuToggle && controlsPanel) {
+        menuToggle.addEventListener('click', () => {
+            panelCollapsed = !panelCollapsed;
+            controlsPanel.classList.toggle('collapsed', panelCollapsed);
+            menuToggle.classList.toggle('active', !panelCollapsed);
+        });
+    }
 
     // State buttons
     const activateState = (id, state) => {
-        document.getElementById(id).addEventListener('click', () => {
-            setActiveButton(id);
-            face.emerge();
-            face.transitionTo(state);
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('click', () => {
+                setActiveButton(id);
+                face.emerge();
+                face.transitionTo(state);
 
-            // Broadcast expression change
-            if (deviceSync && deviceSync.isConnected()) {
-                deviceSync.broadcastSharedState({ activePreset: state });
-            }
-        });
+                // Broadcast expression change
+                if (deviceSync && deviceSync.isConnected()) {
+                    deviceSync.broadcastSharedState({ activePreset: state });
+                }
+            });
+        }
     };
 
     activateState('btn-neutral', 'neutral');
@@ -959,8 +983,10 @@ function init() {
     activateState('btn-wink', 'wink');
 
     // Theme buttons
-    document.getElementById('btn-dark').addEventListener('click', () => setTheme('dark'));
-    document.getElementById('btn-light').addEventListener('click', () => setTheme('light'));
+    const btnDark = document.getElementById('btn-dark');
+    const btnLight = document.getElementById('btn-light');
+    if (btnDark) btnDark.addEventListener('click', () => setTheme('dark'));
+    if (btnLight) btnLight.addEventListener('click', () => setTheme('light'));
 
     // Mode toggle
     const simpleModeBtn = document.getElementById('btn-simple-mode');
@@ -1149,7 +1175,169 @@ function init() {
         }
     }
 
+    // Initialize Window Modes & Gestures
+    setupWindowModes();
+
+    // Enable manual dragging (since we removed -webkit-app-region: drag)
+    setupManualDrag();
+
     console.log('✅ IÜ OS ready');
+}
+
+/**
+ * Manual Dragging to allow mouse events (gestures) on drag area
+ */
+function setupManualDrag() {
+    let isDragging = false;
+    let startMouseX, startMouseY;
+    let startWinX, startWinY;
+
+    const dragTarget = document.getElementById('app'); // Entire window area
+    if (!dragTarget) return;
+
+    dragTarget.addEventListener('mousedown', (e) => {
+        // Only trigger on left click
+        if (e.button !== 0) return;
+
+        // Don't drag if clicking buttons or specific UI
+        if (e.target.closest('button') || e.target.closest('#controls-panel')) return;
+
+        isDragging = true;
+
+        // We use screen coordinates for global movement
+        startMouseX = e.screenX;
+        startMouseY = e.screenY;
+
+        // Window current position
+        startWinX = window.screenX;
+        startWinY = window.screenY;
+
+        // Change cursor
+        document.body.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+
+        const deltaX = e.screenX - startMouseX;
+        const deltaY = e.screenY - startMouseY;
+
+        if (window.iuOS && window.iuOS.windowMove) {
+            window.iuOS.windowMove({
+                x: startWinX + deltaX,
+                y: startWinY + deltaY
+            });
+        }
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            document.body.style.cursor = '';
+        }
+    });
+}
+
+/**
+ * Setup Window Resizing via Pinch Gesture
+ */
+function setupWindowModes() {
+    const MODES_CYCLE = ['small', 'medium', 'large', 'full'];
+    let lastScaleChange = 0;
+    const PINCH_THRESHOLD = 8; // Even more sensitive for "very easy" level
+    let modeDebounce = false;
+
+    // 1. Detect Pinch (Wheel + Ctrl)
+    window.addEventListener('wheel', (e) => {
+        if (e.ctrlKey) {
+            e.preventDefault();
+            lastScaleChange += e.deltaY;
+
+            if (Math.abs(lastScaleChange) > PINCH_THRESHOLD && !modeDebounce) {
+                const delta = lastScaleChange > 0 ? -1 : 1; // Pinch in (deltaY > 0) -> Smaller
+                changeMode(delta);
+                lastScaleChange = 0;
+                modeDebounce = true;
+                setTimeout(() => { modeDebounce = false; }, 250); // Faster recovery
+            }
+        }
+    }, { passive: false });
+
+    // 2. Detect Native Mac Pinch
+    window.addEventListener('gesturechange', (e) => {
+        e.preventDefault();
+        if (modeDebounce) return;
+
+        if (e.scale > 1.05) { // Barely need to move fingers (was 1.1)
+            changeMode(1); // Pinch out -> Larger
+            modeDebounce = true;
+            setTimeout(() => { modeDebounce = false; }, 250);
+        } else if (e.scale < 0.95) { // Barely need to move fingers (was 0.9)
+            changeMode(-1); // Pinch in -> Smaller
+            modeDebounce = true;
+            setTimeout(() => { modeDebounce = false; }, 250);
+        }
+    });
+
+    function changeMode(delta) {
+        if (!window.iuOS) return;
+        const currentMode = window.currentActiveWindowMode || 'large';
+        let idx = MODES_CYCLE.indexOf(currentMode);
+        if (idx === -1) idx = 2; // Default to large
+
+        let nextIdx = idx + delta;
+        if (nextIdx < 0) nextIdx = 0;
+        if (nextIdx >= MODES_CYCLE.length) nextIdx = MODES_CYCLE.length - 1;
+
+        if (nextIdx !== idx) {
+            console.log(`📡 Requesting window mode: ${MODES_CYCLE[nextIdx]}`);
+            window.iuOS.setWindowMode(MODES_CYCLE[nextIdx]);
+        }
+    }
+
+    // 3. Listen for Mode Changes from Main Process
+    if (window.iuOS && window.iuOS.onWindowModeChanged) {
+        window.iuOS.onWindowModeChanged((mode) => {
+            console.log(`🔲 Window Mode Changed: ${mode}`);
+            window.currentActiveWindowMode = mode;
+            applyVisualMode(mode);
+        });
+    }
+}
+
+/**
+ * Apply visual styles for specific window modes
+ */
+function applyVisualMode(mode) {
+    const svg = document.getElementById('face-svg');
+    if (!svg) return;
+
+    console.log(`🎨 Applying visual mode: ${mode}`);
+
+    // Reset styles
+    document.body.classList.remove('sticky-mode');
+    svg.setAttribute('viewBox', '0 0 400 500');
+
+    // Reset eye color to theme default
+    const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+    if (face) face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
+
+    if (mode === 'small') {
+        // Mini Mode: Pure Liquid Glass Circle
+        document.body.classList.add('mode-small');
+        if (face) face.setEyeColor('#ffffff');
+        svg.setAttribute('viewBox', '50 80 300 340');
+    } else if (mode === 'medium') {
+        document.body.classList.remove('mode-small');
+        // Medium Mode: 50% Size
+        svg.setAttribute('viewBox', '50 80 300 340');
+    } else if (mode === 'large') {
+        document.body.classList.remove('mode-small');
+        // Large Mode: Sidebar
+    } else if (mode === 'full') {
+        document.body.classList.remove('mode-small');
+        // Full Screen Mode
+    }
 }
 
 function performTransfer() {

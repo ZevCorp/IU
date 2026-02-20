@@ -95,11 +95,45 @@ let mainWindow = null;
 let chatWindow = null;
 let compactWindow = null; // Mini circular window for action mode
 
-// Window sizing (compact vs expanded)
-const COMPACT_SIZE = 150;  // Compact mode: small square showing only face
+// Window modes
+const WINDOW_MODES = {
+    SMALL: 'small',       // 110x110 (Sticky style)
+    MEDIUM: 'medium',     // 150x50% height
+    LARGE: 'large',       // 300xFull height (Traditional Sidebar)
+    FULLSCREEN: 'full'    // Full Workspace
+};
+
+const SETTINGS_PATH = path.join(app.getPath('userData'), 'user_settings.json');
+let currentWindowMode = WINDOW_MODES.LARGE;
+
+function loadSettings() {
+    try {
+        if (fs.existsSync(SETTINGS_PATH)) {
+            const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+            if (settings.windowMode) currentWindowMode = settings.windowMode;
+            console.log(`⚙️ Settings loaded: mode=${currentWindowMode}`);
+        }
+    } catch (e) {
+        console.error('Error loading settings:', e);
+    }
+}
+
+function saveSettings() {
+    try {
+        const settings = { windowMode: currentWindowMode };
+        fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
+    } catch (e) {
+        console.error('Error saving settings:', e);
+    }
+}
+
+// Ensure settings are loaded before window creation
+loadSettings();
+
+const COMPACT_SIZE = 150;  // Legacy compact mode size
 const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
 const CHAT_GAP = 7;
-let isCompactMode = false;  // Start in EXPANDED mode by default
+let isCompactMode = (currentWindowMode === WINDOW_MODES.SMALL || currentWindowMode === WINDOW_MODES.MEDIUM);
 
 function getChatBounds() {
     if (!mainWindow) {
@@ -156,21 +190,69 @@ async function requestCameraAccess() {
     return true;
 }
 
-function createWindow() {
+function getWindowBounds(mode) {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
 
-    // Start in compact mode: small square in top-right corner
-    const windowWidth = isCompactMode ? COMPACT_SIZE : SIDEBAR_WIDTH;
-    const windowHeight = isCompactMode ? COMPACT_SIZE : height;
-    const windowX = width - windowWidth - 20; // 20px margin from right edge
-    const windowY = 20; // 20px margin from top
+    let w, h, x, y;
+
+    switch (mode) {
+        case WINDOW_MODES.SMALL:
+            w = 240; // Larger window to let shadows breathe
+            h = 240;
+            x = width - w - 20;
+            y = 20;
+            break;
+        case WINDOW_MODES.MEDIUM:
+            w = SIDEBAR_WIDTH; // Match chat window width (300px)
+            h = Math.floor(height * 0.5);
+            x = width - w - 20;
+            y = 20;
+            break;
+        case WINDOW_MODES.FULLSCREEN:
+            w = width;
+            h = height;
+            x = 0;
+            y = 0;
+            break;
+        case WINDOW_MODES.LARGE:
+        default:
+            w = SIDEBAR_WIDTH;
+            h = height;
+            x = width - w - 20;
+            y = 0;
+            break;
+    }
+
+    return { width: w, height: h, x, y };
+}
+
+function applyWindowMode(mode, animate = true) {
+    if (!mainWindow) return;
+
+    currentWindowMode = mode;
+    saveSettings();
+
+    const bounds = getWindowBounds(mode);
+    mainWindow.setBounds(bounds, animate);
+
+    // Update isCompactMode for legacy logic
+    isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM);
+
+    // Send mode change to renderer
+    mainWindow.webContents.send('window-mode-changed', mode);
+
+    console.log(`🔲 Window mode applied: ${mode.toUpperCase()} (${bounds.width}x${bounds.height})`);
+}
+
+function createWindow() {
+    const bounds = getWindowBounds(currentWindowMode);
 
     mainWindow = new BrowserWindow({
-        width: windowWidth,
-        height: windowHeight,
-        x: windowX,
-        y: windowY,
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
@@ -199,20 +281,17 @@ function createWindow() {
 
     mainWindow.loadFile('renderer/index.html');
 
+    mainWindow.once('ready-to-show', () => {
+        mainWindow.webContents.send('window-mode-changed', currentWindowMode);
+    });
+
     // Open DevTools in development
     // mainWindow.webContents.openDevTools({ mode: 'detach' });
 
     // Maintain position on screen resize
     screen.on('display-metrics-changed', () => {
-        const { width: newWidth, height: newHeight } = screen.getPrimaryDisplay().workAreaSize;
-        const newWindowWidth = isCompactMode ? COMPACT_SIZE : SIDEBAR_WIDTH;
-        const newWindowHeight = isCompactMode ? COMPACT_SIZE : newHeight;
-        mainWindow.setBounds({
-            x: newWidth - newWindowWidth - 20,
-            y: isCompactMode ? 20 : 0,
-            width: newWindowWidth,
-            height: newWindowHeight
-        });
+        const bounds = getWindowBounds(currentWindowMode);
+        mainWindow.setBounds(bounds);
     });
 
     mainWindow.on('move', () => {
@@ -223,7 +302,7 @@ function createWindow() {
         syncChatWindowPosition(false);
     });
 
-    console.log(`✅ Window created in ${isCompactMode ? 'COMPACT' : 'EXPANDED'} mode (${windowWidth}x${windowHeight})`);
+    console.log(`✅ Window created in ${isCompactMode ? 'COMPACT' : 'EXPANDED'} mode (${bounds.width}x${bounds.height})`);
 }
 
 // ============================================
@@ -407,6 +486,26 @@ ipcMain.on('request-attention', () => {
     }
 });
 
+ipcMain.on('set-window-mode', (event, mode) => {
+    applyWindowMode(mode);
+});
+
+ipcMain.on('window-drag-start', (event, { mouseX, mouseY }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
+
+    // We store the initial cursor-to-window offset
+    // This allows us to move the window based on mouse position
+    // BUT Electron's screen.getCursorScreenPoint is needed
+});
+
+ipcMain.on('window-move', (event, { x, y }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+        win.setPosition(Math.round(x), Math.round(y));
+    }
+});
+
 // Open/toggle chat window from main window
 ipcMain.handle('toggle-chat-window', () => {
     if (chatWindow && !chatWindow.isDestroyed()) {
@@ -583,10 +682,10 @@ async function setupChatGPT() {
     try {
         // Launch persistent context to save login state
         const userDataDir = path.join(app.getPath('userData'), 'playwright_chatgpt');
-        chatContext = await chromium.launchPersistentContext(userDataDir, {
+
+        const launchOptions = {
             headless: false,
             viewport: null, // Allow window resizing to control viewport
-            // userAgent: removed to allow system default (avoids Intel/ARM mismatch)
             permissions: ['microphone'], // Pre-grant microphone access
             args: [
                 '--disable-blink-features=AutomationControlled', // Hide automation status
@@ -594,7 +693,47 @@ async function setupChatGPT() {
                 '--no-default-browser-check'
             ],
             ignoreDefaultArgs: ['--enable-automation'] // Hide "Chrome is being controlled by automated test software" bar
-        });
+        };
+
+        // TRY SYSTEM BROWSERS (Best for distribution)
+        const channels = ['chrome', 'msedge', 'chrome-beta', 'msedge-beta'];
+        let launched = false;
+
+        for (const channel of channels) {
+            try {
+                console.log(`🌐 Attempting to launch browser channel: ${channel}...`);
+                chatContext = await chromium.launchPersistentContext(userDataDir, {
+                    ...launchOptions,
+                    channel: channel
+                });
+                console.log(`✅ Launched using system ${channel}`);
+                launched = true;
+                break;
+            } catch (e) {
+                // Not found, continue to next
+            }
+        }
+
+        if (!launched) {
+            console.warn('⚠️ No system Chrome/Edge found. Trying default Playwright Chromium...');
+
+            // TRY 2: Use default Playwright Chromium (fallback)
+            try {
+                chatContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
+                console.log('✅ Launched using default Playwright Chromium');
+                launched = true;
+            } catch (chromiumError) {
+                console.error('❌ CRITICAL: No browser could be launched.', chromiumError.message);
+
+                // Show a user-friendly error dialog in production
+                const { dialog } = require('electron');
+                dialog.showErrorBox(
+                    'Error de Inicialización',
+                    'U necesita un navegador basado en Chromium (Google Chrome o Microsoft Edge) para funcionar.\n\nPor favor, instala Google Chrome y vuelve a abrir la aplicación.\n\nDetalle técnico: ' + chromiumError.message
+                );
+                return;
+            }
+        }
 
         // Use the first existing page if available, otherwise create one
         const pages = chatContext.pages();
@@ -616,6 +755,8 @@ async function setupChatGPT() {
 
     } catch (error) {
         console.error('❌ Failed to setup ChatGPT:', error);
+        const { dialog } = require('electron');
+        dialog.showErrorBox('Error de ChatGPT', 'Error inesperado al configurar la integración con ChatGPT: ' + error.message);
     }
 }
 
@@ -1351,4 +1492,3 @@ ipcMain.handle('confirm-action', async (event, data) => {
 });
 
 // Add setupChatGPT to initialization
-

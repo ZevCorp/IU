@@ -66,6 +66,12 @@ contextBridge.exposeInMainWorld('iuOS', {
     installUpdate: () => ipcRenderer.invoke('install-update'),
     onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (event, info) => callback(info)),
     onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, info) => callback(info)),
+
+    // Window Mode Control
+    setWindowMode: (mode) => ipcRenderer.send('set-window-mode', mode),
+    onWindowModeChanged: (callback) => ipcRenderer.on('window-mode-changed', (event, mode) => callback(mode)),
+    startDrag: () => ipcRenderer.send('window-drag-start'),
+    windowMove: (pos) => ipcRenderer.send('window-move', pos),
 });
 
 

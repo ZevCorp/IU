@@ -32,20 +32,21 @@ class StickyFaceController {
         const cursor = getCursorScreenPoint();
 
         this.window = new BrowserWindow({
-            width: 77, // Precise size requested
-            height: 77,
+            width: 110, // Increased size for more visual space
+            height: 110,
             x: cursor.x + this.offset.x,
             y: cursor.y + this.offset.y,
             frame: false,
-            transparent: true,
+            transparent: true, // Required for circular shape
+            // backgroundColor: '#000000', // Removed: handled by CSS
+            hasShadow: false,
             alwaysOnTop: true,
             resizable: false,
             movable: false, // Moved programmatically
             focusable: false, // Don't steal focus
             skipTaskbar: true,
-            hasShadow: false,
-            vibrancy: 'hud', // Native macOS blur
-            visualEffectState: 'active',
+            // vibrancy: 'hud' REMOVED to avoid transparency issues
+            // visualEffectState: 'active',
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
@@ -66,14 +67,23 @@ class StickyFaceController {
         this.window.loadURL(`file://${path.join(__dirname, 'renderer/index.html')}?mode=sticky`);
 
         this.window.once('ready-to-show', () => {
+            // FORCE CSS OVERRIDE for Sticky Mode Background
+            this.window.webContents.insertCSS(`
+                body, #app {
+                     background-color: rgba(0, 0, 0, 0.35) !important;
+                     backdrop-filter: blur(20px) !important;
+                     -webkit-backdrop-filter: blur(20px) !important;
+                     border-radius: 20px !important;
+                }
+            `);
             // Inject styles for the specific look requested:
             // "rostro vectorial en blanco, el blur un poco opaco, medio oscuro"
             // We use the query param to trigger CSS/JS changes in value, but we can also inject specific overrides here if needed.
 
-            // Set face color to BLACK as requested
+            // Set face color to WHITE because background is black
             this.window.webContents.executeJavaScript(`
                  if (window.uFace) {
-                     window.uFace.setEyeColor('#000000');
+                     window.uFace.setEyeColor('#ffffff');
                  }
             `);
 
