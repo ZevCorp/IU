@@ -452,7 +452,7 @@ function init() {
         if (window.iuOS && window.iuOS.sampleBgLuminance) {
             window.iuOS.sampleBgLuminance().then(({ isDark }) => {
                 if (face) face.setEyeColor(isDark ? '#ffffff' : '#1a1a1a');
-            }).catch(() => {});
+            }).catch(() => { });
         }
         // Also listen for live theme changes
         if (window.iuOS && window.iuOS.onBgLuminanceChanged) {
@@ -2292,15 +2292,240 @@ function handleWakeWord(type, text) {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// GESTURE STATE MACHINE
+// Prevents gesture cross-contamination via exclusive state ownership.
+//
+//  States
+//  ──────
+//  IDLE      evaluating — no gesture locked in
+//  PINCHING  pinch drag is active (highest priority — blocks all hold gestures)
+//  FIST      strict fist held (exclusive vs PALM)
+//  PALM      open palm held   (exclusive vs FIST)
+//
+//  Transition map
+//  ──────────────
+//  IDLE      → PINCHING   when pinchActive && !fistCooldown
+//  IDLE      → FIST       when strictFist && !palmOpen && !pinchActive && !fistCooldown
+//  IDLE      → PALM       when palmOpen && !strictFist && !pinchActive
+//  PINCHING  → IDLE       when !pinchActive
+//  FIST      → IDLE       when !strictFist || pinchActive  (cancels timers)
+//  PALM      → IDLE       when !palmOpen   || pinchActive  (cancels timers)
+//
+//  FIST escalation (peldaños):
+//    voice active  → hold 2 s → stop voice → reset to IDLE + cooldown 1.2 s
+//    (after cooldown, re-closing fist for 0.8 s → sleep)
+//    voice idle    → hold 0.8 s → sleep
+//
+//  PALM action:
+//    voice idle    → hold 2 s → start voice
+//
+//  TRIPLE PINCH (new):
+//    3 quick pinch taps (each < 400 ms) within 900 ms → activate voice
+// ═══════════════════════════════════════════════════════════════════════════
+
+const GM = Object.freeze({ IDLE: 'idle', PINCHING: 'pinching', FIST: 'fist', PALM: 'palm' });
+let gestureMode = GM.IDLE;
+let gm_fistTimer = null;
+let gm_palmTimer = null;
+
+// Cooldown flag: blocks FIST from re-engaging for 1.2 s after voice is stopped
+// by fist — prevents accidental immediate sleep after ending a call.
+let fistCooldown = false;
+let fistCooldownTimer = null;
+
+function gm_startFistCooldown() {
+    fistCooldown = true;
+    if (fistCooldownTimer) clearTimeout(fistCooldownTimer);
+    fistCooldownTimer = setTimeout(() => {
+        fistCooldown = false;
+        fistCooldownTimer = null;
+    }, 1200);
+}
+function gm_cancelFist() {
+    if (gm_fistTimer) { clearTimeout(gm_fistTimer); gm_fistTimer = null; }
+}
+function gm_cancelPalm() {
+    if (gm_palmTimer) { clearTimeout(gm_palmTimer); gm_palmTimer = null; }
+}
+
+async function doGestureSleep() {
+    try { new Audio('assets/sleep.mp3').play().catch(() => { }); } catch (_) { }
+    await new Promise(r => setTimeout(r, 80));
+    window.iuOS?.gestureSleep?.();
+}
+
+// ── Triple-pinch tap detector ─────────────────────────────────────────────────
+// 3 quick taps (pinch-on then off in < PINCH_TAP_MAX_MS each)
+// within TRIPLE_PINCH_WINDOW ms → activate voice.
+const PINCH_TAP_MAX_MS = 400;  // longer hold = drag, not a tap
+const TRIPLE_PINCH_WINDOW = 900;  // window for 3 taps to count
+
+let prevPinchActive = false;
+let pinchHeldSince = null;   // timestamp when current pinch tap started
+let pinchTapCount = 0;
+let pinchTapTimer = null;
+// ─────────────────────────────────────────────────────────────────────────────
+
 if (window.iuOS && window.iuOS.onHandsFrame) {
     window.iuOS.onHandsFrame((payload) => {
         if (!payload) return;
-        if (payload.waveGesture || payload.palmOpen) {
+
+        const pinchActive = !!payload.pinchActive;
+        const strictFist = !!payload.strictFist;
+        const palmOpen = !!payload.palmOpen;
+
+        // ── Triple-pinch tap detection (runs before state machine) ────────
+        if (pinchActive && !prevPinchActive) {
+            // Rising edge: pinch just closed
+            pinchHeldSince = Date.now();
+        }
+        if (!pinchActive && prevPinchActive) {
+            // Falling edge: pinch just released — check if it was a tap
+            const duration = Date.now() - (pinchHeldSince || 0);
+            pinchHeldSince = null;
+
+            if (duration < PINCH_TAP_MAX_MS) {
+                // Quick tap detected
+                pinchTapCount++;
+                if (pinchTapTimer) clearTimeout(pinchTapTimer);
+
+                if (pinchTapCount >= 3) {
+                    // ✅ Triple pinch! — activate voice
+                    pinchTapCount = 0;
+                    console.log('🤏🤏🤏 [Triple Pinch] Activating voice');
+                    if (conversationState === 'idle' && gestureMode === GM.IDLE) {
+                        if (face) {
+                            face.transitionTo('listening');
+                            setTimeout(() => {
+                                if (conversationState === 'idle') face.transitionTo('thinking');
+                            }, 900);
+                        }
+                        toggleConversation();
+                    }
+                } else {
+                    // Wait for more taps within the window
+                    pinchTapTimer = setTimeout(() => {
+                        pinchTapCount = 0;
+                        pinchTapTimer = null;
+                    }, TRIPLE_PINCH_WINDOW);
+                }
+            } else {
+                // It was a hold/drag — reset tap count
+                pinchTapCount = 0;
+                if (pinchTapTimer) { clearTimeout(pinchTapTimer); pinchTapTimer = null; }
+            }
+        }
+        prevPinchActive = pinchActive;
+        // ─────────────────────────────────────────────────────────────────
+
+        // Wake-fusion (HeyÜ): only natural in IDLE/PALM contexts
+        if ((gestureMode === GM.IDLE || gestureMode === GM.PALM) &&
+            (payload.waveGesture || palmOpen)) {
             lastWaveAt = Date.now();
             evaluateWakeFusion('gesture+voice');
         }
+
+        // ── State machine ─────────────────────────────────────────────────
+        switch (gestureMode) {
+
+            // ──────────────────────────────────────────────────────────────
+            case GM.IDLE: {
+                if (pinchActive) {
+                    // Pinch drag takes absolute priority
+                    gestureMode = GM.PINCHING;
+
+                } else if (strictFist && !palmOpen && !fistCooldown) {
+                    // Begin FIST hold — start escalation ladder
+                    gestureMode = GM.FIST;
+
+                    if (conversationState === 'active') {
+                        // Peldaño 1: stop voice after 2 s
+                        gm_fistTimer = setTimeout(async () => {
+                            gm_fistTimer = null;
+                            if (gestureMode !== GM.FIST) return; // guard
+                            await toggleConversation();           // stop voice
+
+                            // After stopping voice: reset to IDLE and apply cooldown.
+                            // The user must release + re-close fist for sleep.
+                            // This prevents accidental immediate window hide after ending call.
+                            gm_cancelFist();
+                            gestureMode = GM.IDLE;
+                            gm_startFistCooldown();
+                        }, 2000);
+
+                    } else {
+                        // Voice idle → sleep after 0.8 s
+                        gm_fistTimer = setTimeout(() => {
+                            gm_fistTimer = null;
+                            if (gestureMode === GM.FIST) doGestureSleep();
+                        }, 800);
+                    }
+
+                } else if (palmOpen && !strictFist && conversationState === 'idle') {
+                    // Begin PALM hold — start voice activation timer
+                    gestureMode = GM.PALM;
+
+                    gm_palmTimer = setTimeout(async () => {
+                        gm_palmTimer = null;
+                        if (gestureMode !== GM.PALM) return;        // guard
+                        if (conversationState !== 'idle') return;   // guard
+                        if (face) {
+                            face.transitionTo('listening');
+                            setTimeout(() => {
+                                if (conversationState === 'idle') face.transitionTo('thinking');
+                            }, 900);
+                        }
+                        await toggleConversation(); // start voice
+                        gestureMode = GM.IDLE;      // release after action
+                    }, 2000);
+                }
+                break;
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            case GM.PINCHING: {
+                // Pinch mode: ALL hold-gestures blocked.
+                // Only exit back to IDLE when drag is released.
+                if (!pinchActive) {
+                    gestureMode = GM.IDLE;
+                }
+                break;
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            case GM.FIST: {
+                // Exit FIST if fist breaks OR pinch starts
+                if (!strictFist || pinchActive) {
+                    gm_cancelFist();
+                    gestureMode = GM.IDLE;
+                }
+                // PALM gestures are completely blocked here
+                break;
+            }
+
+            // ──────────────────────────────────────────────────────────────
+            case GM.PALM: {
+                // Exit PALM if palm breaks OR pinch starts
+                if (!palmOpen || pinchActive) {
+                    gm_cancelPalm();
+                    gestureMode = GM.IDLE;
+                }
+                // FIST gestures are completely blocked here
+                break;
+            }
+        }
+        // ─────────────────────────────────────────────────────────────────
     });
 }
+
+// ── Wake sound (triggered by main.js just before showing the window) ─────────
+if (window.iuOS && window.iuOS.onGestureWakeSound) {
+    window.iuOS.onGestureWakeSound(() => {
+        try { new Audio('assets/wake.mp3').play().catch(() => { }); } catch (_) { }
+    });
+}
+// ═══════════════════════════════════════════════════════════════════════════
 
 // Inactivity Monitor (Auto-Stop)
 // Inactivity Monitor (DISABLED by user request)
@@ -2313,3 +2538,7 @@ if (window.iuOS && window.iuOS.onHandsFrame) {
 //     }
 //     // Timeout disabled.
 // }, 1000);
+
+
+
+

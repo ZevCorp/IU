@@ -88,6 +88,14 @@ contextBridge.exposeInMainWorld('iuOS', {
     pinchDragMainWindow: (payload) => ipcRenderer.send('main-window-pinch-drag', payload),
     publishHandsLandmarks: (payload) => ipcRenderer.send('hands-landmarks', payload),
     onHandsLandmarks: (callback) => ipcRenderer.on('hands-landmarks', (event, payload) => callback(payload)),
+
+    // Gesture sleep / wake (fist hold = sleep, open hand hold = wake)
+    onGestureSleep: (callback) => ipcRenderer.on('gesture-sleep', (event, isSleeping) => callback(isSleeping)),
+    gestureSleep: () => ipcRenderer.send('gesture-request-sleep'),
+    onGestureWakeSound: (callback) => ipcRenderer.on('gesture-wake-sound', () => callback()),
+
+    // Gesture voice control (open palm 2s = start, strict fist 2s = stop)
+    onGestureVoiceToggle: (callback) => ipcRenderer.on('gesture-voice-toggle', (event, action) => callback(action)),
 });
 
 

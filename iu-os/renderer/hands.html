@@ -16,9 +16,13 @@
       --ok: #5cff99;
     }
 
-    * { box-sizing: border-box; user-select: none; }
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
 
-    html, body {
+    html,
+    body {
       width: 100%;
       height: 100%;
       margin: 0;
@@ -43,7 +47,9 @@
       transition: opacity 360ms ease;
     }
 
-    #shell.visible { opacity: 1; }
+    #shell.visible {
+      opacity: 1;
+    }
 
     #titlebar {
       height: 42px;
@@ -77,7 +83,9 @@
       transition: opacity 120ms ease;
     }
 
-    #dot.active { opacity: 1; }
+    #dot.active {
+      opacity: 1;
+    }
 
     .btn {
       -webkit-app-region: no-drag;
@@ -91,9 +99,18 @@
       padding: 0 8px;
     }
 
-    #hide-btn { width: 24px; padding: 0; font-size: 14px; line-height: 20px; }
+    #hide-btn {
+      width: 24px;
+      padding: 0;
+      font-size: 14px;
+      line-height: 20px;
+    }
 
-    #actions { display: flex; align-items: center; gap: 6px; }
+    #actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
 
     #stage {
       position: relative;
@@ -101,7 +118,8 @@
       height: calc(100% - 42px);
     }
 
-    #video, #canvas {
+    #video,
+    #canvas {
       position: absolute;
       inset: 0;
       width: 100%;
@@ -115,7 +133,9 @@
       opacity: 0.28;
     }
 
-    #canvas { pointer-events: none; }
+    #canvas {
+      pointer-events: none;
+    }
 
     #hud {
       position: absolute;
@@ -379,6 +399,35 @@
       return extended >= 3;
     }
 
+    /**
+     * Strict fist: ALL 4 fingers curled — tip below its PIP joint.
+     * Uses PIP (same reference as detectPalmOpen) not MCP, which is more
+     * reliable and correctly mirrors how palmOpen works.
+     * A single raised finger returns false. Thumb is excluded (position
+     * varies widely by hand shape and camera angle).
+     */
+    function detectStrictFist(result) {
+      const hands = result?.landmarks || [];
+      if (!hands.length) return false;
+      const hand = hands[0];
+      if (!hand || hand.length < 21) return false;
+
+      // Index, Middle, Ring, Pinky: tip must be BELOW its PIP (larger y = lower on screen)
+      // This mirrors detectPalmOpen (which returns true when 3+ tips are ABOVE their PIPs)
+      const fingerTips = [8, 12, 16, 20]; // index, middle, ring, pinky tips
+      const fingerPips = [6, 10, 14, 18]; // their corresponding PIP joints
+      for (let i = 0; i < fingerTips.length; i += 1) {
+        const tip = hand[fingerTips[i]];
+        const pip = hand[fingerPips[i]];
+        if (!tip || !pip) return false;
+        // For a closed finger: tip.y > pip.y (tip is lower / closer to palm)
+        // No tolerance needed — same scale as detectPalmOpen
+        if (tip.y <= pip.y) return false; // this finger is not curled
+      }
+
+      return true;
+    }
+
     function detectWaveGesture(result, now) {
       const hands = result?.landmarks || [];
       if (!hands.length) return false;
@@ -502,6 +551,7 @@
       publishLandmarks(result, now);
       updatePresence(handsCount);
       const palmOpen = detectPalmOpen(result);
+      const strictFist = detectStrictFist(result);
       const waveGesture = detectWaveGesture(result, now);
 
       frameCount += 1;
@@ -512,7 +562,7 @@
         fpsTs = now;
       }
 
-      metaEl.textContent = `${handsCount} hands • ${fps} fps • pinch ${Math.round(pinch.strength * 100)}%${waveGesture ? ' • wave' : ''}`;
+      metaEl.textContent = `${handsCount} hands • ${fps} fps • pinch ${Math.round(pinch.strength * 100)}%${strictFist ? ' • ✊ fist' : ''}${palmOpen ? ' • 🖐 open' : ''}${waveGesture ? ' • wave' : ''}`;
 
       if (now - lastPublishTs > 90 && window.iuOS?.publishHandsFrame) {
         lastPublishTs = now;
@@ -521,7 +571,9 @@
           handsCount,
           fps,
           pinch: pinch.strength,
+          pinchActive: pinch.active,   // true = pinch drag is locked in
           palmOpen,
+          strictFist,
           waveGesture
         });
       }

@@ -118,6 +118,50 @@ const mainWindowPinchDrag = {
 };
 let pinchSnapTimer = null;
 
+// ── Fist / Open-hand sleep & wake ──────────────────────────────────────────
+// • Strict fist held GESTURE_SLEEP_MS  → hide mainWindow (reposo)
+// • Open palm held  GESTURE_SLEEP_MS  → show mainWindow (activo)
+// • Open palm held  GESTURE_VOICE_MS  → activate voice mode (start talking)
+// • Strict fist held GESTURE_VOICE_MS → deactivate voice mode (stop talking)
+const GESTURE_SLEEP_MS = 800;   // ms to hold strict fist for sleep / open palm for wake
+const GESTURE_VOICE_MS = 2000;  // ms to hold for voice on/off
+
+let gestureState = {
+    isAsleep: false,        // whether mainWindow is currently hidden by gesture
+    savedBounds: null,      // window position saved before sleeping (for exact restore)
+    fistTimer: null,        // setTimeout handle for sleep trigger (800 ms strict fist)
+    openTimer: null,        // setTimeout handle for wake trigger (800 ms open palm)
+    voiceOnTimer: null,     // setTimeout handle for voice-start (2s open palm)
+    voiceOffTimer: null,    // setTimeout handle for voice-stop  (2s strict fist)
+};
+
+function gestureSetSleep() {
+    if (gestureState.isAsleep) return;
+    gestureState.isAsleep = true;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        gestureState.savedBounds = mainWindow.getBounds();
+        console.log(`✊ [GestureSleep] hiding mainWindow at (${gestureState.savedBounds.x}, ${gestureState.savedBounds.y})`);
+        mainWindow.hide();
+    }
+}
+
+function gestureSetWake() {
+    if (!gestureState.isAsleep) return;
+    gestureState.isAsleep = false;
+    console.log('🖐️ [GestureWake] Open hand held ─ restoring mainWindow (activo)');
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (gestureState.savedBounds) {
+            mainWindow.setBounds(gestureState.savedBounds);
+        }
+        // Send wake-sound event BEFORE show() so the renderer can start audio
+        mainWindow.webContents.send('gesture-wake-sound');
+        mainWindow.show();
+        mainWindow.webContents.send('gesture-sleep', false);
+    }
+    gestureState.savedBounds = null;
+}
+// ───────────────────────────────────────────────────────────────────────────
+
 // Independent small-mode window (separate BrowserWindow to avoid background bleed)
 let smallWindow = null;
 
@@ -850,15 +894,41 @@ ipcMain.handle('toggle-hand-fluid-window', () => {
 });
 
 ipcMain.on('hands-frame', (event, payload) => {
+    // Forward to all subscriber windows
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('hands-frame', payload);
     }
     if (handFluidWindow && !handFluidWindow.isDestroyed()) {
         handFluidWindow.webContents.send('hands-frame', payload);
     }
+
+    // ── Wake gesture (open palm when window is asleep) ─────────────────────
+    // Only main.js can call mainWindow.show() — all other gesture logic lives
+    // in the renderer (app.js) which has access to conversationState.
+    if (!payload || typeof payload !== 'object') return;
+    const handsPresent = (payload.handsCount || 0) > 0;
+    const openHand = handsPresent && !!payload.palmOpen;
+
+    if (openHand && gestureState.isAsleep) {
+        if (!gestureState.openTimer) {
+            gestureState.openTimer = setTimeout(() => {
+                gestureState.openTimer = null;
+                gestureSetWake();
+            }, GESTURE_SLEEP_MS);
+        }
+    } else {
+        if (gestureState.openTimer) { clearTimeout(gestureState.openTimer); gestureState.openTimer = null; }
+    }
+    // ───────────────────────────────────────────────────────────────────────
+});
+
+// Renderer requests window sleep (called after playing sleep sound)
+ipcMain.on('gesture-request-sleep', () => {
+    gestureSetSleep();
 });
 
 ipcMain.on('hands-landmarks', (event, payload) => {
+
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('hands-landmarks', payload);
     }
@@ -1548,8 +1618,9 @@ function startSmartConversationMonitoring() {
                 const assistText = extractText(assistNode).trim();
 
                 // Check stability (heuristic: non-empty & long enough)
-                const userStable = userText.length > 0 && userText !== 'Transcribing...';
-                const assistStable = assistText.length > 0 && !assistText.includes('Thinking...');
+                // Note: ChatGPT uses Unicode ellipsis (…) not ASCII (...) in "Transcribing…"
+                const userStable = userText.length > 0 && !userText.startsWith('Transcribing');
+                const assistStable = assistText.length > 0 && !assistText.startsWith('Thinking');
 
                 return {
                     user: { text: userText, isStable: userStable },
@@ -1601,7 +1672,8 @@ function startSmartConversationMonitoring() {
                                         goal: plan.goal,
                                         app: plan.app
                                     });
-                                    screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+                                    screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint)
+                                        .finally(() => { isActionPending = false; });
                                 }
 
                                 isActionPending = true; // Flag action started
@@ -1635,7 +1707,8 @@ function startSmartConversationMonitoring() {
                                     goal: implicitPlan.goal,
                                     app: implicitPlan.app
                                 });
-                                screenAgent.executeAction(implicitPlan.goal, implicitPlan.app, implicitPlan.stepsHint);
+                                screenAgent.executeAction(implicitPlan.goal, implicitPlan.app, implicitPlan.stepsHint)
+                                    .finally(() => { isActionPending = false; });
                             }
                             isActionPending = true;
                         }
