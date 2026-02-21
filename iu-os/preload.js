@@ -34,6 +34,10 @@ contextBridge.exposeInMainWorld('iuOS', {
     // Screen Context (macOS Accessibility)
     getScreenContext: (gazeDirection) => ipcRenderer.invoke('get-screen-context', gazeDirection),
 
+    // Background luminance detection (for face color contrast in SMALL mode)
+    sampleBgLuminance: () => ipcRenderer.invoke('sample-bg-luminance'),
+    onBgLuminanceChanged: (callback) => ipcRenderer.on('bg-luminance-changed', (event, data) => callback(data)),
+
     // Event Listeners
     onConversationText: (callback) => ipcRenderer.on('conversation-text', (event, text) => callback(text)),
     onMemoryStatus: (callback) => ipcRenderer.on('memory-status', (event, status) => callback(status)),

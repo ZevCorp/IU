@@ -438,8 +438,30 @@ const wakeUpSound = new Audio('assets/hey_pss_pss.mp3');
 function init() {
     face = new Face();
 
-    // Check for Sticky Mode (Automation Cursor Follower)
+    // Check for special window modes loaded via query param
     const urlParams = new URLSearchParams(window.location.search);
+
+    // Small mode: independent window, apply visuals immediately with no transition
+    if (urlParams.get('mode') === 'small') {
+        console.log('🔵 [Renderer] Detected ?mode=small — applying small window layout');
+        window.currentActiveWindowMode = 'small';
+        document.body.classList.add('mode-small');
+        const svgEl = document.getElementById('face-svg');
+        if (svgEl) svgEl.setAttribute('viewBox', '50 80 300 340');
+        // Adapt face color to system theme (nativeTheme-based, zero-overhead)
+        if (window.iuOS && window.iuOS.sampleBgLuminance) {
+            window.iuOS.sampleBgLuminance().then(({ isDark }) => {
+                if (face) face.setEyeColor(isDark ? '#ffffff' : '#1a1a1a');
+            }).catch(() => {});
+        }
+        // Also listen for live theme changes
+        if (window.iuOS && window.iuOS.onBgLuminanceChanged) {
+            window.iuOS.onBgLuminanceChanged(({ isDark }) => {
+                if (face) face.setEyeColor(isDark ? '#ffffff' : '#1a1a1a');
+            });
+        }
+    }
+
     if (urlParams.get('mode') === 'sticky') {
         console.log('🤖 [App] Starting in Sticky Mode (Automation)');
         document.body.classList.add('sticky-mode');
@@ -1246,11 +1268,16 @@ function setupManualDrag() {
 function setupWindowModes() {
     const MODES_CYCLE = ['small', 'medium', 'large', 'full'];
     let lastScaleChange = 0;
-    const PINCH_THRESHOLD = 8; // Even more sensitive for "very easy" level
+    const PINCH_THRESHOLD = 8;
     let modeDebounce = false;
-    let gestureLatched = false;
     let lastModeChangeAt = 0;
     const MODE_STEP_COOLDOWN_MS = 320;
+
+    // Per-gesture flags: only ONE mode change allowed per complete gesture
+    let inNativeGesture = false;
+    let gestureModeDone = false;
+
+    const GESTURE_DEAD_MS = 350;
 
     const tryChangeMode = (delta) => {
         const now = Date.now();
@@ -1259,39 +1286,56 @@ function setupWindowModes() {
         if (changed) {
             lastModeChangeAt = now;
             modeDebounce = true;
+            // Set dead time: block new gesturestart for 350ms after mode change
+            gestureDeadUntil = now + GESTURE_DEAD_MS;
+            inNativeGesture = false; // Current gesture is done
+            gestureModeDone = true;
             setTimeout(() => { modeDebounce = false; }, 180);
         }
         return changed;
     };
 
-    // 1. Detect Pinch (Wheel + Ctrl)
+    // 1. Detect Pinch (Wheel + Ctrl) — only fires when NOT in a native gesture
     window.addEventListener('wheel', (e) => {
         if (e.ctrlKey) {
             e.preventDefault();
+            if (inNativeGesture) return; // Native gesture takes priority
             lastScaleChange += e.deltaY;
 
             if (Math.abs(lastScaleChange) > PINCH_THRESHOLD) {
-                const delta = lastScaleChange > 0 ? -1 : 1; // Pinch in (deltaY > 0) -> Smaller
+                const delta = lastScaleChange > 0 ? -1 : 1;
                 tryChangeMode(delta);
                 lastScaleChange = 0;
             }
         }
     }, { passive: false });
 
-    // 2. Detect Native Mac Pinch
+    // Dead time after a mode change: block new gestures for 350ms to prevent
+    // the "finishing gesture" from being re-detected in the new window size.
+    let gestureDeadUntil = 0;
+
+    // 2. Native Mac Pinch — mark gesture boundaries, allow only ONE mode step per gesture
+    window.addEventListener('gesturestart', () => {
+        if (Date.now() < gestureDeadUntil) return; // Still in dead time — ignore
+        inNativeGesture = true;
+        gestureModeDone = false;
+        lastScaleChange = 0;
+    });
+
+    window.addEventListener('gestureend', () => {
+        inNativeGesture = false;
+        gestureModeDone = false;
+        lastScaleChange = 0;
+    });
+
     window.addEventListener('gesturechange', (e) => {
         e.preventDefault();
-        // Arm again only when gesture scale returns near neutral.
-        if (e.scale > 0.99 && e.scale < 1.01) {
-            gestureLatched = false;
-            return;
-        }
-        if (gestureLatched) return;
+        if (gestureModeDone) return; // Only one mode change per gesture
 
-        if (e.scale > 1.05) { // Barely need to move fingers
-            if (tryChangeMode(1)) gestureLatched = true; // Pinch out -> Larger
-        } else if (e.scale < 0.95) { // Barely need to move fingers
-            if (tryChangeMode(-1)) gestureLatched = true; // Pinch in -> Smaller
+        if (e.scale > 1.05) {
+            if (tryChangeMode(1)) gestureModeDone = true; // Pinch out -> Larger
+        } else if (e.scale < 0.95) {
+            if (tryChangeMode(-1)) gestureModeDone = true; // Pinch in -> Smaller
         }
     });
 
@@ -1332,29 +1376,29 @@ function applyVisualMode(mode) {
 
     console.log(`🎨 Applying visual mode: ${mode}`);
 
-    // Reset styles
-    document.body.classList.remove('sticky-mode');
+    // Reset all mode classes
+    document.body.classList.remove('sticky-mode', 'mode-small', 'mode-medium');
     svg.setAttribute('viewBox', '0 0 400 500');
 
-    // Reset eye color to theme default
     const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
-    if (face) face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
 
     if (mode === 'small') {
-        // Mini Mode: Pure Liquid Glass Circle
+        // Pre-set transparent BEFORE adding class to bypass the CSS background-color transition.
+        // Without this, the body briefly flashes dark (#0a0a0a) during the 300ms transition.
+        document.body.style.background = 'transparent';
+        document.body.style.backgroundColor = 'transparent';
         document.body.classList.add('mode-small');
-        if (face) face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
         svg.setAttribute('viewBox', '50 80 300 340');
-    } else if (mode === 'medium') {
-        document.body.classList.remove('mode-small');
-        // Medium Mode: 50% Size
-        svg.setAttribute('viewBox', '0 0 400 500');
-    } else if (mode === 'large') {
-        document.body.classList.remove('mode-small');
-        // Large Mode: Sidebar
-    } else if (mode === 'full') {
-        document.body.classList.remove('mode-small');
-        // Full Screen Mode
+    } else {
+        // Restore CSS-managed background when leaving small mode
+        requestAnimationFrame(() => {
+            document.body.style.background = '';
+            document.body.style.backgroundColor = '';
+        });
+        if (mode === 'medium') {
+            document.body.classList.add('mode-medium');
+        }
+        if (face) face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
     }
 }
 
@@ -1437,12 +1481,13 @@ async function toggleConversation() {
 
 function updateConversationUI(state) {
     const btn = document.getElementById('btn-transfer-top');
-    if (!btn) return;
 
     if (state === 'active') {
         // Stop state
-        btn.innerHTML = '<span class="transfer-text">Terminar</span>';
-        btn.classList.add('active-conversation');
+        if (btn) {
+            btn.innerHTML = '<span class="transfer-text">Terminar</span>';
+            btn.classList.add('active-conversation');
+        }
 
         // Show "Empezando conversación" in intent carousel
         const container = document.getElementById('intent-carousel');
@@ -1471,9 +1516,10 @@ function updateConversationUI(state) {
         }
     } else {
         // Idle/Start state
-        btn.innerHTML = '<span class="transfer-text">Hablar</span>';
-        btn.classList.remove('active-conversation');
-
+        if (btn) {
+            btn.innerHTML = '<span class="transfer-text">Hablar</span>';
+            btn.classList.remove('active-conversation');
+        }
         // REMOVED: transitionTo('neutral') to keep current expression (e.g. Smile)
 
 

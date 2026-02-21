@@ -67,13 +67,22 @@ class StickyFaceController {
         this.window.loadURL(`file://${path.join(__dirname, 'renderer/index.html')}?mode=sticky`);
 
         this.window.once('ready-to-show', () => {
-            // FORCE CSS OVERRIDE for Sticky Mode Background
+            // FORCE CSS OVERRIDE for Sticky Mode Background + hide all UI buttons
             this.window.webContents.insertCSS(`
                 body, #app {
                      background-color: rgba(0, 0, 0, 0.35) !important;
                      backdrop-filter: blur(20px) !important;
                      -webkit-backdrop-filter: blur(20px) !important;
                      border-radius: 20px !important;
+                }
+                /* Aggressively hide all UI elements — do not rely on body.sticky-mode class timing */
+                #btn-chat-toggle, #btn-voice-icon, #btn-transfer-top,
+                .transfer-btn-top, #menu-toggle, .menu-toggle,
+                #controls-panel, #nav-hud, #intent-carousel,
+                #transcript-container, #checklist-container, #neural-canvas {
+                    display: none !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
                 }
             `);
             // Inject styles for the specific look requested:

@@ -194,7 +194,7 @@ body.compact-mode-active {
   background-color: transparent !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  overflow: hidden;
+  overflow: visible; /* visible so circle box-shadow isn't clipped */
 }
 
 body.mode-small #app,
@@ -433,6 +433,30 @@ body.compact-mode-active #face-container {
   justify-content: center;
   transition: all var(--transition-fast);
   -webkit-app-region: no-drag;
+}
+
+/* =====================================================
+   Buttons visible only on window hover (all non-small/sticky modes)
+   ===================================================== */
+.chat-toggle-btn,
+.menu-toggle,
+.transfer-btn-top {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, background var(--transition-fast), transform var(--transition-fast);
+}
+
+body:hover .chat-toggle-btn,
+body:hover .menu-toggle,
+body:hover .transfer-btn-top {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Keep visible when conversation is active */
+.transfer-btn-top.active-conversation {
+  opacity: 1 !important;
+  pointer-events: auto !important;
 }
 
 /* Chat Toggle Button (top-right corner) */
@@ -1178,10 +1202,10 @@ body.compact-mode-active #face-container {
    Compact Action Mode (Function Calling Active)
    ===================================================== */
 
-/* When executing an action, face moves to top-left */
+/* Face stays in place during action execution */
 #app.compact-action-mode #face-container {
-  transform: translate(-25%, -25%) scale(0.7);
-  transition: all 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: none;
+  transition: none;
 }
 
 /* Hide all UI overlays while action mode is active; keep only the face visible. */

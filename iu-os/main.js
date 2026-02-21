@@ -3,7 +3,7 @@
  * Always-on-top overlay window positioned on right edge
  */
 
-const { app, BrowserWindow, screen, ipcMain, systemPreferences } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, systemPreferences, desktopCapturer, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
@@ -117,6 +117,58 @@ const mainWindowPinchDrag = {
     targetY: 0
 };
 let pinchSnapTimer = null;
+
+// Independent small-mode window (separate BrowserWindow to avoid background bleed)
+let smallWindow = null;
+
+function createSmallWindow(x, y) {
+    const alreadyExists = smallWindow && !smallWindow.isDestroyed();
+    console.log(`🔵 [SmallWindow] createSmallWindow(${x}, ${y}) — reuse: ${alreadyExists}`);
+    if (alreadyExists) {
+        smallWindow.setBounds({ x, y, width: 300, height: 300 });
+        smallWindow.show();
+        return;
+    }
+    console.log(`🔵 [SmallWindow] Creating new independent BrowserWindow`);
+    smallWindow = new BrowserWindow({
+        width: 300,
+        height: 300,
+        x,
+        y,
+        frame: false,
+        transparent: true,
+        hasShadow: false,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: true,
+        skipTaskbar: true,
+        focusable: true,
+        // No vibrancy — the circle uses CSS backdrop-filter directly
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            backgroundThrottling: false
+        }
+    });
+    smallWindow.loadFile('renderer/index.html', { query: { mode: 'small' } });
+    if (process.platform === 'darwin') {
+        smallWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        smallWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    }
+    smallWindow.on('closed', () => {
+        console.log(`🔵 [SmallWindow] closed event — cleared`);
+        smallWindow = null;
+    });
+}
+
+function destroySmallWindow() {
+    if (smallWindow && !smallWindow.isDestroyed()) {
+        console.log(`🗑️ [SmallWindow] Destroying`);
+        smallWindow.destroy(); // destroy() is synchronous — avoids race with close()
+        smallWindow = null;
+    }
+}
 
 // Window modes
 const WINDOW_MODES = {
@@ -269,8 +321,8 @@ function getWindowBounds(mode) {
 
     switch (mode) {
         case WINDOW_MODES.SMALL:
-            w = 240; // Larger window to let shadows breathe
-            h = 240;
+            w = 300; // Larger window to let shadows breathe
+            h = 300;
             x = width - w - 20;
             y = 20;
             break;
@@ -303,6 +355,11 @@ function applyWindowMode(mode, animate = true) {
 
     currentWindowMode = mode;
     saveSettings();
+    isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM);
+
+    // All modes use mainWindow — no independent renderer to preserve VisionManager continuity
+    destroySmallWindow(); // Clean up any leftover independent window
+    if (!mainWindow.isVisible()) mainWindow.show();
 
     const modeBounds = getWindowBounds(mode);
     const currentBounds = mainWindow.getBounds();
@@ -322,12 +379,9 @@ function applyWindowMode(mode, animate = true) {
     };
     mainWindow.setBounds(bounds, animate);
 
-    // Update isCompactMode for legacy logic
-    isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM);
-
-    // In SMALL mode: remove vibrancy so the background square is fully invisible.
-    // The window must still exist (for CSS box-shadow to composite correctly on desktop).
     if (process.platform === 'darwin') {
+        // SMALL mode: no system vibrancy — CSS backdrop-filter on the circle handles the effect.
+        // All other modes: use 'hud' vibrancy for the glass sidebar look.
         mainWindow.setVibrancy(mode === WINDOW_MODES.SMALL ? null : 'hud');
     }
 
@@ -355,8 +409,8 @@ function createWindow() {
         fullscreenable: false,
         skipTaskbar: true,
         hasShadow: false,
-        // Vibrancy is managed dynamically: null in SMALL mode (invisible square), 'hud' in other modes
-        vibrancy: currentWindowMode === WINDOW_MODES.SMALL ? null : 'hud',
+        show: false, // Shown manually in ready-to-show after vibrancy is correctly set
+        vibrancy: 'hud',
         visualEffectState: 'active',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -375,7 +429,14 @@ function createWindow() {
     mainWindow.loadFile('renderer/index.html');
 
     mainWindow.once('ready-to-show', () => {
+        console.log(`🚀 [Startup] Main window ready. Mode: ${currentWindowMode}`);
+        // Set vibrancy BEFORE showing to avoid a flash of the wrong background.
+        // SMALL mode uses CSS backdrop-filter on the circle only — no system vibrancy.
+        if (process.platform === 'darwin' && currentWindowMode === WINDOW_MODES.SMALL) {
+            mainWindow.setVibrancy(null);
+        }
         mainWindow.webContents.send('window-mode-changed', currentWindowMode);
+        mainWindow.show();
     });
 
     // Open DevTools in development
@@ -1063,6 +1124,24 @@ ipcMain.handle('get-screen-context', async (event, gazeDirection) => {
 });
 
 // ============================================
+// Background Luminance — uses Electron's nativeTheme (specialized, zero-overhead)
+// ============================================
+ipcMain.handle('sample-bg-luminance', () => {
+    return { isDark: nativeTheme.shouldUseDarkColors };
+});
+
+// Push live theme changes to both main window and small window
+nativeTheme.on('updated', () => {
+    const isDark = nativeTheme.shouldUseDarkColors;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('bg-luminance-changed', { isDark });
+    }
+    if (smallWindow && !smallWindow.isDestroyed()) {
+        smallWindow.webContents.send('bg-luminance-changed', { isDark });
+    }
+});
+
+// ============================================
 // ChatGPT Conversation Handling (Playwright)
 // ============================================
 const { chromium } = require('playwright');
@@ -1437,6 +1516,9 @@ function startSmartConversationMonitoring() {
 
     conversationMonitorInterval = setInterval(async () => {
         if (!chatPage || chatPage.isClosed()) return;
+
+        // Only process messages when voice mode is active
+        if (currentVoiceState !== 'active') return;
 
         try {
             // Evaluates the conversation "tail" in one go
