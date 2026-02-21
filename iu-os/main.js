@@ -1575,6 +1575,8 @@ let lastLoggedAssistantContent = '';
 
 // Track pending actions to avoid duplicates
 let isActionPending = false;
+// Track assistant text already used for implicit action check (prevents re-triggering during streaming)
+let lastImplicitActionContent = '';
 
 function startSmartConversationMonitoring() {
     if (conversationMonitorInterval) return;
@@ -1583,6 +1585,7 @@ function startSmartConversationMonitoring() {
     lastLoggedUserContent = '';
     lastLoggedAssistantContent = '';
     isActionPending = false;
+    lastImplicitActionContent = '';
 
     conversationMonitorInterval = setInterval(async () => {
         if (!chatPage || chatPage.isClosed()) return;
@@ -1654,6 +1657,7 @@ function startSmartConversationMonitoring() {
                     // ACTION PLANNING (User Driven)
                     // If Assistant hasn't executed anything yet, plan from User text
                     if (!isActionPending) {
+                        isActionPending = true; // Lock immediately before any async call
                         // Use classifier / planner
                         const relevantContext = await contextManager.getRelevantContext(lastLoggedUserContent);
                         if (actionPlanner) {
@@ -1675,11 +1679,13 @@ function startSmartConversationMonitoring() {
                                     screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint)
                                         .finally(() => { isActionPending = false; });
                                 }
-
-                                isActionPending = true; // Flag action started
+                                // isActionPending stays true until screenAgent finishes
                             } else {
                                 console.log('⚠️ [Action] No confident plan generated for:', lastLoggedUserContent);
+                                isActionPending = false; // Reset if no plan
                             }
+                        } else {
+                            isActionPending = false;
                         }
                     }
                 }
@@ -1692,9 +1698,13 @@ function startSmartConversationMonitoring() {
                 const lastLoggedAsstClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
 
                 // ACTION CHECK (Immediate / Heuristic)
-                if (!isActionPending && actionPlanner) {
+                // Guard: skip if already triggered for this assistant turn (prevents streaming duplicates)
+                const alreadyTriggeredForThisText = lastImplicitActionContent.length > 0 && cleanAsst.startsWith(lastImplicitActionContent);
+                if (!isActionPending && !alreadyTriggeredForThisText && actionPlanner) {
                     const lower = cleanAsst.toLowerCase();
                     if (lower.includes('abro') || lower.includes('voy a') || lower.includes('opening') || lower.includes('starting')) {
+                        isActionPending = true; // Lock immediately before async call
+                        lastImplicitActionContent = cleanAsst.substring(0, 50); // Track prefix to deduplicate streaming
                         console.log('🧠 [Smart Monitor] Assistant implies action:', cleanAsst.substring(0, 40));
 
                         const implicitPlan = await actionPlanner.planFromImplicit("User request missing (transcription lag)", cleanAsst, { recent: [] });
@@ -1710,7 +1720,9 @@ function startSmartConversationMonitoring() {
                                 screenAgent.executeAction(implicitPlan.goal, implicitPlan.app, implicitPlan.stepsHint)
                                     .finally(() => { isActionPending = false; });
                             }
-                            isActionPending = true;
+                            // isActionPending stays true until screenAgent finishes
+                        } else {
+                            isActionPending = false; // Reset if no plan
                         }
                     }
                 }
