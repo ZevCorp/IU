@@ -441,6 +441,76 @@ function init() {
     // Check for special window modes loaded via query param
     const urlParams = new URLSearchParams(window.location.search);
 
+    // --- BOOTLOADER SEQUENCE ---
+    if (!urlParams.get('mode') || urlParams.get('mode') === '') {
+        const overlay = document.getElementById('bootloader-overlay');
+        const faceCont = document.getElementById('face-container');
+        const btnLeft = document.getElementById('boot-btn-left');
+        const btnRight = document.getElementById('boot-btn-right');
+        const btnBottom = document.getElementById('boot-btn-bottom');
+        const cursor = document.getElementById('bootloader-cursor');
+
+        if (overlay && faceCont && cursor) {
+            window.isBootloading = true;
+            faceCont.classList.add('bootload-active');
+            face.transitionTo('mild_attention');
+
+            setTimeout(() => {
+                if (btnLeft) btnLeft.classList.add('visible');
+                if (btnRight) btnRight.classList.add('visible');
+                if (btnBottom) btnBottom.classList.add('visible');
+            }, 5000);
+
+            setTimeout(() => {
+                cursor.style.opacity = '1';
+                setTimeout(() => moveCursorAndClick(btnLeft, 0.25, 0.4, () => {
+                    setTimeout(() => moveCursorAndClick(btnRight, 0.75, 0.4, () => {
+                        setTimeout(() => moveCursorAndClick(btnBottom, 0.5, 0.75, () => {
+                            setTimeout(() => {
+                                cursor.style.opacity = '0';
+                                overlay.classList.add('fade-out');
+                                faceCont.classList.remove('bootload-active');
+                                setTimeout(() => {
+                                    overlay.classList.add('hidden');
+                                    window.isBootloading = false;
+                                    face.transitionTo('smile');
+                                    face.lookAt(0.5, 0.5);
+                                }, 1500);
+                            }, 1000);
+                        }), 1500);
+                    }), 1500);
+                }), 500);
+            }, 10000);
+
+            function moveCursorAndClick(btn, gazeX, gazeY, nextStep) {
+                if (!btn) return nextStep();
+                const rect = btn.getBoundingClientRect();
+                const cx = rect.left + rect.width / 2;
+                const cy = rect.top + rect.height / 2;
+                cursor.style.left = cx + 'px';
+                cursor.style.top = cy + 'px';
+
+                face.transitionTo('mild_attention');
+                face.lookAt(gazeX, gazeY);
+
+                setTimeout(() => {
+                    face.transitionTo('thinking'); // expression!
+                    btn.classList.add('clicked');
+                    setTimeout(() => {
+                        btn.classList.remove('clicked');
+                        btn.classList.add('fade-out');
+                        face.transitionTo('smile');
+                        nextStep();
+                    }, 250);
+                }, 1200);
+            }
+        }
+    } else {
+        const overlay = document.getElementById('bootloader-overlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+    // ---------------------------
+
     // Small mode: independent window, apply visuals immediately with no transition
     if (urlParams.get('mode') === 'small') {
         console.log('🔵 [Renderer] Detected ?mode=small — applying small window layout');
@@ -594,6 +664,7 @@ function init() {
 
         // 1. Eye Tracking & Debug
         visionManager.setOnFaceUpdate((data) => {
+            if (window.isBootloading) return;
             if (face) {
                 // Look at user if attentive (EXPRESSIVE EYE CONTACT)
                 if (data.isAttentive) {
@@ -628,6 +699,7 @@ function init() {
 
         // 2. Attention State Feedback
         visionManager.setOnAttentionChange((isAttentive) => {
+            if (window.isBootloading) return;
             // --- REMINDER LOGIC ---
             if (isAttentive && pendingReminder && !hasProposedReminder) {
                 console.log('👀 [App] User looked at reminder! Initiating proposal...');
@@ -1397,9 +1469,15 @@ function applyVisualMode(mode) {
 
     if (mode === 'small') {
         // Pre-set transparent BEFORE adding class to bypass the CSS background-color transition.
-        // Without this, the body briefly flashes dark (#0a0a0a) during the 300ms transition.
         document.body.style.background = 'transparent';
         document.body.style.backgroundColor = 'transparent';
+
+        const appEl = document.getElementById('app');
+        if (appEl) {
+            appEl.style.background = 'transparent';
+            appEl.style.backgroundColor = 'transparent';
+        }
+
         document.body.classList.add('mode-small');
         svg.setAttribute('viewBox', '50 80 300 340');
     } else {
@@ -1407,6 +1485,11 @@ function applyVisualMode(mode) {
         requestAnimationFrame(() => {
             document.body.style.background = '';
             document.body.style.backgroundColor = '';
+            const appEl = document.getElementById('app');
+            if (appEl) {
+                appEl.style.background = '';
+                appEl.style.backgroundColor = '';
+            }
         });
         if (mode === 'medium') {
             document.body.classList.add('mode-medium');
@@ -2485,22 +2568,9 @@ if (window.iuOS && window.iuOS.onHandsFrame) {
                     }
 
                 } else if (palmOpen && !strictFist && conversationState === 'idle') {
-                    // Begin PALM hold — start voice activation timer
+                    // Begin PALM hold — but NO automatic voice activation
+                    // Must be combined with 'hey' via WakeFusion to activate voice mode
                     gestureMode = GM.PALM;
-
-                    gm_palmTimer = setTimeout(async () => {
-                        gm_palmTimer = null;
-                        if (gestureMode !== GM.PALM) return;        // guard
-                        if (conversationState !== 'idle') return;   // guard
-                        if (face) {
-                            face.transitionTo('listening');
-                            setTimeout(() => {
-                                if (conversationState === 'idle') face.transitionTo('thinking');
-                            }, 900);
-                        }
-                        await toggleConversation(); // start voice
-                        gestureMode = GM.IDLE;      // release after action
-                    }, 2000);
                 }
                 break;
             }

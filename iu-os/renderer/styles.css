@@ -68,10 +68,9 @@ body {
 
 body {
   font-family: var(--font-primary);
-  background-color: var(--bg-primary);
+  background: transparent;
   color: var(--text-primary);
-  transition: background-color var(--transition-normal),
-    color var(--transition-normal);
+  transition: background-color var(--transition-normal), color var(--transition-normal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,12 +84,23 @@ body {
   width: 100%;
   height: 100%;
   position: relative;
-  background: var(--bg-primary);
+  background: rgba(15, 15, 15, 0.35);
+  /* Translucent glass background */
+  backdrop-filter: blur(40px) saturate(160%);
+  /* Core Mac glass effect */
+  -webkit-backdrop-filter: blur(40px) saturate(160%);
   -webkit-app-region: no-drag;
-  /* Changed to allow gestures/mouse events everywhere */
   display: flex;
   align-items: center;
   justify-content: center;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  /* Left border for sidebar */
+}
+
+[data-theme="light"] #app {
+  background: rgba(255, 255, 255, 0.5);
+  /* Translucent glass for light mode */
+  border-left: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 /* =====================================================
@@ -119,8 +129,10 @@ body {
   height: 100%;
   max-width: 300px;
   max-height: 400px;
-  max-height: 400px;
   transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  mix-blend-mode: difference;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.4));
+  /* Fallback for contrast */
 }
 
 /* =====================================================
@@ -194,7 +206,9 @@ body.compact-mode-active {
   background-color: transparent !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  overflow: visible; /* visible so circle box-shadow isn't clipped */
+  overflow: visible;
+  /* visible so circle box-shadow isn't clipped */
+  transition: background-color 0s, background 0s !important;
 }
 
 body.mode-small #app,
@@ -205,6 +219,7 @@ body.compact-mode-active #app {
   -webkit-backdrop-filter: none !important;
   border-radius: 0;
   overflow: visible;
+  transition: background-color 0s, background 0s !important;
 }
 
 .mode-small #face-container::before,
@@ -800,13 +815,13 @@ body:hover .transfer-btn-top {
 .completed .check-icon::after {
   content: '';
   position: absolute;
-  left: 5px;
-  top: 2px;
-  width: 5px;
-  height: 9px;
-  border: solid black;
+  top: 45%;
+  left: 50%;
+  width: 4px;
+  height: 8px;
+  border: solid rgba(0, 0, 0, 0.8);
   border-width: 0 2px 2px 0;
-  transform: rotate(45deg);
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
 .task-text {
@@ -823,13 +838,13 @@ body:hover .transfer-btn-top {
 
 @keyframes slideDownFade {
   from {
-    transform: translateY(-10px);
     opacity: 0;
+    transform: translateY(-10px);
   }
 
   to {
-    transform: translateY(0);
     opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -1264,4 +1279,168 @@ body:hover .transfer-btn-top {
     font-size: 11px;
     padding: 12px 18px;
   }
+}
+
+/* =====================================================
+   Bootloader
+   ===================================================== */
+
+#bootloader-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 50;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 1;
+  transition: opacity 1.5s ease;
+  pointer-events: none;
+}
+
+#bootloader-overlay.fade-out {
+  opacity: 0;
+}
+
+#face-container.bootload-active {
+  z-index: 60;
+}
+
+#bootloader-sphere {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0) 70%);
+  animation: pulseSphere 4s infinite ease-in-out;
+  z-index: 40;
+}
+
+[data-theme="light"] #bootloader-sphere {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.04) 0%, rgba(0, 0, 0, 0) 70%);
+}
+
+@keyframes pulseSphere {
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.6;
+  }
+
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+}
+
+#bootloader-buttons {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 55;
+}
+
+.boot-btn {
+  position: absolute;
+  padding: 12px 24px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  border-radius: 20px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 300;
+  letter-spacing: 0.5px;
+  opacity: 0;
+  transition: opacity 1.5s ease, transform 1.5s ease, background 0.3s ease;
+  transform: translateY(15px);
+}
+
+[data-theme="light"] .boot-btn {
+  background: rgba(0, 0, 0, 0.02);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.boot-btn.visible {
+  opacity: 1;
+}
+
+.boot-btn.clicked {
+  background: rgba(255, 255, 255, 0.15);
+  transform: scale(0.96) !important;
+  transition: all 0.2s ease;
+}
+
+[data-theme="light"] .boot-btn.clicked {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.boot-btn.fade-out {
+  opacity: 0 !important;
+  transition: opacity 1.5s ease !important;
+}
+
+#boot-btn-left {
+  top: 50%;
+  left: 8px;
+  margin-top: -20px;
+}
+
+#boot-btn-right {
+  top: 50%;
+  right: 8px;
+  margin-top: -20px;
+}
+
+#boot-btn-bottom {
+  bottom: 15%;
+  left: 50%;
+  transform: translateX(-50%) translateY(15px) scale(0.96) !important;
+  margin: 0;
+}
+
+#boot-btn-bottom.visible {
+  transform: translateX(-50%) translateY(0) scale(1) !important;
+}
+
+#boot-btn-bottom.clicked {
+  background: rgba(255, 255, 255, 0.15);
+  transform: translateX(-50%) translateY(0) scale(0.96) !important;
+}
+
+#boot-btn-left.visible {
+  transform: translateY(0);
+}
+
+#boot-btn-right.visible {
+  transform: translateY(0);
+}
+
+/* The fake cursor */
+#bootloader-cursor {
+  position: fixed;
+  width: 24px;
+  height: 24px;
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" stroke="black" stroke-width="1.5" stroke-linejoin="round"><path d="M4 2l6 18 3-7 7-3z"/></svg>');
+  background-size: contain;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
+  z-index: 70;
+  top: 80%;
+  left: 80%;
+  opacity: 0;
+  transition: top 1.2s cubic-bezier(0.25, 1, 0.5, 1), left 1.2s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.5s ease;
+  pointer-events: none;
+}
+
+[data-theme="light"] #bootloader-cursor {
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="black" stroke="white" stroke-width="1.5" stroke-linejoin="round"><path d="M4 2l6 18 3-7 7-3z"/></svg>');
 }

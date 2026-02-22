@@ -223,7 +223,7 @@ const WINDOW_MODES = {
 };
 
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'user_settings.json');
-let currentWindowMode = WINDOW_MODES.LARGE;
+let currentWindowMode = WINDOW_MODES.SMALL;
 
 // Hand mesh style: 'v2' (único estilo activo)
 let handMeshStyle = 'v2';
@@ -232,9 +232,8 @@ function loadSettings() {
     try {
         if (fs.existsSync(SETTINGS_PATH)) {
             const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
-            if (settings.windowMode) currentWindowMode = settings.windowMode;
             if (settings.handMeshStyle) handMeshStyle = settings.handMeshStyle;
-            console.log(`⚙️ Settings loaded: mode=${currentWindowMode}, handMeshStyle=${handMeshStyle}`);
+            console.log(`⚙️ Settings loaded: handMeshStyle=${handMeshStyle}`);
         }
     } catch (e) {
         console.error('Error loading settings:', e);
@@ -368,10 +367,10 @@ function getWindowBounds(mode) {
 
     switch (mode) {
         case WINDOW_MODES.SMALL:
-            w = 300; // Larger window to let shadows breathe
-            h = 300;
-            x = width - w - 20;
-            y = 20;
+            w = 400; // Larger window to let shadows breathe and boot buttons fit
+            h = 400;
+            x = Math.round((width - w) / 2);
+            y = Math.round((height - h) / 2);
             break;
         case WINDOW_MODES.MEDIUM:
             w = 260;
@@ -428,8 +427,9 @@ function applyWindowMode(mode, animate = true) {
 
     if (process.platform === 'darwin') {
         // SMALL mode: no system vibrancy — CSS backdrop-filter on the circle handles the effect.
-        // All other modes: use 'hud' vibrancy for the glass sidebar look.
-        mainWindow.setVibrancy(mode === WINDOW_MODES.SMALL ? null : 'hud');
+        // We use transparent for all modes to avoid the black window bug, CSS backdrop-filter provides glass.
+        mainWindow.setVibrancy(null);
+        mainWindow.setBackgroundColor('#00000000');
     }
 
     // Send mode change to renderer
@@ -457,8 +457,7 @@ function createWindow() {
         skipTaskbar: true,
         hasShadow: false,
         show: false, // Shown manually in ready-to-show after vibrancy is correctly set
-        vibrancy: 'hud',
-        visualEffectState: 'active',
+        backgroundColor: '#00000000',
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
             nodeIntegration: false,
@@ -479,7 +478,7 @@ function createWindow() {
         console.log(`🚀 [Startup] Main window ready. Mode: ${currentWindowMode}`);
         // Set vibrancy BEFORE showing to avoid a flash of the wrong background.
         // SMALL mode uses CSS backdrop-filter on the circle only — no system vibrancy.
-        if (process.platform === 'darwin' && currentWindowMode === WINDOW_MODES.SMALL) {
+        if (process.platform === 'darwin') {
             mainWindow.setVibrancy(null);
         }
         mainWindow.webContents.send('window-mode-changed', currentWindowMode);
@@ -1324,9 +1323,9 @@ ipcMain.handle('get-screen-context', async (event, gazeDirection) => {
 // ============================================
 
 // Caché de snapshot AX para las peticiones rápidas del overlay de manos
-let axSnapshotCache    = null;
-let axSnapshotCacheTs  = 0;
-const AX_SNAP_TTL      = 2500; // ms — mismo TTL que hand-selection.js
+let axSnapshotCache = null;
+let axSnapshotCacheTs = 0;
+const AX_SNAP_TTL = 2500; // ms — mismo TTL que hand-selection.js
 
 ipcMain.handle('get-ax-snapshot', async () => {
     const now = Date.now();
@@ -1334,7 +1333,7 @@ ipcMain.handle('get-ax-snapshot', async () => {
         return axSnapshotCache;
     }
     const context = await captureScreenContext();
-    axSnapshotCache   = context.snapshot || [];
+    axSnapshotCache = context.snapshot || [];
     axSnapshotCacheTs = now;
     return axSnapshotCache;
 });
@@ -1353,7 +1352,7 @@ ipcMain.on('hand-select-element', async (event, { element, method }) => {
     } catch (e) {
         // Fallback: osascript click (no requiere nut-js)
         exec(`osascript -e 'tell application "System Events" to click at {${cx}, ${cy}}'`,
-             err => { if (err) console.warn('[HandSelect] Click fallback failed:', err.message); });
+            err => { if (err) console.warn('[HandSelect] Click fallback failed:', err.message); });
     }
 });
 
