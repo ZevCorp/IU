@@ -45,36 +45,56 @@
 
 <script>
 // ─────────────────────────────────────────
-// PALETTE — cambia dinámicamente según el fondo
+// PALETTE — blanco en fondos oscuros, negro en fondos claros
+// Usa nativeTheme de Electron (vía iuOS.sampleBgLuminance / onBgLuminanceChanged)
 // ─────────────────────────────────────────
 const PALETTES = {
   dark: {
-    mainHex:      0x00f5ff,
-    tipHex:       0xaaeeff,
-    glowHex:      0x00f5ff,
-    lineHex:      0x00f5ff,
-    particleHex:  0x00f5ff,
-    mainCSS:      '0,245,255',
-    tipCSS:       '180,240,255',
-    midCSS:       '0,200,220',
-    shadowCSS:    '#00f5ff',
-    tipShadowCSS: '#aaeeff',
-    palmLinePct:  0.4,   // opacity factor for palm edge stroke
+    // Fondo oscuro → manos blancas de alto contraste
+    mainHex:      0xffffff,
+    tipHex:       0xffffff,
+    glowHex:      0xffffff,
+    lineHex:      0xffffff,
+    particleHex:  0xffffff,
+    mainCSS:      '255,255,255',
+    tipCSS:       '255,255,255',
+    midCSS:       '220,220,220',
+    shadowCSS:    '#ffffff',
+    tipShadowCSS: '#ffffff',
+    palmLinePct:  0.35,
   },
   light: {
-    mainHex:      0x111111,
-    tipHex:       0x444444,
-    glowHex:      0x111111,
-    lineHex:      0x111111,
-    particleHex:  0x333333,
+    // Fondo claro → manos negras de alto contraste
+    mainHex:      0x0a0a0a,
+    tipHex:       0x0a0a0a,
+    glowHex:      0x0a0a0a,
+    lineHex:      0x0a0a0a,
+    particleHex:  0x1a1a1a,
     mainCSS:      '10,10,10',
-    tipCSS:       '50,50,50',
+    tipCSS:       '10,10,10',
     midCSS:       '30,30,30',
-    shadowCSS:    '#111111',
-    tipShadowCSS: '#333333',
+    shadowCSS:    '#0a0a0a',
+    tipShadowCSS: '#1a1a1a',
     palmLinePct:  0.25,
   },
 };
+
+// ─────────────────────────────────────────
+// ESCALA DINÁMICA
+// SCALE (sqrt): grosor visual de dedos/palma (no proporcional a pantalla)
+// S_POS: cobertura lateral — las manos llegan a los bordes de la pantalla
+// ─────────────────────────────────────────
+const REF_H = 600;
+const SCALE = Math.sqrt(REF_H / window.innerHeight); // para grosor visual (fwScale)
+
+// S_POS = valor de S que hace que landmarks en x=0/1 lleguen al borde de la cámara
+// halfW = tan(FOV/2) * z * aspect = tan(30°) * 5 * (W/H)
+// (0.5 - 0.02) * S = halfW  →  S = halfW / 0.46
+let S_POS = computeSPos();
+function computeSPos() {
+  const halfW = Math.tan(Math.PI / 6) * 5 * (window.innerWidth / window.innerHeight);
+  return halfW / 0.46; // 0.46 = max extent from center (manos a 0.04-0.96)
+}
 
 let pal = PALETTES.dark;
 
@@ -91,10 +111,11 @@ const scene = new THREE.Scene();
 const cam3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
 cam3d.position.z = 5;
 
-// Ambient particles (no grid floor)
+// Ambient particles — reducidas a 60 para ahorrar GPU
+const PARTICLE_COUNT = 60;
 const pGeo = new THREE.BufferGeometry();
-const pPos = new Float32Array(300 * 3);
-for (let i = 0; i < 300; i++) {
+const pPos = new Float32Array(PARTICLE_COUNT * 3);
+for (let i = 0; i < PARTICLE_COUNT; i++) {
   pPos[i*3]   = (Math.random() - 0.5) * 22;
   pPos[i*3+1] = (Math.random() - 0.5) * 22;
   pPos[i*3+2] = (Math.random() - 0.5) * 12 - 5;
@@ -184,9 +205,8 @@ class HoloHand {
   update(lms) {
     if (!lms) { this.group.visible = false; return; }
     this.group.visible = true;
-    const S = 7;
     for (let i = 0; i < 21; i++) {
-      this.tgt[i].set((0.5 - lms[i].x) * S, (0.5 - lms[i].y) * S, -lms[i].z * 3);
+      this.tgt[i].set((0.5 - lms[i].x) * S_POS, (0.5 - lms[i].y) * S_POS, -lms[i].z * 3);
       this.cur[i].lerp(this.tgt[i], 0.22);
       this.spheres[i].position.copy(this.cur[i]);
     }
@@ -245,7 +265,9 @@ function drawHalo(positions, alpha, time) {
   const sh  = pal.shadowCSS;
   const tsh = pal.tipShadowCSS;
 
-  const fingerWidth = [18, 14, 15, 13, 11];
+  // Grosor de dedos en px — escala inversamente a SCALE para mantener proporciones con las manos
+  const fwScale = 1 / SCALE;
+  const fingerWidth = [18, 14, 15, 13, 11].map(w => w * fwScale);
   const fingers = [
     [1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16], [17,18,19,20],
   ];
@@ -307,21 +329,23 @@ function drawHalo(positions, alpha, time) {
     ctx.restore();
   }
 
-  // Palm fill
+  // Palm fill — offsets y radios también escalan con fwScale
+  const palmOff = 28 * fwScale;
   ctx.save();
   const wrist = pts[0];
   const p17 = pts[17], p5 = pts[5], p1 = pts[1];
   ctx.beginPath();
-  ctx.moveTo(wrist.x - 28, wrist.y);
+  ctx.moveTo(wrist.x - palmOff, wrist.y);
   ctx.lineTo(p17.x, p17.y);
   ctx.lineTo(pts[13].x, pts[13].y);
   ctx.lineTo(pts[9].x,  pts[9].y);
   ctx.lineTo(p5.x,  p5.y);
   ctx.lineTo(p1.x,  p1.y);
-  ctx.lineTo(wrist.x + 28, wrist.y);
+  ctx.lineTo(wrist.x + palmOff, wrist.y);
   ctx.closePath();
 
-  const palmGrad = ctx.createRadialGradient(wrist.x, wrist.y - 40, 10, wrist.x, wrist.y - 40, 120);
+  const palmR = 120 * fwScale;
+  const palmGrad = ctx.createRadialGradient(wrist.x, wrist.y - 40 * fwScale, 10, wrist.x, wrist.y - 40 * fwScale, palmR);
   palmGrad.addColorStop(0,   `rgba(${mid},${alpha * 0.10})`);
   palmGrad.addColorStop(0.5, `rgba(${m},${alpha * 0.05})`);
   palmGrad.addColorStop(1,   `rgba(${m},0)`);
@@ -335,13 +359,14 @@ function drawHalo(positions, alpha, time) {
   ctx.restore();
 
   // Fingertip energy dots
+  const tipR = 12 * fwScale;
   for (const tipIdx of TIPS) {
     const tp    = pts[tipIdx];
     const pulse = 0.5 + Math.sin(time * 3 + tipIdx) * 0.3;
     ctx.save();
     ctx.beginPath();
-    ctx.arc(tp.x, tp.y, 12 * pulse, 0, Math.PI * 2);
-    const tipGrad = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, 12 * pulse);
+    ctx.arc(tp.x, tp.y, tipR * pulse, 0, Math.PI * 2);
+    const tipGrad = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, tipR * pulse);
     tipGrad.addColorStop(0,   `rgba(${ti},${alpha * 0.6 * pulse})`);
     tipGrad.addColorStop(0.5, `rgba(${m},${alpha * 0.2 * pulse})`);
     tipGrad.addColorStop(1,   `rgba(${m},0)`);
@@ -380,26 +405,40 @@ if (window.iuOS) {
 }
 
 // ─────────────────────────────────────────
-// ANIMATION LOOP
+// ANIMATION LOOP — 30fps cap, sin titilar
 // ─────────────────────────────────────────
 let time = 0;
+let lastFrameTs = 0;
+let hideTimer = null; // debounce para ocultar manos
 
-function animate() {
+function animate(ts) {
   requestAnimationFrame(animate);
-  time += 0.016;
+
+  // Cap a ~30 fps para reducir consumo
+  if (ts - lastFrameTs < 32) return;
+  const dt = Math.min(ts - lastFrameTs, 100);
+  lastFrameTs = ts;
+  time += dt * 0.001;
 
   cam3d.position.x = Math.sin(time * 0.25) * 0.04;
   cam3d.position.y = Math.cos(time * 0.18) * 0.025;
 
-  const hasHands = !!(latestHands?.length) && (performance.now() - latestHandsAt) < 200;
+  const fresh = !!(latestHands?.length) && (performance.now() - latestHandsAt) < 800;
 
-  if (hasHands) {
-    for (let i = 0; i < 2; i++) hand3d[i].update(latestHands[i] || null);
+  if (fresh) {
+    // Datos frescos — cancelar cualquier timer de ocultado pendiente
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     container.style.opacity = '1';
-  } else {
-    hand3d[0].update(null);
-    hand3d[1].update(null);
-    container.style.opacity = '0';
+    for (let i = 0; i < 2; i++) hand3d[i].update(latestHands[i] || null);
+  } else if (!hideTimer) {
+    // Sin datos — esperar 600ms antes de ocultar (evita titilar por IPC lag)
+    hideTimer = setTimeout(() => {
+      container.style.opacity = '0';
+      hand3d[0].update(null);
+      hand3d[1].update(null);
+      hideTimer = null;
+    }, 600);
+    // Mientras el timer corre, las manos se congelan en la última posición
   }
 
   renderer.render(scene, cam3d);
@@ -413,13 +452,14 @@ function animate() {
   hand3d.forEach(h => h.glows.forEach(g => { if (g.material) g.material.opacity = pulse; }));
 }
 
-animate();
+animate(0);
 
 window.addEventListener('resize', () => {
   cam3d.aspect = window.innerWidth / window.innerHeight;
   cam3d.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   resizeHalo();
+  S_POS = computeSPos(); // recalcular cobertura lateral al cambiar tamaño
 });
 </script>
 </body>

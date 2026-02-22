@@ -258,8 +258,7 @@ const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
 const CHAT_GAP = 7;
 const HAND_WINDOW_WIDTH = 420;
 const HAND_WINDOW_HEIGHT = 560;
-const HAND_MESH_WINDOW_WIDTH = 820;
-const HAND_MESH_WINDOW_HEIGHT = 600;
+// Hand mesh window now covers the full primary display — size resolved at creation time
 const PINCH_MOVE_GAIN = 14.0;
 const PINCH_SMOOTHING = 0.2;
 const PINCH_SNAP_MIN_DISTANCE = 36;
@@ -515,10 +514,8 @@ function createWindow() {
             handWindow.setPosition(x, y);
         }
         if (handMeshWindow && !handMeshWindow.isDestroyed()) {
-            const primaryDisplay = screen.getPrimaryDisplay();
-            const { width } = primaryDisplay.workAreaSize;
-            const x = Math.max(20, Math.floor((width - HAND_MESH_WINDOW_WIDTH) / 2));
-            handMeshWindow.setPosition(x, 20);
+            const { bounds } = screen.getPrimaryDisplay();
+            handMeshWindow.setBounds(bounds);
         }
     });
 
@@ -658,14 +655,14 @@ function createHandMeshWindow() {
         return;
     }
 
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width } = primaryDisplay.workAreaSize;
+    // Cover the full primary display (including menu bar) so hands can roam anywhere
+    const { bounds } = screen.getPrimaryDisplay();
 
     handMeshWindow = new BrowserWindow({
-        width: HAND_MESH_WINDOW_WIDTH,
-        height: HAND_MESH_WINDOW_HEIGHT,
-        x: Math.max(20, Math.floor((width - HAND_MESH_WINDOW_WIDTH) / 2)),
-        y: 20,
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
@@ -689,12 +686,13 @@ function createHandMeshWindow() {
         handMeshWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
     handMeshWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    // Always click-through so the overlay never blocks the desktop
+    handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
     handMeshWindow.loadFile(`renderer/hands-mesh-${handMeshStyle}.html`);
 
     handMeshWindow.once('ready-to-show', () => {
         // Start hidden — opacity controlled by hands-presence IPC
         handMeshWindow.setOpacity(0);
-        handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
         handMeshWindow.show();
     });
 
@@ -702,7 +700,7 @@ function createHandMeshWindow() {
         handMeshWindow = null;
     });
 
-    console.log('🖐️ Hand mesh window created (3D bones)');
+    console.log('🖐️ Hand mesh window created (3D bones, fullscreen overlay)');
 }
 
 // ============================================
@@ -1066,10 +1064,9 @@ ipcMain.on('hands-landmarks', (event, payload) => {
 
 ipcMain.on('hands-presence', (event, present) => {
     // handWindow es siempre invisible — solo corre MediaPipe en background.
-    // handMeshWindow es siempre click-through para no interferir con el PC.
+    // handMeshWindow es siempre click-through (se configura una vez al crear la ventana).
     if (handMeshWindow && !handMeshWindow.isDestroyed()) {
         handMeshWindow.setOpacity(present ? 1 : 0);
-        handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
     }
 });
 
@@ -1329,7 +1326,7 @@ ipcMain.handle('sample-bg-luminance', () => {
     return { isDark: nativeTheme.shouldUseDarkColors };
 });
 
-// Push live theme changes to both main window and small window
+// Push live theme changes to main window, small window and hand mesh overlay
 nativeTheme.on('updated', () => {
     const isDark = nativeTheme.shouldUseDarkColors;
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1337,6 +1334,9 @@ nativeTheme.on('updated', () => {
     }
     if (smallWindow && !smallWindow.isDestroyed()) {
         smallWindow.webContents.send('bg-luminance-changed', { isDark });
+    }
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
+        handMeshWindow.webContents.send('bg-luminance-changed', { isDark });
     }
 });
 
