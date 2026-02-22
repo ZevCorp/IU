@@ -101,8 +101,8 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
 let mainWindow = null;
 let chatWindow = null;
 let compactWindow = null; // Mini circular window for action mode
-let handWindow = null; // Floating hand-tracking window
-let handFluidWindow = null; // Dedicated fluid-particle hand window
+let handWindow = null; // Floating hand-tracking window (camera source + skeleton)
+let handMeshWindow = null; // 3D bone-mesh visualization window
 let isMainWindowMouseDragging = false;
 let mouseDragReleaseTimer = null;
 const mainWindowPinchDrag = {
@@ -254,8 +254,8 @@ const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
 const CHAT_GAP = 7;
 const HAND_WINDOW_WIDTH = 420;
 const HAND_WINDOW_HEIGHT = 560;
-const HAND_FLUID_WINDOW_WIDTH = 540;
-const HAND_FLUID_WINDOW_HEIGHT = 420;
+const HAND_MESH_WINDOW_WIDTH = 420;
+const HAND_MESH_WINDOW_HEIGHT = 380;
 const PINCH_MOVE_GAIN = 14.0;
 const PINCH_SMOOTHING = 0.2;
 const PINCH_SNAP_MIN_DISTANCE = 36;
@@ -510,12 +510,11 @@ function createWindow() {
             const y = Math.max(0, Math.min(handBounds.y, height - handBounds.height));
             handWindow.setPosition(x, y);
         }
-        if (handFluidWindow && !handFluidWindow.isDestroyed()) {
-            const fluidBounds = handFluidWindow.getBounds();
+        if (handMeshWindow && !handMeshWindow.isDestroyed()) {
             const primaryDisplay = screen.getPrimaryDisplay();
             const { width } = primaryDisplay.workAreaSize;
-            const x = Math.max(20, Math.floor((width - fluidBounds.width) / 2));
-            handFluidWindow.setPosition(x, 20);
+            const x = Math.max(20, Math.floor((width - HAND_MESH_WINDOW_WIDTH) / 2));
+            handMeshWindow.setPosition(x, 20);
         }
     });
 
@@ -647,30 +646,29 @@ function createHandWindow() {
     console.log('🖐️ Hand tracking window created');
 }
 
-function createHandFluidWindow() {
-    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
-        handFluidWindow.focus();
+function createHandMeshWindow() {
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
         return;
     }
 
     const primaryDisplay = screen.getPrimaryDisplay();
-    const { width, height } = primaryDisplay.workAreaSize;
+    const { width } = primaryDisplay.workAreaSize;
 
-    handFluidWindow = new BrowserWindow({
-        width: HAND_FLUID_WINDOW_WIDTH,
-        height: HAND_FLUID_WINDOW_HEIGHT,
-        x: Math.max(20, Math.floor((width - HAND_FLUID_WINDOW_WIDTH) / 2)),
+    handMeshWindow = new BrowserWindow({
+        width: HAND_MESH_WINDOW_WIDTH,
+        height: HAND_MESH_WINDOW_HEIGHT,
+        x: Math.max(20, Math.floor((width - HAND_MESH_WINDOW_WIDTH) / 2)),
         y: 20,
         frame: false,
         transparent: true,
         alwaysOnTop: true,
         resizable: false,
-        movable: true,
+        movable: false,
         minimizable: false,
         maximizable: false,
         fullscreenable: false,
         skipTaskbar: true,
-        hasShadow: true,
+        hasShadow: false,
         show: false,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
@@ -681,20 +679,23 @@ function createHandFluidWindow() {
     });
 
     if (process.platform === 'darwin') {
-        handFluidWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        handMeshWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
-    handFluidWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-    handFluidWindow.loadFile('renderer/hands-fluid.html');
+    handMeshWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    handMeshWindow.loadFile('renderer/hands-mesh.html');
 
-    handFluidWindow.once('ready-to-show', () => {
-        handFluidWindow.show();
+    handMeshWindow.once('ready-to-show', () => {
+        // Start hidden — opacity controlled by hands-presence IPC
+        handMeshWindow.setOpacity(0);
+        handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
+        handMeshWindow.show();
     });
 
-    handFluidWindow.on('closed', () => {
-        handFluidWindow = null;
+    handMeshWindow.on('closed', () => {
+        handMeshWindow = null;
     });
 
-    console.log('🌊 Hand fluid window created');
+    console.log('🖐️ Hand mesh window created (3D bones)');
 }
 
 // Chat window IPC
@@ -879,27 +880,23 @@ ipcMain.handle('get-hand-window-state', () => {
     return { created: true, visible: handWindow.isVisible() };
 });
 
-ipcMain.handle('toggle-hand-fluid-window', () => {
-    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
-        if (handFluidWindow.isVisible()) {
-            handFluidWindow.hide();
+ipcMain.handle('toggle-hand-mesh-window', () => {
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
+        if (handMeshWindow.isVisible()) {
+            handMeshWindow.hide();
         } else {
-            handFluidWindow.show();
-            handFluidWindow.focus();
+            handMeshWindow.show();
         }
     } else {
-        createHandFluidWindow();
+        createHandMeshWindow();
     }
     return { success: true };
 });
 
 ipcMain.on('hands-frame', (event, payload) => {
-    // Forward to all subscriber windows
+    // Forward to main window for gesture handling
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('hands-frame', payload);
-    }
-    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
-        handFluidWindow.webContents.send('hands-frame', payload);
     }
 
     // ── Wake gesture (open palm when window is asleep) ─────────────────────
@@ -928,33 +925,32 @@ ipcMain.on('gesture-request-sleep', () => {
 });
 
 ipcMain.on('hands-landmarks', (event, payload) => {
-
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('hands-landmarks', payload);
     }
-    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
-        handFluidWindow.webContents.send('hands-landmarks', payload);
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
+        handMeshWindow.webContents.send('hands-landmarks', payload);
     }
 });
 
 ipcMain.on('hands-presence', (event, present) => {
-    if (!handWindow || handWindow.isDestroyed()) return;
-
-    if (present) {
-        handWindow.setOpacity(1);
-        handWindow.setIgnoreMouseEvents(false);
-    } else {
-        handWindow.setOpacity(0);
-        handWindow.setIgnoreMouseEvents(true, { forward: true });
+    if (handWindow && !handWindow.isDestroyed()) {
+        if (present) {
+            handWindow.setOpacity(1);
+            handWindow.setIgnoreMouseEvents(false);
+        } else {
+            handWindow.setOpacity(0);
+            handWindow.setIgnoreMouseEvents(true, { forward: true });
+        }
     }
 
-    if (handFluidWindow && !handFluidWindow.isDestroyed()) {
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
         if (present) {
-            handFluidWindow.setOpacity(1);
-            handFluidWindow.setIgnoreMouseEvents(false);
+            handMeshWindow.setOpacity(1);
+            handMeshWindow.setIgnoreMouseEvents(false);
         } else {
-            handFluidWindow.setOpacity(0);
-            handFluidWindow.setIgnoreMouseEvents(true, { forward: true });
+            handMeshWindow.setOpacity(0);
+            handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
         }
     }
 });
@@ -1046,6 +1042,7 @@ app.whenReady().then(async () => {
 
     createWindow();
     createHandWindow();
+    createHandMeshWindow();
 
     // Launch Native Glass Window (Persistent, Hidden)
     nativeGlass.start();

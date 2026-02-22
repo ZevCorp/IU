@@ -50,7 +50,7 @@ contextBridge.exposeInMainWorld('iuOS', {
     toggleChatWindow: () => ipcRenderer.invoke('toggle-chat-window'),
     toggleHandWindow: () => ipcRenderer.invoke('toggle-hand-window'),
     getHandWindowState: () => ipcRenderer.invoke('get-hand-window-state'),
-    toggleHandFluidWindow: () => ipcRenderer.invoke('toggle-hand-fluid-window'),
+    toggleHandMeshWindow: () => ipcRenderer.invoke('toggle-hand-mesh-window'),
 
     // Action System
     executeExplicitAction: (userText) => ipcRenderer.invoke('execute-explicit-action', userText),

@@ -175,7 +175,6 @@
         <span>Ü Hands Base</span>
       </div>
       <div id="actions">
-        <button id="fluid-btn" class="btn">fluid window</button>
         <button id="hide-btn" class="btn" aria-label="Hide">×</button>
       </div>
     </div>
@@ -202,7 +201,6 @@
     const dot = document.getElementById('dot');
     const errorEl = document.getElementById('error');
     const hideBtn = document.getElementById('hide-btn');
-    const fluidBtn = document.getElementById('fluid-btn');
 
     const HAND_CONNECTIONS = [
       [0, 1], [1, 2], [2, 3], [3, 4],
@@ -500,7 +498,6 @@
 
     async function init() {
       hideBtn.addEventListener('click', () => window.iuOS?.toggleHandWindow?.());
-      fluidBtn.addEventListener('click', () => window.iuOS?.toggleHandFluidWindow?.());
 
       window.addEventListener('resize', resizeCanvas);
       resizeCanvas();
