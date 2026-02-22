@@ -104,6 +104,10 @@ contextBridge.exposeInMainWorld('iuOS', {
     // Hand mesh style switcher
     getHandMeshStyle: () => ipcRenderer.invoke('get-hand-mesh-style'),
     setHandMeshStyle: (style) => ipcRenderer.invoke('set-hand-mesh-style', style),
+
+    // Hand gesture element selection (AX-based)
+    getAxSnapshot: () => ipcRenderer.invoke('get-ax-snapshot'),
+    handSelectElement: (payload) => ipcRenderer.send('hand-select-element', payload),
 });
 
 

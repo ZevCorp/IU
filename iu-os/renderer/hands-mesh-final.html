@@ -1,409 +1,449 @@
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HOLO HAND Final</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap');
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HOLO HAND Final</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700&display=swap');
 
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
 
-  body {
-    background: transparent;
-    overflow: hidden;
-    font-family: 'Share Tech Mono', monospace;
-    color: #00f5ff;
-  }
+    body {
+      background: transparent;
+      overflow: hidden;
+      font-family: 'Share Tech Mono', monospace;
+      color: #00f5ff;
+    }
 
-  #container {
-    position: relative;
-    width: 100vw;
-    height: 100vh;
-    opacity: 0;
-    transition: opacity 400ms ease;
-  }
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      opacity: 0;
+      transition: opacity 400ms ease;
+    }
 
-  #three-canvas {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    z-index: 2;
-  }
+    #three-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+    }
 
-  #halo-canvas {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    z-index: 1;
-  }
-</style>
+    #halo-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+  </style>
 </head>
+
 <body>
-<div id="container">
-  <canvas id="halo-canvas"></canvas>
-  <canvas id="three-canvas"></canvas>
-</div>
+  <div id="container">
+    <canvas id="halo-canvas"></canvas>
+    <canvas id="three-canvas"></canvas>
+  </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
-<script>
-// ═══════════════════════════════════════
-// THREE.JS — V2 intacto (grid + particles + skeleton dots + lines)
-// ═══════════════════════════════════════
-const threeCanvas = document.getElementById('three-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true, alpha: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setClearColor(0x000000, 0);
+  <script>
+    // ═══════════════════════════════════════
+    // THREE.JS — V2 intacto (grid + particles + skeleton dots + lines)
+    // ═══════════════════════════════════════
+    const threeCanvas = document.getElementById('three-canvas');
+    const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true, alpha: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x000000, 0);
 
-const scene = new THREE.Scene();
-const cam3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-cam3d.position.z = 5;
+    const scene = new THREE.Scene();
+    const cam3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+    cam3d.position.z = 5;
 
-const pGeo = new THREE.BufferGeometry();
-const pPos = new Float32Array(300 * 3);
-for (let i = 0; i < 300; i++) {
-  pPos[i*3]   = (Math.random()-0.5)*22;
-  pPos[i*3+1] = (Math.random()-0.5)*22;
-  pPos[i*3+2] = (Math.random()-0.5)*12 - 5;
-}
-pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
-const pMat = new THREE.PointsMaterial({ color: 0x00f5ff, size: 0.018, transparent: true, opacity: 0.25 });
-scene.add(new THREE.Points(pGeo, pMat));
+    const pGeo = new THREE.BufferGeometry();
+    let S_POS = computeSPos();
+    function computeSPos() {
+      const halfH = Math.tan(Math.PI / 6) * 5; // Altura a z=0
+      const halfW = halfH * (window.innerWidth / window.innerHeight);
+      // Hacemos que coincida vertical y lateralmente con los límites de la pantalla independientemente.
+      return {
+        x: halfW / 0.48,
+        y: halfH / 0.48
+      };
+    }
+    const pPos = new Float32Array(300 * 3);
+    for (let i = 0; i < 300; i++) {
+      pPos[i * 3] = (Math.random() - 0.5) * 22;
+      pPos[i * 3 + 1] = (Math.random() - 0.5) * 22;
+      pPos[i * 3 + 2] = (Math.random() - 0.5) * 12 - 5;
+    }
+    pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+    const pMat = new THREE.PointsMaterial({ color: 0x00f5ff, size: 0.018, transparent: true, opacity: 0.25 });
+    scene.add(new THREE.Points(pGeo, pMat));
 
-const CONNECTIONS = [
-  [0,1],[1,2],[2,3],[3,4],
-  [0,5],[5,6],[6,7],[7,8],
-  [0,9],[9,10],[10,11],[11,12],
-  [0,13],[13,14],[14,15],[15,16],
-  [0,17],[17,18],[18,19],[19,20],
-  [5,9],[9,13],[13,17]
-];
-const TIPS = [4,8,12,16,20];
-const KNUCKLES = [1,5,9,13,17];
+    const CONNECTIONS = [
+      [0, 1], [1, 2], [2, 3], [3, 4],
+      [0, 5], [5, 6], [6, 7], [7, 8],
+      [0, 9], [9, 10], [10, 11], [11, 12],
+      [0, 13], [13, 14], [14, 15], [15, 16],
+      [0, 17], [17, 18], [18, 19], [19, 20],
+      [5, 9], [9, 13], [13, 17]
+    ];
+    const TIPS = [4, 8, 12, 16, 20];
+    const KNUCKLES = [1, 5, 9, 13, 17];
 
-class HoloHand {
-  constructor() {
-    this.group = new THREE.Group();
-    this.spheres = [];
-    this.lines = [];
-    this.glows = [];
-    this.cur = Array(21).fill(null).map(() => new THREE.Vector3(0,-20,0));
-    this.tgt = Array(21).fill(null).map(() => new THREE.Vector3(0,-20,0));
-    this._build();
-    scene.add(this.group);
-    this.group.visible = false;
-  }
+    class HoloHand {
+      constructor() {
+        this.group = new THREE.Group();
+        this.spheres = [];
+        this.lines = [];
+        this.glows = [];
+        this.cur = Array(21).fill(null).map(() => new THREE.Vector3(0, -20, 0));
+        this.tgt = Array(21).fill(null).map(() => new THREE.Vector3(0, -20, 0));
+        this._build();
+        scene.add(this.group);
+        this.group.visible = false;
+      }
 
-  _build() {
-    for (let i = 0; i < 21; i++) {
-      const tip = TIPS.includes(i), knuckle = KNUCKLES.includes(i), wrist = i === 0;
-      const r = tip ? 0.055 : wrist ? 0.07 : knuckle ? 0.048 : 0.032;
-      const mesh = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 10, 10),
-        new THREE.MeshBasicMaterial({ color: tip ? 0xaaeeff : 0x00f5ff, transparent: true, opacity: tip ? 0.95 : 0.75 })
-      );
-      mesh.position.set(0,-20,0);
-      this.group.add(mesh);
-      this.spheres.push(mesh);
-      if (tip || wrist) {
-        const glow = new THREE.Mesh(
-          new THREE.SphereGeometry(r * 3, 10, 10),
-          new THREE.MeshBasicMaterial({ color: 0x00f5ff, transparent: true, opacity: 0.07 })
-        );
-        mesh.add(glow);
-        this.glows.push(glow);
+      _build() {
+        for (let i = 0; i < 21; i++) {
+          const tip = TIPS.includes(i), knuckle = KNUCKLES.includes(i), wrist = i === 0;
+          const r = tip ? 0.055 : wrist ? 0.07 : knuckle ? 0.048 : 0.032;
+          const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(r, 10, 10),
+            new THREE.MeshBasicMaterial({ color: tip ? 0xaaeeff : 0x00f5ff, transparent: true, opacity: tip ? 0.95 : 0.75 })
+          );
+          mesh.position.set(0, -20, 0);
+          this.group.add(mesh);
+          this.spheres.push(mesh);
+          if (tip || wrist) {
+            const glow = new THREE.Mesh(
+              new THREE.SphereGeometry(r * 3, 10, 10),
+              new THREE.MeshBasicMaterial({ color: 0x00f5ff, transparent: true, opacity: 0.07 })
+            );
+            mesh.add(glow);
+            this.glows.push(glow);
+          }
+        }
+        for (const conn of CONNECTIONS) {
+          const geo = new THREE.BufferGeometry();
+          const pos = new Float32Array(6);
+          geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+          const isPalm = conn[0] >= 5 && conn[1] >= 5 && !TIPS.includes(conn[0]) && !TIPS.includes(conn[1]);
+          const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+            color: 0x00f5ff, transparent: true, opacity: isPalm ? 0.2 : 0.55
+          }));
+          this.group.add(line);
+          this.lines.push({ line, conn });
+        }
+      }
+
+      update(lms) {
+        if (!lms) { this.group.visible = false; return; }
+        this.group.visible = true;
+
+        // Reducción dinámica cuando la mano está muy cerca a la cámara
+        let rawSize = Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y);
+        rawSize = Math.max(0.001, rawSize);
+        let targetScale = 1.0;
+        if (rawSize > 0.12) {
+          let newSize = 0.12 + (rawSize - 0.12) * 0.25; // Comprime significativamente el exceso de tamaño
+          targetScale = newSize / rawSize;
+        }
+
+        let cx = lms[9].x;
+        let cy = lms[9].y;
+
+        for (let i = 0; i < 21; i++) {
+          // Aplicar compresión de tamaño en base al centro de la mano
+          let mx = cx + (lms[i].x - cx) * targetScale;
+          let my = cy + (lms[i].y - cy) * targetScale;
+          let mz = lms[i].z * targetScale;
+
+          this.tgt[i].set((0.5 - mx) * S_POS.x, (0.5 - my) * S_POS.y, -mz * 3);
+          this.cur[i].lerp(this.tgt[i], 0.22);
+          this.spheres[i].position.copy(this.cur[i]);
+        }
+        for (const { line, conn } of this.lines) {
+          const pa = line.geometry.attributes.position;
+          const a = this.cur[conn[0]], b = this.cur[conn[1]];
+          pa.array.set([a.x, a.y, a.z, b.x, b.y, b.z]);
+          pa.needsUpdate = true;
+        }
       }
     }
-    for (const conn of CONNECTIONS) {
-      const geo = new THREE.BufferGeometry();
-      const pos = new Float32Array(6);
-      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      const isPalm = conn[0] >= 5 && conn[1] >= 5 && !TIPS.includes(conn[0]) && !TIPS.includes(conn[1]);
-      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
-        color: 0x00f5ff, transparent: true, opacity: isPalm ? 0.2 : 0.55
-      }));
-      this.group.add(line);
-      this.lines.push({ line, conn });
+
+    const hand3d = [new HoloHand(), new HoloHand()];
+
+    // ═══════════════════════════════════════
+    // CANVAS 2D
+    // ═══════════════════════════════════════
+    const haloCanvas = document.getElementById('halo-canvas');
+    const ctx = haloCanvas.getContext('2d');
+    function resizeHalo() { haloCanvas.width = window.innerWidth; haloCanvas.height = window.innerHeight; }
+    resizeHalo();
+
+    function worldToScreen(v) {
+      const proj = v.clone().project(cam3d);
+      return { x: (proj.x * 0.5 + 0.5) * window.innerWidth, y: (-proj.y * 0.5 + 0.5) * window.innerHeight };
     }
-  }
 
-  update(lms) {
-    if (!lms) { this.group.visible = false; return; }
-    this.group.visible = true;
-    for (let i = 0; i < 21; i++) {
-      this.tgt[i].set((0.5 - lms[i].x)*7, (0.5 - lms[i].y)*7, -lms[i].z*3);
-      this.cur[i].lerp(this.tgt[i], 0.22);
-      this.spheres[i].position.copy(this.cur[i]);
+    function perp(a, b, width) {
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const len = Math.sqrt(dx * dx + dy * dy) || 1;
+      return { x: -dy / len * width, y: dx / len * width };
     }
-    for (const { line, conn } of this.lines) {
-      const pa = line.geometry.attributes.position;
-      const a = this.cur[conn[0]], b = this.cur[conn[1]];
-      pa.array.set([a.x,a.y,a.z, b.x,b.y,b.z]);
-      pa.needsUpdate = true;
+
+    // Construye bordes izquierdo y derecho de un tubo de dedo dado un ancho fw
+    function buildFingerEdges(pts, segs, fw) {
+      const left = [], right = [];
+      for (let s = 0; s < segs.length - 1; s++) {
+        const a = pts[segs[s]], b = pts[segs[s + 1]];
+        const off = perp(a, b, fw * (1 - s * 0.12));
+        if (s === 0) {
+          left.push({ x: a.x + off.x, y: a.y + off.y });
+          right.push({ x: a.x - off.x, y: a.y - off.y });
+        }
+        left.push({ x: b.x + off.x, y: b.y + off.y });
+        right.push({ x: b.x - off.x, y: b.y - off.y });
+      }
+      return { left, right };
     }
-  }
-}
 
-const hand3d = [new HoloHand(), new HoloHand()];
-
-// ═══════════════════════════════════════
-// CANVAS 2D
-// ═══════════════════════════════════════
-const haloCanvas = document.getElementById('halo-canvas');
-const ctx = haloCanvas.getContext('2d');
-function resizeHalo() { haloCanvas.width = window.innerWidth; haloCanvas.height = window.innerHeight; }
-resizeHalo();
-
-function worldToScreen(v) {
-  const proj = v.clone().project(cam3d);
-  return { x: (proj.x * 0.5 + 0.5) * window.innerWidth, y: (-proj.y * 0.5 + 0.5) * window.innerHeight };
-}
-
-function perp(a, b, width) {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const len = Math.sqrt(dx*dx + dy*dy) || 1;
-  return { x: -dy/len * width, y: dx/len * width };
-}
-
-// Construye bordes izquierdo y derecho de un tubo de dedo dado un ancho fw
-function buildFingerEdges(pts, segs, fw) {
-  const left = [], right = [];
-  for (let s = 0; s < segs.length - 1; s++) {
-    const a = pts[segs[s]], b = pts[segs[s+1]];
-    const off = perp(a, b, fw * (1 - s * 0.12));
-    if (s === 0) {
-      left.push({ x: a.x + off.x, y: a.y + off.y });
-      right.push({ x: a.x - off.x, y: a.y - off.y });
+    // Traza el path cerrado del contorno del tubo (igual que V2)
+    function traceFingerPath(left, right, tip, fw) {
+      ctx.beginPath();
+      ctx.moveTo(left[0].x, left[0].y);
+      for (let p = 1; p < left.length; p++) ctx.lineTo(left[p].x, left[p].y);
+      ctx.arcTo(
+        tip.x + (left[left.length - 1].x - tip.x),
+        tip.y + (left[left.length - 1].y - tip.y),
+        tip.x, tip.y, fw * 0.8
+      );
+      for (let p = right.length - 1; p >= 0; p--) ctx.lineTo(right[p].x, right[p].y);
+      ctx.closePath();
     }
-    left.push({ x: b.x + off.x, y: b.y + off.y });
-    right.push({ x: b.x - off.x, y: b.y - off.y });
-  }
-  return { left, right };
-}
 
-// Traza el path cerrado del contorno del tubo (igual que V2)
-function traceFingerPath(left, right, tip, fw) {
-  ctx.beginPath();
-  ctx.moveTo(left[0].x, left[0].y);
-  for (let p = 1; p < left.length; p++) ctx.lineTo(left[p].x, left[p].y);
-  ctx.arcTo(
-    tip.x + (left[left.length-1].x - tip.x),
-    tip.y + (left[left.length-1].y - tip.y),
-    tip.x, tip.y, fw * 0.8
-  );
-  for (let p = right.length-1; p >= 0; p--) ctx.lineTo(right[p].x, right[p].y);
-  ctx.closePath();
-}
+    function drawHalo(positions, alpha, time) {
+      if (!positions) return;
+      const pts = positions.map(p => worldToScreen(p));
 
-function drawHalo(positions, alpha, time) {
-  if (!positions) return;
-  const pts = positions.map(p => worldToScreen(p));
+      const fingerWidth = [18, 14, 15, 13, 11];
+      const fingers = [
+        [1, 2, 3, 4],
+        [5, 6, 7, 8],
+        [9, 10, 11, 12],
+        [13, 14, 15, 16],
+        [17, 18, 19, 20],
+      ];
 
-  const fingerWidth = [18, 14, 15, 13, 11];
-  const fingers = [
-    [1,2,3,4],
-    [5,6,7,8],
-    [9,10,11,12],
-    [13,14,15,16],
-    [17,18,19,20],
-  ];
+      for (let f = 0; f < fingers.length; f++) {
+        const segs = fingers[f];
+        const fw = fingerWidth[f];
+        const tip = pts[segs[segs.length - 1]];
 
-  for (let f = 0; f < fingers.length; f++) {
-    const segs = fingers[f];
-    const fw   = fingerWidth[f];
-    const tip  = pts[segs[segs.length-1]];
+        // ── NUEVO: Halo blur por fuera del contorno del tubo (V4 style) ──
+        const glowPasses = [
+          { extra: 24, alpha: alpha * 0.05, blur: 40 },
+          { extra: 14, alpha: alpha * 0.10, blur: 24 },
+          { extra: 7, alpha: alpha * 0.18, blur: 13 },
+          { extra: 2, alpha: alpha * 0.30, blur: 6 },
+        ];
+        for (const pass of glowPasses) {
+          const { left: lx, right: rx } = buildFingerEdges(pts, segs, fw + pass.extra);
+          ctx.save();
+          traceFingerPath(lx, rx, tip, fw + pass.extra);
+          ctx.strokeStyle = `rgba(0,245,255,${pass.alpha})`;
+          ctx.lineWidth = pass.extra * 2;
+          ctx.shadowColor = '#00f5ff';
+          ctx.shadowBlur = pass.blur;
+          ctx.stroke();
+          ctx.restore();
+        }
 
-    // ── NUEVO: Halo blur por fuera del contorno del tubo (V4 style) ──
-    const glowPasses = [
-      { extra: 24, alpha: alpha * 0.05, blur: 40 },
-      { extra: 14, alpha: alpha * 0.10, blur: 24 },
-      { extra:  7, alpha: alpha * 0.18, blur: 13 },
-      { extra:  2, alpha: alpha * 0.30, blur:  6 },
-    ];
-    for (const pass of glowPasses) {
-      const { left: lx, right: rx } = buildFingerEdges(pts, segs, fw + pass.extra);
+        // ── V2 ORIGINAL: tubo con gradiente + glow stroke en bordes ──
+        const { left, right } = buildFingerEdges(pts, segs, fw);
+
+        ctx.save();
+        traceFingerPath(left, right, tip, fw);
+        const grad = ctx.createLinearGradient(left[0].x, left[0].y, right[0].x, right[0].y);
+        grad.addColorStop(0, `rgba(0,245,255,${alpha * 0.55})`);
+        grad.addColorStop(0.3, `rgba(0,245,255,${alpha * 0.08})`);
+        grad.addColorStop(0.5, `rgba(0,180,220,${alpha * 0.04})`);
+        grad.addColorStop(0.7, `rgba(0,245,255,${alpha * 0.08})`);
+        grad.addColorStop(1, `rgba(0,245,255,${alpha * 0.55})`);
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(left[0].x, left[0].y);
+        for (let p = 1; p < left.length; p++) ctx.lineTo(left[p].x, left[p].y);
+        ctx.strokeStyle = `rgba(0,245,255,${alpha * 0.7})`;
+        ctx.lineWidth = 1.5;
+        ctx.shadowColor = '#00f5ff';
+        ctx.shadowBlur = 18;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(right[0].x, right[0].y);
+        for (let p = 1; p < right.length; p++) ctx.lineTo(right[p].x, right[p].y);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // ── Palma: primero halo blur exterior, luego V2 original ──
+      const wrist = pts[0];
+      const p17 = pts[17], p5 = pts[5], p1 = pts[1];
+
+      const palmGlowPasses = [
+        { e: 22, alpha: alpha * 0.04, blur: 38 },
+        { e: 12, alpha: alpha * 0.09, blur: 22 },
+        { e: 5, alpha: alpha * 0.18, blur: 10 },
+      ];
+      for (const pass of palmGlowPasses) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(wrist.x - 28 - pass.e, wrist.y + pass.e * 0.5);
+        ctx.lineTo(p17.x - pass.e * 0.7, p17.y);
+        ctx.lineTo(pts[13].x, pts[13].y - pass.e * 0.3);
+        ctx.lineTo(pts[9].x, pts[9].y - pass.e * 0.3);
+        ctx.lineTo(p5.x + pass.e * 0.7, p5.y);
+        ctx.lineTo(p1.x + pass.e, p1.y);
+        ctx.lineTo(wrist.x + 28 + pass.e, wrist.y + pass.e * 0.5);
+        ctx.closePath();
+        ctx.strokeStyle = `rgba(0,245,255,${pass.alpha})`;
+        ctx.lineWidth = pass.e * 2.2;
+        ctx.shadowColor = '#00f5ff';
+        ctx.shadowBlur = pass.blur;
+        ctx.stroke();
+        ctx.restore();
+      }
+
       ctx.save();
-      traceFingerPath(lx, rx, tip, fw + pass.extra);
-      ctx.strokeStyle = `rgba(0,245,255,${pass.alpha})`;
-      ctx.lineWidth   = pass.extra * 2;
+      ctx.beginPath();
+      ctx.moveTo(wrist.x - 28, wrist.y);
+      ctx.lineTo(p17.x, p17.y);
+      ctx.lineTo(pts[13].x, pts[13].y);
+      ctx.lineTo(pts[9].x, pts[9].y);
+      ctx.lineTo(p5.x, p5.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.lineTo(wrist.x + 28, wrist.y);
+      ctx.closePath();
+      const palmGrad = ctx.createRadialGradient(wrist.x, wrist.y - 40, 10, wrist.x, wrist.y - 40, 120);
+      palmGrad.addColorStop(0, `rgba(0,200,220,${alpha * 0.1})`);
+      palmGrad.addColorStop(0.5, `rgba(0,245,255,${alpha * 0.05})`);
+      palmGrad.addColorStop(1, 'rgba(0,245,255,0)');
+      ctx.fillStyle = palmGrad;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(0,245,255,${alpha * 0.4})`;
+      ctx.lineWidth = 1.5;
       ctx.shadowColor = '#00f5ff';
-      ctx.shadowBlur  = pass.blur;
+      ctx.shadowBlur = 14;
       ctx.stroke();
       ctx.restore();
+
+      // ── Fingertip dots: halo exterior pulsante + dot V2 original ──
+      for (const tipIdx of TIPS) {
+        const tp = pts[tipIdx];
+        const pulse = 0.5 + Math.sin(time * 3 + tipIdx) * 0.3;
+
+        ctx.save();
+        const outerG = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, 32 * pulse);
+        outerG.addColorStop(0, `rgba(0,245,255,${alpha * 0.15 * pulse})`);
+        outerG.addColorStop(0.5, `rgba(0,245,255,${alpha * 0.05 * pulse})`);
+        outerG.addColorStop(1, 'rgba(0,245,255,0)');
+        ctx.beginPath();
+        ctx.arc(tp.x, tp.y, 32 * pulse, 0, Math.PI * 2);
+        ctx.fillStyle = outerG;
+        ctx.shadowColor = '#00f5ff';
+        ctx.shadowBlur = 30;
+        ctx.fill();
+        ctx.restore();
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(tp.x, tp.y, 12 * pulse, 0, Math.PI * 2);
+        const tipGrad = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, 12 * pulse);
+        tipGrad.addColorStop(0, `rgba(180,240,255,${alpha * 0.6 * pulse})`);
+        tipGrad.addColorStop(0.5, `rgba(0,245,255,${alpha * 0.2 * pulse})`);
+        tipGrad.addColorStop(1, 'rgba(0,245,255,0)');
+        ctx.fillStyle = tipGrad;
+        ctx.shadowColor = '#aaeeff';
+        ctx.shadowBlur = 20;
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
-    // ── V2 ORIGINAL: tubo con gradiente + glow stroke en bordes ──
-    const { left, right } = buildFingerEdges(pts, segs, fw);
+    // ═══════════════════════════════════════
+    // IPC — recibe landmarks del sistema
+    // ═══════════════════════════════════════
+    const container = document.getElementById('container');
+    let latestHands = null;
+    let latestHandsAt = 0;
 
-    ctx.save();
-    traceFingerPath(left, right, tip, fw);
-    const grad = ctx.createLinearGradient(left[0].x, left[0].y, right[0].x, right[0].y);
-    grad.addColorStop(0,   `rgba(0,245,255,${alpha * 0.55})`);
-    grad.addColorStop(0.3, `rgba(0,245,255,${alpha * 0.08})`);
-    grad.addColorStop(0.5, `rgba(0,180,220,${alpha * 0.04})`);
-    grad.addColorStop(0.7, `rgba(0,245,255,${alpha * 0.08})`);
-    grad.addColorStop(1,   `rgba(0,245,255,${alpha * 0.55})`);
-    ctx.fillStyle = grad;
-    ctx.fill();
-
-    ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    for (let p = 1; p < left.length; p++) ctx.lineTo(left[p].x, left[p].y);
-    ctx.strokeStyle = `rgba(0,245,255,${alpha * 0.7})`;
-    ctx.lineWidth   = 1.5;
-    ctx.shadowColor = '#00f5ff';
-    ctx.shadowBlur  = 18;
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(right[0].x, right[0].y);
-    for (let p = 1; p < right.length; p++) ctx.lineTo(right[p].x, right[p].y);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  // ── Palma: primero halo blur exterior, luego V2 original ──
-  const wrist = pts[0];
-  const p17 = pts[17], p5 = pts[5], p1 = pts[1];
-
-  const palmGlowPasses = [
-    { e: 22, alpha: alpha * 0.04, blur: 38 },
-    { e: 12, alpha: alpha * 0.09, blur: 22 },
-    { e:  5, alpha: alpha * 0.18, blur: 10 },
-  ];
-  for (const pass of palmGlowPasses) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(wrist.x - 28 - pass.e, wrist.y + pass.e * 0.5);
-    ctx.lineTo(p17.x - pass.e * 0.7, p17.y);
-    ctx.lineTo(pts[13].x, pts[13].y - pass.e * 0.3);
-    ctx.lineTo(pts[9].x,  pts[9].y  - pass.e * 0.3);
-    ctx.lineTo(p5.x + pass.e * 0.7, p5.y);
-    ctx.lineTo(p1.x + pass.e, p1.y);
-    ctx.lineTo(wrist.x + 28 + pass.e, wrist.y + pass.e * 0.5);
-    ctx.closePath();
-    ctx.strokeStyle = `rgba(0,245,255,${pass.alpha})`;
-    ctx.lineWidth   = pass.e * 2.2;
-    ctx.shadowColor = '#00f5ff';
-    ctx.shadowBlur  = pass.blur;
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(wrist.x - 28, wrist.y);
-  ctx.lineTo(p17.x, p17.y);
-  ctx.lineTo(pts[13].x, pts[13].y);
-  ctx.lineTo(pts[9].x,  pts[9].y);
-  ctx.lineTo(p5.x,  p5.y);
-  ctx.lineTo(p1.x,  p1.y);
-  ctx.lineTo(wrist.x + 28, wrist.y);
-  ctx.closePath();
-  const palmGrad = ctx.createRadialGradient(wrist.x, wrist.y - 40, 10, wrist.x, wrist.y - 40, 120);
-  palmGrad.addColorStop(0,   `rgba(0,200,220,${alpha * 0.1})`);
-  palmGrad.addColorStop(0.5, `rgba(0,245,255,${alpha * 0.05})`);
-  palmGrad.addColorStop(1,   'rgba(0,245,255,0)');
-  ctx.fillStyle   = palmGrad;
-  ctx.fill();
-  ctx.strokeStyle = `rgba(0,245,255,${alpha * 0.4})`;
-  ctx.lineWidth   = 1.5;
-  ctx.shadowColor = '#00f5ff';
-  ctx.shadowBlur  = 14;
-  ctx.stroke();
-  ctx.restore();
-
-  // ── Fingertip dots: halo exterior pulsante + dot V2 original ──
-  for (const tipIdx of TIPS) {
-    const tp    = pts[tipIdx];
-    const pulse = 0.5 + Math.sin(time * 3 + tipIdx) * 0.3;
-
-    ctx.save();
-    const outerG = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, 32 * pulse);
-    outerG.addColorStop(0,   `rgba(0,245,255,${alpha * 0.15 * pulse})`);
-    outerG.addColorStop(0.5, `rgba(0,245,255,${alpha * 0.05 * pulse})`);
-    outerG.addColorStop(1,   'rgba(0,245,255,0)');
-    ctx.beginPath();
-    ctx.arc(tp.x, tp.y, 32 * pulse, 0, Math.PI * 2);
-    ctx.fillStyle   = outerG;
-    ctx.shadowColor = '#00f5ff';
-    ctx.shadowBlur  = 30;
-    ctx.fill();
-    ctx.restore();
-
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(tp.x, tp.y, 12 * pulse, 0, Math.PI * 2);
-    const tipGrad = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, 12 * pulse);
-    tipGrad.addColorStop(0,   `rgba(180,240,255,${alpha * 0.6 * pulse})`);
-    tipGrad.addColorStop(0.5, `rgba(0,245,255,${alpha * 0.2 * pulse})`);
-    tipGrad.addColorStop(1,   'rgba(0,245,255,0)');
-    ctx.fillStyle   = tipGrad;
-    ctx.shadowColor = '#aaeeff';
-    ctx.shadowBlur  = 20;
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-// ═══════════════════════════════════════
-// IPC — recibe landmarks del sistema
-// ═══════════════════════════════════════
-const container = document.getElementById('container');
-let latestHands = null;
-let latestHandsAt = 0;
-
-if (window.iuOS?.onHandsLandmarks) {
-  window.iuOS.onHandsLandmarks((payload) => {
-    latestHands = payload?.hands?.length ? payload.hands : null;
-    if (latestHands) latestHandsAt = performance.now();
-  });
-}
-
-// ═══════════════════════════════════════
-// ANIMATION LOOP
-// ═══════════════════════════════════════
-let time = 0;
-function animate() {
-  requestAnimationFrame(animate);
-  time += 0.016;
-
-  cam3d.position.x = Math.sin(time * 0.25) * 0.04;
-  cam3d.position.y = Math.cos(time * 0.18) * 0.025;
-
-  const hasHands = !!(latestHands?.length) && (performance.now() - latestHandsAt) < 200;
-
-  if (hasHands) {
-    for (let i = 0; i < 2; i++) {
-      hand3d[i].update(latestHands[i] || null);
+    if (window.iuOS?.onHandsLandmarks) {
+      window.iuOS.onHandsLandmarks((payload) => {
+        latestHands = payload?.hands?.length ? payload.hands : null;
+        if (latestHands) latestHandsAt = performance.now();
+      });
     }
-    container.style.opacity = '1';
-  } else {
-    hand3d[0].update(null);
-    hand3d[1].update(null);
-    container.style.opacity = '0';
-  }
 
-  renderer.render(scene, cam3d);
+    // ═══════════════════════════════════════
+    // ANIMATION LOOP
+    // ═══════════════════════════════════════
+    let time = 0;
+    function animate() {
+      requestAnimationFrame(animate);
+      time += 0.016;
 
-  ctx.clearRect(0, 0, haloCanvas.width, haloCanvas.height);
-  for (let i = 0; i < 2; i++) {
-    if (hand3d[i].group.visible) drawHalo(hand3d[i].cur, 1.0, time);
-  }
+      cam3d.position.x = Math.sin(time * 0.25) * 0.04;
+      cam3d.position.y = Math.cos(time * 0.18) * 0.025;
 
-  const pulse = 0.06 + Math.sin(time * 3) * 0.025;
-  hand3d.forEach(h => h.glows.forEach(g => { if (g.material) g.material.opacity = pulse; }));
-}
-animate();
+      const hasHands = !!(latestHands?.length) && (performance.now() - latestHandsAt) < 200;
 
-window.addEventListener('resize', () => {
-  cam3d.aspect = window.innerWidth / window.innerHeight;
-  cam3d.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  resizeHalo();
-});
-</script>
+      if (hasHands) {
+        for (let i = 0; i < 2; i++) {
+          hand3d[i].update(latestHands[i] || null);
+        }
+        container.style.opacity = '1';
+      } else {
+        hand3d[0].update(null);
+        hand3d[1].update(null);
+        container.style.opacity = '0';
+      }
+
+      renderer.render(scene, cam3d);
+
+      ctx.clearRect(0, 0, haloCanvas.width, haloCanvas.height);
+      for (let i = 0; i < 2; i++) {
+        if (hand3d[i].group.visible) drawHalo(hand3d[i].cur, 1.0, time);
+      }
+
+      const pulse = 0.06 + Math.sin(time * 3) * 0.025;
+      hand3d.forEach(h => h.glows.forEach(g => { if (g.material) g.material.opacity = pulse; }));
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+      cam3d.aspect = window.innerWidth / window.innerHeight;
+      cam3d.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      resizeHalo();
+      S_POS = computeSPos();
+    });
+  </script>
 </body>
+
 </html>

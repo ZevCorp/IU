@@ -1320,6 +1320,44 @@ ipcMain.handle('get-screen-context', async (event, gazeDirection) => {
 });
 
 // ============================================
+// Hand Gesture Element Selection (AX-based)
+// ============================================
+
+// Caché de snapshot AX para las peticiones rápidas del overlay de manos
+let axSnapshotCache    = null;
+let axSnapshotCacheTs  = 0;
+const AX_SNAP_TTL      = 2500; // ms — mismo TTL que hand-selection.js
+
+ipcMain.handle('get-ax-snapshot', async () => {
+    const now = Date.now();
+    if (axSnapshotCache && now - axSnapshotCacheTs < AX_SNAP_TTL) {
+        return axSnapshotCache;
+    }
+    const context = await captureScreenContext();
+    axSnapshotCache   = context.snapshot || [];
+    axSnapshotCacheTs = now;
+    return axSnapshotCache;
+});
+
+ipcMain.on('hand-select-element', async (event, { element, method }) => {
+    if (!element?.bbox) return;
+    const { bounds } = screen.getPrimaryDisplay();
+    const cx = Math.round((element.bbox.x + element.bbox.w / 2) * bounds.width);
+    const cy = Math.round((element.bbox.y + element.bbox.h / 2) * bounds.height);
+    console.log(`🖐️ [HandSelect] ${method}: "${element.label}" @ (${cx}, ${cy})`);
+    try {
+        const { mouse, Button, Point } = require('@nut-tree-fork/nut-js');
+        mouse.config.autoDelayMs = 0;
+        await mouse.setPosition(new Point(cx, cy));
+        await mouse.click(Button.LEFT);
+    } catch (e) {
+        // Fallback: osascript click (no requiere nut-js)
+        exec(`osascript -e 'tell application "System Events" to click at {${cx}, ${cy}}'`,
+             err => { if (err) console.warn('[HandSelect] Click fallback failed:', err.message); });
+    }
+});
+
+// ============================================
 // Background Luminance — uses Electron's nativeTheme (specialized, zero-overhead)
 // ============================================
 ipcMain.handle('sample-bg-luminance', () => {
