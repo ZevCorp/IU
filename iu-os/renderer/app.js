@@ -1059,6 +1059,19 @@ function init() {
         });
     }
 
+    // Narration Space button
+    const narrationBtn = document.getElementById('btn-narration-space');
+    if (narrationBtn) {
+        narrationBtn.addEventListener('click', () => {
+            console.log('🌌 [App] Activating Narration Space...');
+            if (window.iuOS && window.iuOS.activateNarrationSpace) {
+                window.iuOS.activateNarrationSpace();
+            } else {
+                console.error('❌ iuOS.activateNarrationSpace API not available');
+            }
+        });
+    }
+
     // Transfer button (Top) becomes Conversation Toggle
     const transferBtn = document.getElementById('btn-transfer-top');
     console.log('[DEBUG] Searching for #btn-transfer-top:', transferBtn);
@@ -2370,6 +2383,15 @@ let pinchTapTimer = null;
 if (window.iuOS && window.iuOS.onHandsFrame) {
     window.iuOS.onHandsFrame((payload) => {
         if (!payload) return;
+
+        // 🛑 PREVENT CROSS-CONTAMINATION: Disable hand gestures (Electron window controls)
+        // when the user is engaged in non-verbal facial conversation with Ü (Deep Attention).
+        if (typeof visionManager !== 'undefined' && visionManager && visionManager.state.inDeepAttention) {
+            // Reset hand states so it doesn't get stuck if they looked away mid-gesture
+            prevPinchActive = false;
+            gestureMode = GM.IDLE;
+            return;
+        }
 
         const pinchActive = !!payload.pinchActive;
         const strictFist = !!payload.strictFist;

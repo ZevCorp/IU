@@ -45,12 +45,16 @@ contextBridge.exposeInMainWorld('iuOS', {
     onSystemReady: (callback) => ipcRenderer.on('system-ready', () => callback()),
     onExplicitPredictions: (callback) => ipcRenderer.on('explicit-predictions', (event, predictions) => callback(predictions)),
     onVoiceStateChanged: (callback) => ipcRenderer.on('voice-state-changed', (event, state) => callback(state)),
+    onVoiceText: (callback) => ipcRenderer.on('voice-text', (event, data) => callback(data)),
 
     // Chat Window
     toggleChatWindow: () => ipcRenderer.invoke('toggle-chat-window'),
     toggleHandWindow: () => ipcRenderer.invoke('toggle-hand-window'),
     getHandWindowState: () => ipcRenderer.invoke('get-hand-window-state'),
     toggleHandMeshWindow: () => ipcRenderer.invoke('toggle-hand-mesh-window'),
+    activateNarrationSpace: () => ipcRenderer.invoke('activate-narration-space'),
+    closeNarrationSpace: () => ipcRenderer.send('close-narration-space'),
+    synthesizeNarration: (timeline) => ipcRenderer.invoke('synthesize-narration', { timeline }),
 
     // Action System
     executeExplicitAction: (userText) => ipcRenderer.invoke('execute-explicit-action', userText),
@@ -96,6 +100,10 @@ contextBridge.exposeInMainWorld('iuOS', {
 
     // Gesture voice control (open palm 2s = start, strict fist 2s = stop)
     onGestureVoiceToggle: (callback) => ipcRenderer.on('gesture-voice-toggle', (event, action) => callback(action)),
+
+    // Hand mesh style switcher
+    getHandMeshStyle: () => ipcRenderer.invoke('get-hand-mesh-style'),
+    setHandMeshStyle: (style) => ipcRenderer.invoke('set-hand-mesh-style', style),
 });
 
 

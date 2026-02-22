@@ -352,7 +352,8 @@ body.compact-mode-active #face-container {
 
 .state-btn.active,
 .theme-btn.active,
-.mode-btn.active {
+.mode-btn.active,
+.state-btn.active-style {
   background: var(--control-active);
   border-color: var(--text-secondary);
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);

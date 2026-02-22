@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HOLO HAND v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: transparent;
+    overflow: hidden;
+  }
+
+  #container {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    opacity: 0;
+    transition: opacity 400ms ease;
+  }
+
+  #three-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 2;
+  }
+
+  #halo-canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    z-index: 1;
+  }
+</style>
+</head>
+<body>
+<div id="container">
+  <canvas id="halo-canvas"></canvas>
+  <canvas id="three-canvas"></canvas>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+// ─────────────────────────────────────────
+// PALETTE — cambia dinámicamente según el fondo
+// ─────────────────────────────────────────
+const PALETTES = {
+  dark: {
+    mainHex:      0x00f5ff,
+    tipHex:       0xaaeeff,
+    glowHex:      0x00f5ff,
+    lineHex:      0x00f5ff,
+    particleHex:  0x00f5ff,
+    mainCSS:      '0,245,255',
+    tipCSS:       '180,240,255',
+    midCSS:       '0,200,220',
+    shadowCSS:    '#00f5ff',
+    tipShadowCSS: '#aaeeff',
+    palmLinePct:  0.4,   // opacity factor for palm edge stroke
+  },
+  light: {
+    mainHex:      0x111111,
+    tipHex:       0x444444,
+    glowHex:      0x111111,
+    lineHex:      0x111111,
+    particleHex:  0x333333,
+    mainCSS:      '10,10,10',
+    tipCSS:       '50,50,50',
+    midCSS:       '30,30,30',
+    shadowCSS:    '#111111',
+    tipShadowCSS: '#333333',
+    palmLinePct:  0.25,
+  },
+};
+
+let pal = PALETTES.dark;
+
+// ─────────────────────────────────────────
+// THREE.JS
+// ─────────────────────────────────────────
+const threeCanvas = document.getElementById('three-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, antialias: true, alpha: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x000000, 0);
+
+const scene = new THREE.Scene();
+const cam3d = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+cam3d.position.z = 5;
+
+// Ambient particles (no grid floor)
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(300 * 3);
+for (let i = 0; i < 300; i++) {
+  pPos[i*3]   = (Math.random() - 0.5) * 22;
+  pPos[i*3+1] = (Math.random() - 0.5) * 22;
+  pPos[i*3+2] = (Math.random() - 0.5) * 12 - 5;
+}
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+const pMat = new THREE.PointsMaterial({ color: pal.particleHex, size: 0.018, transparent: true, opacity: 0.20 });
+scene.add(new THREE.Points(pGeo, pMat));
+
+const CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [0,9],[9,10],[10,11],[11,12],
+  [0,13],[13,14],[14,15],[15,16],
+  [0,17],[17,18],[18,19],[19,20],
+  [5,9],[9,13],[13,17]
+];
+const TIPS     = [4, 8, 12, 16, 20];
+const KNUCKLES = [1, 5,  9, 13, 17];
+
+class HoloHand {
+  constructor() {
+    this.group   = new THREE.Group();
+    this.spheres = [];
+    this.lines   = [];
+    this.glows   = [];
+    this.cur = Array(21).fill(null).map(() => new THREE.Vector3(0, -20, 0));
+    this.tgt = Array(21).fill(null).map(() => new THREE.Vector3(0, -20, 0));
+    this._build();
+    scene.add(this.group);
+    this.group.visible = false;
+  }
+
+  _build() {
+    for (let i = 0; i < 21; i++) {
+      const isTip    = TIPS.includes(i);
+      const isKnuckle = KNUCKLES.includes(i);
+      const isWrist  = i === 0;
+      const r = isTip ? 0.055 : isWrist ? 0.07 : isKnuckle ? 0.048 : 0.032;
+
+      const mesh = new THREE.Mesh(
+        new THREE.SphereGeometry(r, 10, 10),
+        new THREE.MeshBasicMaterial({
+          color:       isTip ? pal.tipHex : pal.mainHex,
+          transparent: true,
+          opacity:     isTip ? 0.95 : 0.75,
+        })
+      );
+      mesh.position.set(0, -20, 0);
+      this.group.add(mesh);
+      this.spheres.push(mesh);
+
+      if (isTip || isWrist) {
+        const glow = new THREE.Mesh(
+          new THREE.SphereGeometry(r * 3, 10, 10),
+          new THREE.MeshBasicMaterial({ color: pal.glowHex, transparent: true, opacity: 0.07 })
+        );
+        mesh.add(glow);
+        this.glows.push(glow);
+      }
+    }
+
+    for (const conn of CONNECTIONS) {
+      const geo = new THREE.BufferGeometry();
+      const pos = new Float32Array(6);
+      geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      const isPalm = conn[0] >= 5 && conn[1] >= 5 && !TIPS.includes(conn[0]) && !TIPS.includes(conn[1]);
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: pal.lineHex, transparent: true, opacity: isPalm ? 0.2 : 0.55,
+      }));
+      this.group.add(line);
+      this.lines.push({ line, conn });
+    }
+  }
+
+  applyPalette() {
+    for (let i = 0; i < this.spheres.length; i++) {
+      this.spheres[i].material.color.setHex(TIPS.includes(i) ? pal.tipHex : pal.mainHex);
+    }
+    for (const { line } of this.lines) {
+      line.material.color.setHex(pal.lineHex);
+    }
+    for (const glow of this.glows) {
+      glow.material.color.setHex(pal.glowHex);
+    }
+  }
+
+  update(lms) {
+    if (!lms) { this.group.visible = false; return; }
+    this.group.visible = true;
+    const S = 7;
+    for (let i = 0; i < 21; i++) {
+      this.tgt[i].set((0.5 - lms[i].x) * S, (0.5 - lms[i].y) * S, -lms[i].z * 3);
+      this.cur[i].lerp(this.tgt[i], 0.22);
+      this.spheres[i].position.copy(this.cur[i]);
+    }
+    for (const { line, conn } of this.lines) {
+      const pa = line.geometry.attributes.position;
+      const a = this.cur[conn[0]], b = this.cur[conn[1]];
+      pa.array.set([a.x, a.y, a.z, b.x, b.y, b.z]);
+      pa.needsUpdate = true;
+    }
+  }
+}
+
+const hand3d = [new HoloHand(), new HoloHand()];
+
+// ─────────────────────────────────────────
+// Apply palette to all Three.js objects
+// ─────────────────────────────────────────
+function applyPalette() {
+  pMat.color.setHex(pal.particleHex);
+  for (const h of hand3d) h.applyPalette();
+}
+
+// ─────────────────────────────────────────
+// CANVAS 2D — Halo layer
+// ─────────────────────────────────────────
+const haloCanvas = document.getElementById('halo-canvas');
+const ctx = haloCanvas.getContext('2d');
+
+function resizeHalo() {
+  haloCanvas.width  = window.innerWidth;
+  haloCanvas.height = window.innerHeight;
+}
+resizeHalo();
+
+function worldToScreen(v) {
+  const proj = v.clone().project(cam3d);
+  return {
+    x: (proj.x * 0.5 + 0.5) * window.innerWidth,
+    y: (-proj.y * 0.5 + 0.5) * window.innerHeight,
+  };
+}
+
+function perp(a, b, width) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  return { x: -dy / len * width, y: dx / len * width };
+}
+
+function drawHalo(positions, alpha, time) {
+  if (!positions) return;
+
+  const pts = positions.map(p => worldToScreen(p));
+  const m   = pal.mainCSS;
+  const ti  = pal.tipCSS;
+  const mid = pal.midCSS;
+  const sh  = pal.shadowCSS;
+  const tsh = pal.tipShadowCSS;
+
+  const fingerWidth = [18, 14, 15, 13, 11];
+  const fingers = [
+    [1,2,3,4], [5,6,7,8], [9,10,11,12], [13,14,15,16], [17,18,19,20],
+  ];
+
+  for (let f = 0; f < fingers.length; f++) {
+    const segs = fingers[f];
+    const fw   = fingerWidth[f];
+    const leftPts = [], rightPts = [];
+
+    for (let s = 0; s < segs.length - 1; s++) {
+      const a   = pts[segs[s]], b = pts[segs[s + 1]];
+      const off = perp(a, b, fw * (1 - s * 0.12));
+      if (s === 0) {
+        leftPts.push({ x: a.x + off.x, y: a.y + off.y });
+        rightPts.push({ x: a.x - off.x, y: a.y - off.y });
+      }
+      leftPts.push({ x: b.x + off.x, y: b.y + off.y });
+      rightPts.push({ x: b.x - off.x, y: b.y - off.y });
+    }
+
+    const tip = pts[segs[segs.length - 1]];
+
+    // Filled finger shape
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(leftPts[0].x, leftPts[0].y);
+    for (let p = 1; p < leftPts.length; p++) ctx.lineTo(leftPts[p].x, leftPts[p].y);
+    ctx.arcTo(
+      tip.x + (leftPts[leftPts.length - 1].x - tip.x),
+      tip.y + (leftPts[leftPts.length - 1].y - tip.y),
+      tip.x, tip.y, fw * 0.8
+    );
+    for (let p = rightPts.length - 1; p >= 0; p--) ctx.lineTo(rightPts[p].x, rightPts[p].y);
+    ctx.closePath();
+
+    const grad = ctx.createLinearGradient(leftPts[0].x, leftPts[0].y, rightPts[0].x, rightPts[0].y);
+    grad.addColorStop(0,   `rgba(${m},${alpha * 0.55})`);
+    grad.addColorStop(0.3, `rgba(${m},${alpha * 0.08})`);
+    grad.addColorStop(0.5, `rgba(${mid},${alpha * 0.04})`);
+    grad.addColorStop(0.7, `rgba(${m},${alpha * 0.08})`);
+    grad.addColorStop(1,   `rgba(${m},${alpha * 0.55})`);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Edge glow strokes
+    ctx.beginPath();
+    ctx.moveTo(leftPts[0].x, leftPts[0].y);
+    for (let p = 1; p < leftPts.length; p++) ctx.lineTo(leftPts[p].x, leftPts[p].y);
+    ctx.strokeStyle = `rgba(${m},${alpha * 0.7})`;
+    ctx.lineWidth   = 1.5;
+    ctx.shadowColor = sh;
+    ctx.shadowBlur  = 18;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(rightPts[0].x, rightPts[0].y);
+    for (let p = 1; p < rightPts.length; p++) ctx.lineTo(rightPts[p].x, rightPts[p].y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Palm fill
+  ctx.save();
+  const wrist = pts[0];
+  const p17 = pts[17], p5 = pts[5], p1 = pts[1];
+  ctx.beginPath();
+  ctx.moveTo(wrist.x - 28, wrist.y);
+  ctx.lineTo(p17.x, p17.y);
+  ctx.lineTo(pts[13].x, pts[13].y);
+  ctx.lineTo(pts[9].x,  pts[9].y);
+  ctx.lineTo(p5.x,  p5.y);
+  ctx.lineTo(p1.x,  p1.y);
+  ctx.lineTo(wrist.x + 28, wrist.y);
+  ctx.closePath();
+
+  const palmGrad = ctx.createRadialGradient(wrist.x, wrist.y - 40, 10, wrist.x, wrist.y - 40, 120);
+  palmGrad.addColorStop(0,   `rgba(${mid},${alpha * 0.10})`);
+  palmGrad.addColorStop(0.5, `rgba(${m},${alpha * 0.05})`);
+  palmGrad.addColorStop(1,   `rgba(${m},0)`);
+  ctx.fillStyle   = palmGrad;
+  ctx.fill();
+  ctx.strokeStyle = `rgba(${m},${alpha * pal.palmLinePct})`;
+  ctx.lineWidth   = 1.5;
+  ctx.shadowColor = sh;
+  ctx.shadowBlur  = 14;
+  ctx.stroke();
+  ctx.restore();
+
+  // Fingertip energy dots
+  for (const tipIdx of TIPS) {
+    const tp    = pts[tipIdx];
+    const pulse = 0.5 + Math.sin(time * 3 + tipIdx) * 0.3;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(tp.x, tp.y, 12 * pulse, 0, Math.PI * 2);
+    const tipGrad = ctx.createRadialGradient(tp.x, tp.y, 0, tp.x, tp.y, 12 * pulse);
+    tipGrad.addColorStop(0,   `rgba(${ti},${alpha * 0.6 * pulse})`);
+    tipGrad.addColorStop(0.5, `rgba(${m},${alpha * 0.2 * pulse})`);
+    tipGrad.addColorStop(1,   `rgba(${m},0)`);
+    ctx.fillStyle   = tipGrad;
+    ctx.shadowColor = tsh;
+    ctx.shadowBlur  = 20;
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ─────────────────────────────────────────
+// IPC — datos y luminancia del fondo
+// ─────────────────────────────────────────
+const container = document.getElementById('container');
+let latestHands = null;
+let latestHandsAt = 0;
+
+function setBgLuminance(isDark) {
+  pal = isDark ? PALETTES.dark : PALETTES.light;
+  applyPalette();
+}
+
+if (window.iuOS) {
+  // Recibe landmarks de manos
+  window.iuOS.onHandsLandmarks?.((payload) => {
+    latestHands = payload?.hands?.length ? payload.hands : null;
+    if (latestHands) latestHandsAt = performance.now();
+  });
+
+  // Sincroniza color al arranque
+  window.iuOS.sampleBgLuminance?.().then(({ isDark }) => setBgLuminance(isDark));
+
+  // Reacciona a cambios de fondo en tiempo real
+  window.iuOS.onBgLuminanceChanged?.(({ isDark }) => setBgLuminance(isDark));
+}
+
+// ─────────────────────────────────────────
+// ANIMATION LOOP
+// ─────────────────────────────────────────
+let time = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  time += 0.016;
+
+  cam3d.position.x = Math.sin(time * 0.25) * 0.04;
+  cam3d.position.y = Math.cos(time * 0.18) * 0.025;
+
+  const hasHands = !!(latestHands?.length) && (performance.now() - latestHandsAt) < 200;
+
+  if (hasHands) {
+    for (let i = 0; i < 2; i++) hand3d[i].update(latestHands[i] || null);
+    container.style.opacity = '1';
+  } else {
+    hand3d[0].update(null);
+    hand3d[1].update(null);
+    container.style.opacity = '0';
+  }
+
+  renderer.render(scene, cam3d);
+
+  ctx.clearRect(0, 0, haloCanvas.width, haloCanvas.height);
+  for (let i = 0; i < 2; i++) {
+    if (hand3d[i].group.visible) drawHalo(hand3d[i].cur, 1.0, time);
+  }
+
+  const pulse = 0.06 + Math.sin(time * 3) * 0.025;
+  hand3d.forEach(h => h.glows.forEach(g => { if (g.material) g.material.opacity = pulse; }));
+}
+
+animate();
+
+window.addEventListener('resize', () => {
+  cam3d.aspect = window.innerWidth / window.innerHeight;
+  cam3d.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  resizeHalo();
+});
+</script>
+</body>
+</html>

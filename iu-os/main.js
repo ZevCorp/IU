@@ -225,12 +225,16 @@ const WINDOW_MODES = {
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'user_settings.json');
 let currentWindowMode = WINDOW_MODES.LARGE;
 
+// Hand mesh style: 'v2' (único estilo activo)
+let handMeshStyle = 'v2';
+
 function loadSettings() {
     try {
         if (fs.existsSync(SETTINGS_PATH)) {
             const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
             if (settings.windowMode) currentWindowMode = settings.windowMode;
-            console.log(`⚙️ Settings loaded: mode=${currentWindowMode}`);
+            if (settings.handMeshStyle) handMeshStyle = settings.handMeshStyle;
+            console.log(`⚙️ Settings loaded: mode=${currentWindowMode}, handMeshStyle=${handMeshStyle}`);
         }
     } catch (e) {
         console.error('Error loading settings:', e);
@@ -239,7 +243,7 @@ function loadSettings() {
 
 function saveSettings() {
     try {
-        const settings = { windowMode: currentWindowMode };
+        const settings = { windowMode: currentWindowMode, handMeshStyle };
         fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
     } catch (e) {
         console.error('Error saving settings:', e);
@@ -254,8 +258,8 @@ const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
 const CHAT_GAP = 7;
 const HAND_WINDOW_WIDTH = 420;
 const HAND_WINDOW_HEIGHT = 560;
-const HAND_MESH_WINDOW_WIDTH = 420;
-const HAND_MESH_WINDOW_HEIGHT = 380;
+const HAND_MESH_WINDOW_WIDTH = 820;
+const HAND_MESH_WINDOW_HEIGHT = 600;
 const PINCH_MOVE_GAIN = 14.0;
 const PINCH_SMOOTHING = 0.2;
 const PINCH_SNAP_MIN_DISTANCE = 36;
@@ -636,6 +640,9 @@ function createHandWindow() {
     handWindow.loadFile('renderer/hands.html');
 
     handWindow.once('ready-to-show', () => {
+        // Run in background for MediaPipe tracking — never shown visually
+        handWindow.setOpacity(0);
+        handWindow.setIgnoreMouseEvents(true, { forward: true });
         handWindow.show();
     });
 
@@ -682,7 +689,7 @@ function createHandMeshWindow() {
         handMeshWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
     handMeshWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-    handMeshWindow.loadFile('renderer/hands-mesh.html');
+    handMeshWindow.loadFile(`renderer/hands-mesh-${handMeshStyle}.html`);
 
     handMeshWindow.once('ready-to-show', () => {
         // Start hidden — opacity controlled by hands-presence IPC
@@ -697,6 +704,130 @@ function createHandMeshWindow() {
 
     console.log('🖐️ Hand mesh window created (3D bones)');
 }
+
+// ============================================
+// Narration Space Window (Fullscreen)
+// ============================================
+
+let narrationWindow = null;
+
+function createNarrationWindow() {
+    if (narrationWindow && !narrationWindow.isDestroyed()) {
+        narrationWindow.focus();
+        return;
+    }
+
+    const bounds = getWindowBounds(WINDOW_MODES.FULLSCREEN);
+
+    narrationWindow = new BrowserWindow({
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x,
+        y: bounds.y,
+        frame: false,
+        transparent: true,
+        alwaysOnTop: true,
+        resizable: false,
+        movable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        hasShadow: false,
+        backgroundColor: '#00000000', // Transparent base
+        show: false,
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.js'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            webSecurity: true
+        }
+    });
+
+    if (process.platform === 'darwin') {
+        narrationWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+        narrationWindow.setVibrancy('fullscreen-ui');
+    }
+    narrationWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+
+    narrationWindow.loadFile('renderer/narration-space.html');
+
+    narrationWindow.once('ready-to-show', () => {
+        // Hide the main window if it's visible
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+            mainWindow.hide();
+        }
+        narrationWindow.show();
+    });
+
+    narrationWindow.on('closed', () => {
+        narrationWindow = null;
+        // Restore main window
+        if (mainWindow && !mainWindow.isDestroyed() && !gestureState.isAsleep) {
+            mainWindow.show();
+        }
+    });
+
+    console.log('🌌 Narration Space window created');
+}
+
+ipcMain.handle('activate-narration-space', () => {
+    createNarrationWindow();
+    return { success: true };
+});
+
+ipcMain.on('close-narration-space', () => {
+    if (narrationWindow && !narrationWindow.isDestroyed()) {
+        narrationWindow.close();
+    }
+});
+
+// Synthesize Narration via LLM
+ipcMain.handle('synthesize-narration', async (event, { timeline }) => {
+    console.log(`🌌 [Narration] Synthesizing narrative from ${timeline.length} events...`);
+    if (!ModelSwitch.isReady()) {
+        return { success: false, error: 'Model provider no inicializado' };
+    }
+
+    try {
+        const systemPrompt = `Eres un intérprete de narrativas multimodales. Se te proporciona una línea de tiempo de eventos:
+- type:'voice': lo que dijo el usuario
+- type:'gesture': movimientos corporales del usuario clasificados con un tag semántico (ej. "Expansión", "Precisión", "Jerarquía", "Dos entidades").
+
+Reglas de interpretación de los gestos según la semántica incorporada humana:
+- "Expansión" + voz sobre magnitud → implica "algo grande, impacto masivo, crecimiento"
+- "Jerarquía" (mano alta/baja) → implica "comparación de nivel, calidad o superioridad"
+- "Precisión" (efecto pinza) → implica "control fino, detalle clave, algo pequeño pero poderoso"
+- "Dos entidades" (manos separadas) → implica "comparación binaria, contraste"
+- "Decisión" (corte lateral) → implica "acción decisiva, finalizar o separar"
+
+Tu tarea:
+Procesa esta línea de tiempo cronológica y genera una narrativa fluida y coherente de la idea COMPLETA, fusionando el texto hablado con la intención implícita de los gestos. Escribe como si fueras el autor estructurando la idea final. NO menciones explícitamente los gestos (no digas "el usuario hizo un gesto de expansión"), sino que integra su SIGNIFICADO conceptual en el texto.
+Mantén la explicación clara, poderosa y articulada.`;
+
+        const timelineText = timeline.map(t => {
+            const timeStr = `[${Math.floor(t.ts / 1000).toString().padStart(3, '0')}s]`;
+            if (t.type === 'voice') return `${timeStr} Voz: "${t.data}"`;
+            if (t.type === 'gesture') return `${timeStr} Gesto Simbólico: ${t.data.tag} (${t.data.desc})`;
+            return `${timeStr} Desconocido`;
+        }).join('\n');
+
+        const prompt = `LÍNEA DE TIEMPO DEL USUARIO:\n${timelineText}\n\nPor favor, genera la explicación narrativa estructurada basada en lo anterior.`;
+
+        const response = await ModelSwitch.chatCompletion({
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: prompt }
+            ]
+        });
+
+        const narrative = response.choices[0].message.content;
+        return { success: true, text: narrative };
+    } catch (e) {
+        console.error('❌ [Narration] Synthesis failed:', e.message);
+        return { success: false, error: e.message };
+    }
+});
 
 // Chat window IPC
 ipcMain.on('chat-close', () => {
@@ -934,25 +1065,26 @@ ipcMain.on('hands-landmarks', (event, payload) => {
 });
 
 ipcMain.on('hands-presence', (event, present) => {
-    if (handWindow && !handWindow.isDestroyed()) {
-        if (present) {
-            handWindow.setOpacity(1);
-            handWindow.setIgnoreMouseEvents(false);
-        } else {
-            handWindow.setOpacity(0);
-            handWindow.setIgnoreMouseEvents(true, { forward: true });
-        }
-    }
-
+    // handWindow es siempre invisible — solo corre MediaPipe en background.
+    // handMeshWindow es siempre click-through para no interferir con el PC.
     if (handMeshWindow && !handMeshWindow.isDestroyed()) {
-        if (present) {
-            handMeshWindow.setOpacity(1);
-            handMeshWindow.setIgnoreMouseEvents(false);
-        } else {
-            handMeshWindow.setOpacity(0);
-            handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
-        }
+        handMeshWindow.setOpacity(present ? 1 : 0);
+        handMeshWindow.setIgnoreMouseEvents(true, { forward: true });
     }
+});
+
+ipcMain.handle('get-hand-mesh-style', () => handMeshStyle);
+
+ipcMain.handle('set-hand-mesh-style', (event, style) => {
+    if (style !== 'v2' && style !== 'final') return { success: false, error: 'Invalid style' };
+    handMeshStyle = style;
+    saveSettings();
+    // Reload the mesh window with the new style
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
+        handMeshWindow.loadFile(`renderer/hands-mesh-${handMeshStyle}.html`);
+        console.log(`🖐️ Hand mesh style changed to: ${handMeshStyle}`);
+    }
+    return { success: true, style: handMeshStyle };
 });
 
 ipcMain.on('main-window-pinch-drag', (event, payload) => {
@@ -1647,6 +1779,9 @@ function startSmartConversationMonitoring() {
                     if (chatWindow && !chatWindow.isDestroyed()) {
                         chatWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
                     }
+                    if (narrationWindow && !narrationWindow.isDestroyed()) {
+                        narrationWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
+                    }
 
                     // Log to Memory
                     contextManager.addMessage('user', lastLoggedUserContent, 'voice_transcription');
@@ -1733,6 +1868,9 @@ function startSmartConversationMonitoring() {
 
                     if (chatWindow && !chatWindow.isDestroyed()) {
                         chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
+                    }
+                    if (narrationWindow && !narrationWindow.isDestroyed()) {
+                        narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                     }
                     contextManager.addMessage('assistant', state.assistant.text, 'voice_transcription');
 

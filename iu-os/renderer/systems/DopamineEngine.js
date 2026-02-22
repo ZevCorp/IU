@@ -25,12 +25,12 @@ class DopamineEngine {
     constructor() {
         // ─── Blendshape Thresholds (0-1, ML-calibrated) ───
         this.thresholds = {
-            smile:        0.40,   // mouthSmile average — slightly higher to avoid false positives
+            smile: 0.40,   // mouthSmile average — slightly higher to avoid false positives
             eyebrowRaise: 0.30,   // browInnerUp + browOuterUp average
-            surprise:     0.35,   // jawOpen + eyeWide composite
-            squint:       0.35,   // eyeSquint average
-            headTilt:     10,     // degrees (from landmarks)
-            nod:          4.0     // pitch velocity (from landmarks)
+            surprise: 0.35,   // jawOpen + eyeWide composite
+            squint: 0.35,   // eyeSquint average
+            headTilt: 10,     // degrees (from landmarks)
+            nod: 4.0     // pitch velocity (from landmarks)
         };
 
         // ─── Blendshape Name Map (built on first frame) ───
@@ -39,42 +39,42 @@ class DopamineEngine {
         // ─── Gesture Vector Space (7D semantic embedding) ───
         // Dimensions: [warmth, energy, openness, playfulness, empathy, intensity, calm]
         this.userGestureVectors = {
-            smile:         [ 0.9,  0.6,  0.8,  0.7,  0.8,  0.3,  0.5],
-            eyebrow_raise: [ 0.4,  0.7,  0.9,  0.5,  0.3,  0.6,  0.2],
-            surprise:      [ 0.5,  0.9,  0.9,  0.6,  0.4,  0.8,  0.1],
-            squint:        [ 0.6,  0.3,  0.2,  0.4,  0.7,  0.5,  0.6],
-            head_tilt:     [ 0.7,  0.4,  0.5,  0.8,  0.6,  0.3,  0.7],
-            nod:           [ 0.8,  0.5,  0.6,  0.3,  0.9,  0.4,  0.8],
-            neutral:       [ 0.3,  0.2,  0.4,  0.2,  0.3,  0.1,  0.9]
+            smile: [0.9, 0.6, 0.8, 0.7, 0.8, 0.3, 0.5],
+            eyebrow_raise: [0.4, 0.7, 0.9, 0.5, 0.3, 0.6, 0.2],
+            surprise: [0.5, 0.9, 0.9, 0.6, 0.4, 0.8, 0.1],
+            squint: [0.6, 0.3, 0.2, 0.4, 0.7, 0.5, 0.6],
+            head_tilt: [0.7, 0.4, 0.5, 0.8, 0.6, 0.3, 0.7],
+            nod: [0.8, 0.5, 0.6, 0.3, 0.9, 0.4, 0.8],
+            neutral: [0.3, 0.2, 0.4, 0.2, 0.3, 0.1, 0.9]
         };
 
-        // ─── Ü Response Vectors (maps to Face PRESETS in app.js) ───
-        // REMOVED wink as a standard response — it's now a rare special event
+        // ─── Ü Response Vectors (maps to Face PRESETS) ───
+        // Estados sociales claros: warm_idle, attentive, playful, thinking, delighted
         this.responseVectors = {
-            smile:          { vector: [ 0.9,  0.6,  0.8,  0.7,  0.8,  0.3,  0.5], preset: 'smile',          dopamine: 0.9  },
-            mild_attention: { vector: [ 0.6,  0.5,  0.7,  0.5,  0.7,  0.4,  0.6], preset: 'mild_attention', dopamine: 0.6  },
-            thinking:       { vector: [ 0.4,  0.4,  0.3,  0.3,  0.6,  0.7,  0.5], preset: 'thinking',      dopamine: 0.5  },
-            listening:      { vector: [ 0.7,  0.3,  0.8,  0.2,  0.9,  0.3,  0.8], preset: 'listening',     dopamine: 0.7  },
-            neutral:        { vector: [ 0.3,  0.2,  0.4,  0.2,  0.3,  0.1,  0.9], preset: 'neutral',       dopamine: 0.3  }
+            delighted: { vector: [0.9, 0.8, 0.9, 0.8, 0.8, 0.5, 0.2], preset: 'delighted', dopamine: 0.95 },
+            smile: { vector: [0.8, 0.6, 0.8, 0.7, 0.8, 0.3, 0.5], preset: 'smile', dopamine: 0.85 },
+            attentive: { vector: [0.6, 0.5, 0.7, 0.5, 0.8, 0.4, 0.6], preset: 'attentive', dopamine: 0.65 },
+            thinking: { vector: [0.4, 0.4, 0.3, 0.3, 0.6, 0.7, 0.5], preset: 'thinking', dopamine: 0.5 },
+            playful: { vector: [0.7, 0.8, 0.8, 0.9, 0.6, 0.6, 0.3], preset: 'playful', dopamine: 0.8 },
+            warm_idle: { vector: [0.4, 0.3, 0.6, 0.4, 0.5, 0.2, 0.8], preset: 'warm_idle', dopamine: 0.4 }
         };
 
-        // ─── Dopaminergic Response Graph (realistic human interaction weights) ───
-        // NO wink in standard responses. Warm, natural reactions only.
+        // ─── Dopaminergic Response Graph (social rhythm) ───
         this.dopamineGraph = {
-            smile:         [{ response: 'smile', weight: 0.6 }, { response: 'mild_attention', weight: 0.3 }, { response: 'listening', weight: 0.1 }],
-            eyebrow_raise: [{ response: 'mild_attention', weight: 0.5 }, { response: 'listening', weight: 0.3 }, { response: 'smile', weight: 0.2 }],
-            surprise:      [{ response: 'smile', weight: 0.4 }, { response: 'mild_attention', weight: 0.4 }, { response: 'listening', weight: 0.2 }],
-            squint:        [{ response: 'thinking', weight: 0.4 }, { response: 'mild_attention', weight: 0.4 }, { response: 'listening', weight: 0.2 }],
-            head_tilt:     [{ response: 'mild_attention', weight: 0.5 }, { response: 'smile', weight: 0.3 }, { response: 'listening', weight: 0.2 }],
-            nod:           [{ response: 'smile', weight: 0.5 }, { response: 'listening', weight: 0.3 }, { response: 'mild_attention', weight: 0.2 }],
-            neutral:       [{ response: 'neutral', weight: 0.4 }, { response: 'mild_attention', weight: 0.5 }, { response: 'listening', weight: 0.1 }]
+            smile: [{ response: 'delighted', weight: 0.5 }, { response: 'smile', weight: 0.3 }, { response: 'playful', weight: 0.2 }],
+            eyebrow_raise: [{ response: 'attentive', weight: 0.5 }, { response: 'thinking', weight: 0.3 }, { response: 'playful', weight: 0.2 }],
+            surprise: [{ response: 'delighted', weight: 0.4 }, { response: 'playful', weight: 0.4 }, { response: 'attentive', weight: 0.2 }],
+            squint: [{ response: 'thinking', weight: 0.6 }, { response: 'attentive', weight: 0.3 }, { response: 'warm_idle', weight: 0.1 }],
+            head_tilt: [{ response: 'attentive', weight: 0.5 }, { response: 'playful', weight: 0.3 }, { response: 'thinking', weight: 0.2 }],
+            nod: [{ response: 'smile', weight: 0.4 }, { response: 'attentive', weight: 0.4 }, { response: 'delighted', weight: 0.2 }],
+            neutral: [{ response: 'warm_idle', weight: 0.6 }, { response: 'attentive', weight: 0.3 }, { response: 'thinking', weight: 0.1 }]
         };
 
         // ─── Timing (based on real human interaction rhythms) ───
-        this.cooldownMs = 2500;            // Min 2.5s between expression changes (humans hold expressions)
-        this.sustainedMs = 500;            // Gesture must be held 500ms before Ü reacts
-        this.decayDelayMs = 4000;          // Hold expression 4s before starting decay
-        this.decayToPreset = 'mild_attention'; // Decay target (warm neutral, not blank)
+        this.cooldownMs = 1800;            // Min 1.5-2.5s between expression changes
+        this.sustainedMs = 400;            // Gesture hold 300-800ms
+        this.decayDelayMs = 2500;          // Progressive decay
+        this.decayToPreset = 'warm_idle';  // Decay target
 
         // ─── State ───
         this.lastGesture = 'neutral';
@@ -83,7 +83,7 @@ class DopamineEngine {
         this.gestureHistory = [];
         this.historyMaxLen = 10;
         this.lastResponseTime = 0;
-        this.mirrorBias = 0.80;            // 80% mirror — humans mostly mirror each other
+        this.mirrorBias = 0.75;            // Mirror 70-80% - te hace sentir visto
         this.isActive = false;
 
         // ─── Sustained Gesture Detection ───
@@ -279,32 +279,32 @@ class DopamineEngine {
         const smile = (smileL + smileR) / 2;
 
         // ── Eyebrow Raise (ML-calibrated) ──
-        const browInnerUp    = this._bs(blendshapes, 'browInnerUp');
-        const browOuterUpL   = this._bs(blendshapes, 'browOuterUpLeft');
-        const browOuterUpR   = this._bs(blendshapes, 'browOuterUpRight');
-        const eyebrowRaise   = (browInnerUp + browOuterUpL + browOuterUpR) / 3;
+        const browInnerUp = this._bs(blendshapes, 'browInnerUp');
+        const browOuterUpL = this._bs(blendshapes, 'browOuterUpLeft');
+        const browOuterUpR = this._bs(blendshapes, 'browOuterUpRight');
+        const eyebrowRaise = (browInnerUp + browOuterUpL + browOuterUpR) / 3;
 
         // ── Surprise (mouth open + eyes wide + brows up) ──
-        const jawOpen    = this._bs(blendshapes, 'jawOpen');
-        const eyeWideL   = this._bs(blendshapes, 'eyeWideLeft');
-        const eyeWideR   = this._bs(blendshapes, 'eyeWideRight');
-        const surprise   = (jawOpen * 0.4 + ((eyeWideL + eyeWideR) / 2) * 0.3 + eyebrowRaise * 0.3);
+        const jawOpen = this._bs(blendshapes, 'jawOpen');
+        const eyeWideL = this._bs(blendshapes, 'eyeWideLeft');
+        const eyeWideR = this._bs(blendshapes, 'eyeWideRight');
+        const surprise = (jawOpen * 0.4 + ((eyeWideL + eyeWideR) / 2) * 0.3 + eyebrowRaise * 0.3);
 
         // ── Squint (ML-calibrated) ──
         const squintL = this._bs(blendshapes, 'eyeSquintLeft');
         const squintR = this._bs(blendshapes, 'eyeSquintRight');
-        const squint  = (squintL + squintR) / 2;
+        const squint = (squintL + squintR) / 2;
 
         // ── Head Pose from landmarks ──
         let headTilt = 0;
         let nodScore = 0;
 
         if (landmarks && landmarks.length > 454) {
-            const nose     = landmarks[1];
-            const leftEar  = landmarks[234];
+            const nose = landmarks[1];
+            const leftEar = landmarks[234];
             const rightEar = landmarks[454];
-            const chin     = landmarks[152];
-            const topHead  = landmarks[10];
+            const chin = landmarks[152];
+            const topHead = landmarks[10];
 
             headTilt = Math.abs((rightEar.y - leftEar.y) * 100);
 
@@ -320,15 +320,18 @@ class DopamineEngine {
             }
         }
 
-        // ── Heavy EMA Smoothing (alpha=0.15 — much smoother than before) ──
+        // ── 1-Euro Filter Approximation (Dynamic Alpha) For High Precision Fluidity ──
         const raw = { smile, eyebrowRaise, surprise, squint, headTilt, nodScore };
 
         if (!this._smoothedBS) {
             this._smoothedBS = { ...raw };
         } else {
-            const a = this._smoothAlpha;
             for (const key in raw) {
-                this._smoothedBS[key] = a * raw[key] + (1 - a) * this._smoothedBS[key];
+                const diff = Math.abs(raw[key] - this._smoothedBS[key]);
+                // dynamicAlpha makes small jitters get heavily smoothed (alpha=0.08)
+                // but large intentional movements snap fast (alpha up to 0.7)
+                let dynamicAlpha = Math.min(0.7, Math.max(0.08, diff * 3.5));
+                this._smoothedBS[key] = dynamicAlpha * raw[key] + (1 - dynamicAlpha) * this._smoothedBS[key];
             }
         }
 
@@ -342,12 +345,12 @@ class DopamineEngine {
     _classifyGesture(f) {
         const scores = {};
 
-        scores.smile         = this._sigmoid(f.smile,        this.thresholds.smile,        10);
+        scores.smile = this._sigmoid(f.smile, this.thresholds.smile, 10);
         scores.eyebrow_raise = this._sigmoid(f.eyebrowRaise, this.thresholds.eyebrowRaise, 10);
-        scores.surprise      = this._sigmoid(f.surprise,     this.thresholds.surprise,     8);
-        scores.squint        = this._sigmoid(f.squint,       this.thresholds.squint,       10);
-        scores.head_tilt     = this._sigmoid(f.headTilt,     this.thresholds.headTilt,     0.25);
-        scores.nod           = this._sigmoid(f.nodScore,     this.thresholds.nod,          0.6);
+        scores.surprise = this._sigmoid(f.surprise, this.thresholds.surprise, 8);
+        scores.squint = this._sigmoid(f.squint, this.thresholds.squint, 10);
+        scores.head_tilt = this._sigmoid(f.headTilt, this.thresholds.headTilt, 0.25);
+        scores.nod = this._sigmoid(f.nodScore, this.thresholds.nod, 0.6);
 
         // Neutral: strong bias — default state unless something clearly active
         const maxOther = Math.max(scores.smile, scores.eyebrow_raise, scores.surprise, scores.squint, scores.head_tilt, scores.nod);
@@ -448,9 +451,9 @@ class DopamineEngine {
     _queueMicroExpression(userGesture, response) {
         // Much more conservative — only subtle, natural micro-expressions
         const micros = {
-            smile:         [{ type: 'blink_slow', delay: 600 }],
-            surprise:      [{ type: 'eyes_widen', delay: 300 }],
-            nod:           [{ type: 'brow_flash', delay: 400 }]
+            smile: [{ type: 'blink_slow', delay: 600 }],
+            surprise: [{ type: 'eyes_widen', delay: 300 }],
+            nod: [{ type: 'brow_flash', delay: 400 }]
         };
 
         const queue = micros[userGesture] || [];
@@ -470,7 +473,7 @@ class DopamineEngine {
     _cosineSimilarity(a, b) {
         let dot = 0, magA = 0, magB = 0;
         for (let i = 0; i < a.length; i++) {
-            dot  += a[i] * b[i];
+            dot += a[i] * b[i];
             magA += a[i] * a[i];
             magB += b[i] * b[i];
         }

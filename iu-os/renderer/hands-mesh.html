@@ -39,20 +39,14 @@
     const SCALE     = 18;
     const MAX_HANDS = 2;
 
-    // Each finger: landmark indices from MCP to tip.
-    // Wrist (0) is prepended at runtime to root each tube at the wrist.
+    // Finger anatomy: landmark indices (MCP→tip) + radii per joint (larger at base)
     const FINGERS = [
-      { idx: [1,  2,  3,  4],  r: 0.34 },  // Thumb
-      { idx: [5,  6,  7,  8],  r: 0.42 },  // Index
-      { idx: [9,  10, 11, 12], r: 0.44 },  // Middle
-      { idx: [13, 14, 15, 16], r: 0.40 },  // Ring
-      { idx: [17, 18, 19, 20], r: 0.32 },  // Pinky
+      { joints: [1, 2, 3, 4],     radii: [0.29, 0.23, 0.18, 0.13] },  // Thumb
+      { joints: [5, 6, 7, 8],     radii: [0.35, 0.27, 0.21, 0.15] },  // Index
+      { joints: [9, 10, 11, 12],  radii: [0.37, 0.29, 0.22, 0.16] },  // Middle
+      { joints: [13, 14, 15, 16], radii: [0.33, 0.25, 0.20, 0.14] },  // Ring
+      { joints: [17, 18, 19, 20], radii: [0.25, 0.20, 0.16, 0.11] },  // Pinky
     ];
-
-    // Palm surface: columns = thumb-MCP → pinky-MCP, rows = wrist → MCPs
-    const PALM_COLS  = 5;   // landmark columns: [1,5,9,13,17]
-    const PALM_ROWS  = 5;   // grid rows from near-wrist to MCP level
-    const PALM_LMS   = [1, 5, 9, 13, 17];
 
     // ── Scene ────────────────────────────────────────────────────────────────
     const scene  = new THREE.Scene();
@@ -60,44 +54,53 @@
     camera.position.set(0, 0, 24);
 
     const renderer = new THREE.WebGLRenderer({
-      alpha:           true,
-      antialias:       true,
-      powerPreference: 'low-power',
+      alpha: true, antialias: true, powerPreference: 'low-power',
     });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setClearColor(0x000000, 0);
     stage.appendChild(renderer.domElement);
 
     // ── Lighting ─────────────────────────────────────────────────────────────
-    scene.add(new THREE.AmbientLight(0x334466, 1.6));
-    const keyLight = new THREE.DirectionalLight(0x4488cc, 2.2);
+    scene.add(new THREE.AmbientLight(0xffeedd, 1.5));
+    const keyLight = new THREE.DirectionalLight(0x99ddff, 2.4);
     keyLight.position.set(3, 6, 10);
     scene.add(keyLight);
-    const rimLight = new THREE.DirectionalLight(0x112244, 1.0);
+    const rimLight = new THREE.DirectionalLight(0xff9966, 1.0);
     rimLight.position.set(-4, -5, -8);
     scene.add(rimLight);
 
-    // ── Materials ────────────────────────────────────────────────────────────
-    // Semi-transparent inner face — DoubleSide so back faces show through
-    const faceMat = new THREE.MeshPhysicalMaterial({
-      color:       0x0a2040,
+    // ── Materials ─────────────────────────────────────────────────────────────
+    // Holographic semi-transparent skin (warm tone, very translucent)
+    const skinMat = new THREE.MeshPhysicalMaterial({
+      color:       0xd4785a,
       transparent: true,
-      opacity:     0.28,
+      opacity:     0.26,
+      roughness:   0.45,
+      metalness:   0.0,
       side:        THREE.DoubleSide,
-      roughness:   0.0,
-      depthWrite:  false,   // See through all layers (hollow-cast look)
+      depthWrite:  false,
     });
 
-    // Bright wireframe drawn on top (same geometry, wireframe mode)
+    // Bright teal wireframe on top — the "hologram" glow
     const wireMat = new THREE.MeshBasicMaterial({
-      color:       0x5ce8ff,
+      color:       0x44ffee,
       wireframe:   true,
       transparent: true,
       opacity:     0.82,
     });
 
-    // ── Helper: map MediaPipe landmark → 3D point ────────────────────────────
-    function mv(p) {
+    // Nail: slightly more opaque, pinkish
+    const nailMat = new THREE.MeshPhysicalMaterial({
+      color:       0xffe4d8,
+      transparent: true,
+      opacity:     0.52,
+      roughness:   0.08,
+      side:        THREE.DoubleSide,
+      depthWrite:  false,
+    });
+
+    // ── Landmark → 3D point ───────────────────────────────────────────────────
+    function lm2v(p) {
       return new THREE.Vector3(
         (0.5 - p.x) * SCALE,
         (0.5 - p.y) * SCALE * 1.05,
@@ -105,119 +108,174 @@
       );
     }
 
-    // ── Placeholder geometry (prevents WebGL errors before first update) ─────
-    function makeDummy() {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(9), 3));
-      g.setIndex([0, 1, 2]);
-      return g;
+    // ── Mesh factories ────────────────────────────────────────────────────────
+    // Create a solid mesh with a shared-geometry wireframe child
+    function withWire(geom, mat) {
+      const solid = new THREE.Mesh(geom, mat);
+      const wire  = new THREE.Mesh(geom, wireMat);
+      solid.add(wire);
+      solid.visible = false;
+      scene.add(solid);
+      return solid;
     }
 
-    // ── Palm grid geometry (pre-allocated, only positions change) ────────────
+    // Sphere at a joint (knuckle / joint bulge)
+    function makeSphere(r) {
+      return withWire(new THREE.SphereGeometry(r, 10, 6), skinMat);
+    }
+
+    // Tapered cylinder: rBot (proximal/large end) → rTop (distal/small end)
+    // Height = 1 unit; we scale Y each frame to match segment length
+    function makeCyl(rBot, rTop) {
+      return withWire(new THREE.CylinderGeometry(rTop, rBot, 1, 10, 1), skinMat);
+    }
+
+    // Fingernail: flattened sphere, positioned & scaled per-frame
+    function makeNail() {
+      const solid = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 5), nailMat);
+      solid.visible = false;
+      scene.add(solid);
+      return solid;
+    }
+
+    // ── Palm geometry (pre-allocated buffer, positions updated each frame) ────
     function buildPalmGeom() {
-      const n        = PALM_ROWS * PALM_COLS;
-      const verts    = new Float32Array(n * 3);
-      const indices  = [];
-
-      for (let r = 0; r < PALM_ROWS - 1; r++) {
-        for (let c = 0; c < PALM_COLS - 1; c++) {
-          const a = r * PALM_COLS + c;
-          const b = a + 1;
-          const d = (r + 1) * PALM_COLS + c;
-          const e = d + 1;
-          indices.push(a, d, b,  b, d, e);
+      const R = 6, C = 5;
+      const verts = new Float32Array(R * C * 3);
+      const idx   = [];
+      for (let r = 0; r < R - 1; r++)
+        for (let c = 0; c < C - 1; c++) {
+          const a = r * C + c, b = a + 1, d = (r + 1) * C + c, e = d + 1;
+          idx.push(a, d, b,  b, d, e);
         }
-      }
-
       const geom = new THREE.BufferGeometry();
       geom.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-      geom.setIndex(indices);
-      return { geom, verts };
+      geom.setIndex(idx);
+      return { geom, verts, R, C };
     }
 
-    // ── Per-hand pool ────────────────────────────────────────────────────────
+    // ── Per-hand pool ─────────────────────────────────────────────────────────
     function buildPool() {
-      // Finger tube meshes
-      const tubes = FINGERS.map(() => {
-        const dummy = makeDummy();
-        const solid = new THREE.Mesh(dummy, faceMat);
-        const wire  = new THREE.Mesh(dummy, wireMat);
-        solid.add(wire);
-        solid.visible = false;
-        scene.add(solid);
-        return { solid, wire, _g: null };
+      const fingers = FINGERS.map(({ joints, radii }) => {
+        const segs = [];
+        const jnts = [];
+
+        // One tapered cylinder per segment between adjacent joints
+        for (let s = 0; s < joints.length - 1; s++)
+          segs.push(makeCyl(radii[s], radii[s + 1]));
+
+        // One sphere per joint (joint bulge)
+        for (let s = 0; s < joints.length; s++)
+          jnts.push(makeSphere(radii[s] * 1.10));
+
+        const nail = makeNail();
+        return { segs, jnts, nail, joints, radii };
       });
 
-      // Palm surface mesh
-      const { geom: pGeom, verts: pVerts } = buildPalmGeom();
-      const palmSolid = new THREE.Mesh(pGeom, faceMat);
-      const palmWire  = new THREE.Mesh(pGeom, wireMat);
-      palmSolid.add(palmWire);
-      palmSolid.visible = false;
-      scene.add(palmSolid);
+      // Palm grid
+      const { geom: pg, verts: pv, R: pR, C: pC } = buildPalmGeom();
+      const palm  = new THREE.Mesh(pg, skinMat);
+      const palmW = new THREE.Mesh(pg, wireMat);
+      palm.add(palmW);
+      palm.visible = false;
+      scene.add(palm);
 
-      return { tubes, palmSolid, pGeom, pVerts };
+      // Wrist sphere
+      const wrist = makeSphere(0.50);
+
+      return { fingers, palm, pg, pv, pR, pC, wrist };
     }
 
     const pools = [buildPool(), buildPool()];
 
-    // ── Per-frame pool update ────────────────────────────────────────────────
+    // ── Reusable temporaries (avoids allocation each frame) ───────────────────
+    const _q   = new THREE.Quaternion();
+    const _up  = new THREE.Vector3(0, 1, 0);
+    const _dir = new THREE.Vector3();
+    const _mid = new THREE.Vector3();
+
+    // ── Per-frame pool update ─────────────────────────────────────────────────
     function updatePool(pool, lm) {
-      // --- Finger tubes ---
-      for (let f = 0; f < FINGERS.length; f++) {
-        const { idx, r } = FINGERS[f];
-        const tube = pool.tubes[f];
+      const pts = lm.map(lm2v);
 
-        // Wrist → MCP → PIP → DIP → TIP (smooth CatmullRom curve through all)
-        const pts = [mv(lm[0]), ...idx.map(i => mv(lm[i]))];
-        const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+      for (const { segs, jnts, nail, joints, radii } of pool.fingers) {
+        const ps = joints.map(i => pts[i]);
 
-        // Create new TubeGeometry (smooth surface along the curve)
-        const newG = new THREE.TubeGeometry(
-          curve,
-          idx.length * 5,  // tubular segments: more = smoother
-          r,               // radius
-          8,               // radial segments (sides of tube cross-section)
-          false            // open ends
-        );
+        // ── Tapered cylinders ────────────────────────────────────────────────
+        for (let s = 0; s < segs.length; s++) {
+          _dir.subVectors(ps[s + 1], ps[s]);
+          const len = _dir.length();
+          if (len < 0.001) { segs[s].visible = false; continue; }
 
-        if (tube._g) tube._g.dispose();
-        tube._g = newG;
-        tube.solid.geometry = newG;
-        tube.wire.geometry  = newG;
-        tube.solid.visible  = true;
-      }
+          _mid.addVectors(ps[s], ps[s + 1]).multiplyScalar(0.5);
+          segs[s].position.copy(_mid);
+          segs[s].scale.set(1, len, 1);   // stretch unit-height cylinder to len
+          _q.setFromUnitVectors(_up, _dir.divideScalar(len));
+          segs[s].quaternion.copy(_q);
+          segs[s].visible = true;
+        }
 
-      // --- Palm grid ---
-      const wrist = mv(lm[0]);
-      const mcps  = PALM_LMS.map(i => mv(lm[i]));
+        // ── Joint spheres ────────────────────────────────────────────────────
+        for (let s = 0; s < jnts.length; s++) {
+          jnts[s].position.copy(ps[s]);
+          jnts[s].visible = true;
+        }
 
-      for (let row = 0; row < PALM_ROWS; row++) {
-        // t: 0.12 (near wrist, slight spread) → 1.0 (at MCPs)
-        const t = 0.12 + 0.88 * (row / (PALM_ROWS - 1));
-
-        for (let col = 0; col < PALM_COLS; col++) {
-          const mcp  = mcps[col];
-          const base = (row * PALM_COLS + col) * 3;
-          pool.pVerts[base]     = wrist.x + (mcp.x - wrist.x) * t;
-          pool.pVerts[base + 1] = wrist.y + (mcp.y - wrist.y) * t;
-          pool.pVerts[base + 2] = wrist.z + (mcp.z - wrist.z) * t;
+        // ── Fingernail ───────────────────────────────────────────────────────
+        const tip  = ps[ps.length - 1];
+        const prev = ps[ps.length - 2];
+        _dir.subVectors(tip, prev);
+        const dlen = _dir.length();
+        if (dlen > 0.001) {
+          _dir.divideScalar(dlen);
+          const nr = radii[radii.length - 1];
+          // Place nail slightly beyond tip, along finger direction
+          nail.position.copy(tip).addScaledVector(_dir, nr * 0.85);
+          // Flatten: wide in XZ, thin in Y (along finger axis)
+          nail.scale.set(nr * 2.0, nr * 0.38, nr * 1.5);
+          _q.setFromUnitVectors(_up, _dir);
+          nail.quaternion.copy(_q);
+          nail.visible = true;
         }
       }
-      pool.pGeom.attributes.position.needsUpdate = true;
-      pool.pGeom.computeVertexNormals();
-      pool.palmSolid.visible = true;
+
+      // ── Palm grid ─────────────────────────────────────────────────────────
+      // Interpolate between wrist and the 5 root landmarks (thumb CMC + 4 MCPs)
+      const wristPt = pts[0];
+      const mcps    = [pts[1], pts[5], pts[9], pts[13], pts[17]];
+
+      for (let r = 0; r < pool.pR; r++) {
+        const t = r / (pool.pR - 1);
+        for (let c = 0; c < pool.pC; c++) {
+          const mcp  = mcps[c];
+          const base = (r * pool.pC + c) * 3;
+          pool.pv[base]     = wristPt.x + (mcp.x - wristPt.x) * t;
+          pool.pv[base + 1] = wristPt.y + (mcp.y - wristPt.y) * t;
+          pool.pv[base + 2] = wristPt.z + (mcp.z - wristPt.z) * t;
+        }
+      }
+      pool.pg.attributes.position.needsUpdate = true;
+      pool.pg.computeVertexNormals();
+      pool.palm.visible = true;
+
+      // Wrist sphere
+      pool.wrist.position.copy(wristPt);
+      pool.wrist.visible = true;
     }
 
     function hidePool(pool) {
-      for (const t of pool.tubes) t.solid.visible = false;
-      pool.palmSolid.visible = false;
+      for (const { segs, jnts, nail } of pool.fingers) {
+        for (const s of segs) s.visible = false;
+        for (const j of jnts) j.visible = false;
+        nail.visible = false;
+      }
+      pool.palm.visible  = false;
+      pool.wrist.visible = false;
     }
 
-    // ── Resize ───────────────────────────────────────────────────────────────
+    // ── Resize ────────────────────────────────────────────────────────────────
     function onResize() {
-      const w = stage.clientWidth;
-      const h = stage.clientHeight;
+      const w = stage.clientWidth, h = stage.clientHeight;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
@@ -225,34 +283,27 @@
     window.addEventListener('resize', onResize);
     onResize();
 
-    // ── Gentle 3D tilt driven by wrist position ──────────────────────────────
+    // ── Gentle 3D tilt driven by wrist position ───────────────────────────────
     const tilt = { x: 0, y: 0 };
 
-    // ── IPC data ─────────────────────────────────────────────────────────────
-    let lastLM   = null;
-    let lastLMAt = 0;
+    // ── IPC state ─────────────────────────────────────────────────────────────
+    let lastLM = null, lastLMAt = 0;
 
-    // ── Render loop ──────────────────────────────────────────────────────────
+    // ── Render loop ───────────────────────────────────────────────────────────
     function animate() {
       const hasHands = !!(lastLM?.hands?.length) &&
                        (performance.now() - lastLMAt) < 200;
 
       if (hasHands) {
         const lm = lastLM.hands;
+        for (let h = 0; h < Math.min(lm.length, MAX_HANDS); h++) updatePool(pools[h], lm[h]);
+        for (let h = lm.length; h < MAX_HANDS; h++) hidePool(pools[h]);
 
-        for (let h = 0; h < Math.min(lm.length, MAX_HANDS); h++) {
-          updatePool(pools[h], lm[h]);
+        const w0 = lm[0]?.[0];
+        if (w0) {
+          tilt.x += ((w0.y - 0.5) * 0.28 - tilt.x) * 0.06;
+          tilt.y += ((0.5 - w0.x) * 0.28 - tilt.y) * 0.06;
         }
-        for (let h = lm.length; h < MAX_HANDS; h++) {
-          hidePool(pools[h]);
-        }
-
-        const wrist = lm[0]?.[0];
-        if (wrist) {
-          tilt.x += ((wrist.y - 0.5) * 0.28 - tilt.x) * 0.06;
-          tilt.y += ((0.5 - wrist.x) * 0.28 - tilt.y) * 0.06;
-        }
-
         stage.classList.add('visible');
       } else {
         for (const p of pools) hidePool(p);
@@ -263,22 +314,22 @@
 
       scene.rotation.x = tilt.x;
       scene.rotation.y = tilt.y;
-
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
     }
 
-    // ── Receive landmarks from hand-tracking source window via IPC ───────────
+    // ── Receive landmarks from hand-tracking window via Electron IPC ──────────
     window.iuOS?.onHandsLandmarks?.((payload) => {
       lastLM = payload;
       if (payload?.hands?.length) lastLMAt = performance.now();
     });
 
-    // ── Cleanup ──────────────────────────────────────────────────────────────
+    // ── Cleanup ───────────────────────────────────────────────────────────────
     window.addEventListener('beforeunload', () => {
       renderer.dispose();
-      faceMat.dispose();
+      skinMat.dispose();
       wireMat.dispose();
+      nailMat.dispose();
     });
 
     requestAnimationFrame(animate);
