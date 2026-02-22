@@ -1397,7 +1397,7 @@ async function setupChatGPT() {
             permissions: ['microphone'], // Pre-grant microphone access
             args: [
                 '--disable-blink-features=AutomationControlled', // Hide automation status
-                '--start-maximized',
+                '--start-minimized',
                 '--no-default-browser-check'
             ],
             ignoreDefaultArgs: ['--enable-automation'] // Hide "Chrome is being controlled by automated test software" bar
@@ -1453,10 +1453,17 @@ async function setupChatGPT() {
                 get: () => undefined
             });
         });
-
         await chatPage.goto('https://chatgpt.com');
 
         console.log('🤖 ChatGPT window opened. Please login if needed.');
+
+        // Hide browser automatically on Mac so it starts minimized / hidden in the background
+        if (process.platform === 'darwin') {
+            const browsers = ['Google Chrome', 'Google Chrome Beta', 'Microsoft Edge', 'Microsoft Edge Beta', 'Chromium'];
+            browsers.forEach(b => {
+                exec(`osascript -e 'try' -e 'tell application "System Events" to set visible of process "${b}" to false' -e 'end try'`, () => { });
+            });
+        }
 
         // Wait for page to be ready, then inject system prompt
         await injectSystemPromptOnStartup();

@@ -392,7 +392,9 @@ function setTheme(theme, shouldBroadcast = true) {
     document.documentElement.setAttribute('data-theme', theme);
 
     document.querySelectorAll('.theme-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.id === `btn-${theme}`);
+        if (btn.id !== 'btn-glass') {
+            btn.classList.toggle('active', btn.id === `btn-${theme}`);
+        }
     });
 
     // Keep face strokes visible after theme switch (fixes light mode invisibility).
@@ -1082,8 +1084,20 @@ function init() {
     // Theme buttons
     const btnDark = document.getElementById('btn-dark');
     const btnLight = document.getElementById('btn-light');
+    const btnGlass = document.getElementById('btn-glass');
+
+    let isGlassMode = false;
+
     if (btnDark) btnDark.addEventListener('click', () => setTheme('dark'));
     if (btnLight) btnLight.addEventListener('click', () => setTheme('light'));
+    if (btnGlass) {
+        btnGlass.addEventListener('click', () => {
+            isGlassMode = !isGlassMode;
+            document.body.classList.toggle('glass-mode', isGlassMode);
+            btnGlass.classList.toggle('active', isGlassMode);
+            showToast(isGlassMode ? 'Modo Transparente: Activado' : 'Modo Transparente: Desactivado');
+        });
+    }
 
     // Mode toggle
     const simpleModeBtn = document.getElementById('btn-simple-mode');
