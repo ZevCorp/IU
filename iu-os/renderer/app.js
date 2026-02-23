@@ -384,6 +384,24 @@ class Face {
     }
 }
 
+let lastBgDark = true;
+
+function updateFaceColorBasedOnContext(isBgDark = lastBgDark) {
+    lastBgDark = isBgDark;
+    if (!face) return;
+    const isSmall = window.currentActiveWindowMode === 'small';
+    const isGlass = document.body.classList.contains('glass-mode');
+
+    if (isSmall || isGlass) {
+        // Contextual real-time background color
+        face.setEyeColor(isBgDark ? '#ffffff' : '#1a1a1a');
+    } else {
+        // Static UI theme color
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
+    }
+}
+
 // =====================================================
 // Theme Toggle
 // =====================================================
@@ -397,10 +415,9 @@ function setTheme(theme, shouldBroadcast = true) {
         }
     });
 
-    // Keep face strokes visible after theme switch (fixes light mode invisibility).
-    if (face) {
-        face.setEyeColor(theme === 'light' ? '#0a0a0a' : '#ffffff');
-    }
+    // Update face color using context logic to respect glass/small constraints
+    updateFaceColorBasedOnContext();
+
     if (window.currentActiveWindowMode) {
         applyVisualMode(window.currentActiveWindowMode);
     }
@@ -520,18 +537,21 @@ function init() {
         document.body.classList.add('mode-small');
         const svgEl = document.getElementById('face-svg');
         if (svgEl) svgEl.setAttribute('viewBox', '50 80 300 340');
-        // Adapt face color to system theme (nativeTheme-based, zero-overhead)
-        if (window.iuOS && window.iuOS.sampleBgLuminance) {
-            window.iuOS.sampleBgLuminance().then(({ isDark }) => {
-                if (face) face.setEyeColor(isDark ? '#ffffff' : '#1a1a1a');
-            }).catch(() => { });
-        }
-        // Also listen for live theme changes
-        if (window.iuOS && window.iuOS.onBgLuminanceChanged) {
-            window.iuOS.onBgLuminanceChanged(({ isDark }) => {
-                if (face) face.setEyeColor(isDark ? '#ffffff' : '#1a1a1a');
-            });
-        }
+    }
+
+
+
+    // Adapt face color to system theme (nativeTheme-based, zero-overhead)
+    if (window.iuOS && window.iuOS.sampleBgLuminance) {
+        window.iuOS.sampleBgLuminance().then(({ isDark }) => {
+            updateFaceColorBasedOnContext(isDark);
+        }).catch(() => { });
+    }
+    // Also listen for live theme changes
+    if (window.iuOS && window.iuOS.onBgLuminanceChanged) {
+        window.iuOS.onBgLuminanceChanged(({ isDark }) => {
+            updateFaceColorBasedOnContext(isDark);
+        });
     }
 
     if (urlParams.get('mode') === 'sticky') {
@@ -739,8 +759,6 @@ function init() {
 
                 // STAGE 1: MILD ATTENTION (Immediate)
                 if (face) {
-                    face.setEyeColor('#ffffff'); // Stay WHITE for mild attention
-
                     if (conversationState === 'idle') {
                         face.transitionTo('mild_attention');
                     }
@@ -754,7 +772,6 @@ function init() {
                     attentionDwellTimeout = setTimeout(async () => {
                         console.log('🧠 CONTEXTUAL INTENT ACTIVATED (Dwell Reached)');
                         if (face && conversationState === 'idle') {
-                            // Keep WHITE eyes in thinking mode
                             face.transitionTo('thinking');
 
                             // Enable deep attention (gestures now active)
@@ -1095,6 +1112,7 @@ function init() {
             isGlassMode = !isGlassMode;
             document.body.classList.toggle('glass-mode', isGlassMode);
             btnGlass.classList.toggle('active', isGlassMode);
+            updateFaceColorBasedOnContext();
             showToast(isGlassMode ? 'Modo Transparente: Activado' : 'Modo Transparente: Desactivado');
         });
     }
@@ -1508,7 +1526,7 @@ function applyVisualMode(mode) {
         if (mode === 'medium') {
             document.body.classList.add('mode-medium');
         }
-        if (face) face.setEyeColor(currentTheme === 'light' ? '#0a0a0a' : '#ffffff');
+        // Live background luminance checking handles eye color
     }
 }
 

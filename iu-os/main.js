@@ -1357,15 +1357,60 @@ ipcMain.on('hand-select-element', async (event, { element, method }) => {
 });
 
 // ============================================
-// Background Luminance — uses Electron's nativeTheme (specialized, zero-overhead)
+// Background Luminance — Uses actual screen pixels + nativeTheme fallback
 // ============================================
-ipcMain.handle('sample-bg-luminance', () => {
-    return { isDark: nativeTheme.shouldUseDarkColors };
-});
 
-// Push live theme changes to main window, small window and hand mesh overlay
-nativeTheme.on('updated', () => {
-    const isDark = nativeTheme.shouldUseDarkColors;
+async function computeRealBgLuminance() {
+    let targetWindow = null;
+    if (currentWindowMode === WINDOW_MODES.SMALL && smallWindow && !smallWindow.isDestroyed()) {
+        targetWindow = smallWindow;
+    } else if (mainWindow && !mainWindow.isDestroyed()) {
+        targetWindow = mainWindow;
+    }
+
+    if (!targetWindow) {
+        return nativeTheme.shouldUseDarkColors;
+    }
+
+    try {
+        const bounds = targetWindow.getBounds();
+        let cx, cy;
+
+        // Sample strictly OUTSIDE the window bounds to prevent sampling our own opaque elements.
+        if (currentWindowMode === WINDOW_MODES.SMALL) {
+            // Sample 15px directly above the small floating circle
+            cx = Math.floor(bounds.x + bounds.width / 2);
+            cy = Math.max(0, bounds.y - 15);
+        } else {
+            // Sample 25px to the left of the sidebar (since sidebar aligns right)
+            cx = Math.max(0, bounds.x - 25);
+            cy = Math.floor(bounds.y + bounds.height / 2);
+        }
+
+        const { screen: nutScreen, Point } = require('@nut-tree-fork/nut-js');
+        const color = await nutScreen.colorAt(new Point(cx, cy));
+        const luminance = 0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B;
+        return luminance < 128; // returns true if background is dark
+    } catch (e) {
+        return nativeTheme.shouldUseDarkColors;
+    }
+}
+
+let lastLuminanceWasDark = null;
+let bgLuminanceInterval = null;
+
+function startBgLuminancePolling() {
+    if (bgLuminanceInterval) clearInterval(bgLuminanceInterval);
+    bgLuminanceInterval = setInterval(async () => {
+        const isDark = await computeRealBgLuminance();
+        if (isDark !== lastLuminanceWasDark) {
+            lastLuminanceWasDark = isDark;
+            broadcastLuminanceChange(isDark);
+        }
+    }, 1500); // 1.5 seconds polling (very lightweight with nut-js)
+}
+
+function broadcastLuminanceChange(isDark) {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('bg-luminance-changed', { isDark });
     }
@@ -1375,6 +1420,22 @@ nativeTheme.on('updated', () => {
     if (handMeshWindow && !handMeshWindow.isDestroyed()) {
         handMeshWindow.webContents.send('bg-luminance-changed', { isDark });
     }
+}
+
+ipcMain.handle('sample-bg-luminance', async () => {
+    const isDark = await computeRealBgLuminance();
+    return { isDark };
+});
+
+// Start polling
+app.whenReady().then(() => {
+    startBgLuminancePolling();
+});
+
+// Fallback theme watcher
+nativeTheme.on('updated', async () => {
+    const isDark = await computeRealBgLuminance();
+    broadcastLuminanceChange(isDark);
 });
 
 // ============================================
@@ -1457,7 +1518,20 @@ async function setupChatGPT() {
 
         console.log('🤖 ChatGPT window opened. Please login if needed.');
 
-        // Hide browser automatically on Mac so it starts minimized / hidden in the background
+        // Hide browser automatically using CDP (Cross-platform and reliable)
+        try {
+            const session = await chatContext.newCDPSession(chatPage);
+            const { windowId } = await session.send('Browser.getWindowForTarget');
+            await session.send('Browser.setWindowBounds', {
+                windowId,
+                bounds: { windowState: 'minimized' }
+            });
+            console.log('📉 Browser window minimized via CDP');
+        } catch (err) {
+            console.warn('⚠️ Could not minimize browser via CDP:', err.message);
+        }
+
+        // Additional macOS fallback to hide the application process
         if (process.platform === 'darwin') {
             const browsers = ['Google Chrome', 'Google Chrome Beta', 'Microsoft Edge', 'Microsoft Edge Beta', 'Chromium'];
             browsers.forEach(b => {
