@@ -494,6 +494,9 @@ function init() {
                                     window.isBootloading = false;
                                     face.transitionTo('smile');
                                     face.lookAt(0.5, 0.5);
+                                    if (window.iuOS && window.iuOS.setWindowMode) {
+                                        window.iuOS.setWindowMode('small');
+                                    }
                                 }, 1500);
                             }, 1000);
                         }), 1500);
@@ -1334,7 +1337,7 @@ function setupManualDrag() {
     let startMouseX, startMouseY;
     let startWinX, startWinY;
 
-    const dragTarget = document.getElementById('app'); // Entire window area
+    const dragTarget = document.body; // Change from #app to body to catch more generically
     if (!dragTarget) return;
 
     const shouldSkipDrag = (target) => {
@@ -1362,7 +1365,15 @@ function setupManualDrag() {
     });
 
     window.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
+        if (!isDragging) {
+            // Determine if mouse is over an interactive element or the face
+            const isInteractive = !!e.target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #face-container, .boot-btn');
+            if (window.iuOS && window.iuOS.setClickThrough) {
+                // Ignore general mouse clicks (pass through to OS) EXCEPT when hovering our active elements
+                window.iuOS.setClickThrough(!isInteractive);
+            }
+            return;
+        }
 
         const deltaX = e.screenX - startMouseX;
         const deltaY = e.screenY - startMouseY;

@@ -99,17 +99,16 @@
     const SCALE = Math.sqrt(REF_H / window.innerHeight); // para grosor visual
     const fwScale = 1 / SCALE;   // factor de grosor de dedos (módulo-level, usado en halo y overlay)
 
-    // S_POS = valor de S que hace que landmarks en x=0/1 lleguen al borde de la cámara
-    // halfW = tan(FOV/2) * z * aspect = tan(30°) * 5 * (W/H)
-    // (0.5 - 0.02) * S = halfW  →  S = halfW / 0.46
+    // S_POS = mapeo 1:1 de coordenadas MediaPipe [0,1] al espacio 3D visible.
+    // Con divisor 0.5, un landmark en x=0 o x=1 toca exactamente el borde de la pantalla.
+    // Esto preserva la realidad: las manos se ven en su posición y tamaño reales.
     let S_POS = computeSPos();
     function computeSPos() {
-      const halfH = Math.tan(Math.PI / 6) * 5; // Altura a z=0
+      const halfH = Math.tan(Math.PI / 6) * 5; // Mitad de la altura visible a z=0
       const halfW = halfH * (window.innerWidth / window.innerHeight);
-      // Hacemos que coincida vertical y lateralmente con los límites de la pantalla independientemente.
       return {
-        x: halfW / 0.48,
-        y: halfH / 0.48
+        x: halfW / 0.5,
+        y: halfH / 0.5
       };
     }
 
@@ -223,25 +222,14 @@
         if (!lms) { this.group.visible = false; return; }
         this.group.visible = true;
 
-        // Reducción dinámica cuando la mano está muy cerca a la cámara
-        let rawSize = Math.hypot(lms[0].x - lms[9].x, lms[0].y - lms[9].y);
-        rawSize = Math.max(0.001, rawSize);
-        let targetScale = 1.0;
-        if (rawSize > 0.12) {
-          let newSize = 0.12 + (rawSize - 0.12) * 0.25; // Comprime significativamente el exceso de tamaño
-          targetScale = newSize / rawSize;
-        }
-
-        let cx = lms[9].x;
-        let cy = lms[9].y;
-
+        // Mapeo 1:1 — sin compresión ni alteración de tamaño.
+        // Los landmarks se colocan directamente en sus coordenadas reales.
         for (let i = 0; i < 21; i++) {
-          // Aplicar compresión de tamaño en base al centro de la mano
-          let mx = cx + (lms[i].x - cx) * targetScale;
-          let my = cy + (lms[i].y - cy) * targetScale;
-          let mz = lms[i].z * targetScale;
-
-          this.tgt[i].set((0.5 - mx) * S_POS.x, (0.5 - my) * S_POS.y, -mz * 3);
+          this.tgt[i].set(
+            (0.5 - lms[i].x) * S_POS.x,
+            (0.5 - lms[i].y) * S_POS.y,
+            -lms[i].z * 3
+          );
           this.cur[i].lerp(this.tgt[i], 0.22);
           this.spheres[i].position.copy(this.cur[i]);
         }

@@ -214,8 +214,8 @@ function destroySmallWindow() {
     }
 }
 
-// Window modes
 const WINDOW_MODES = {
+    BOOTLOADER: 'bootloader',
     SMALL: 'small',       // 110x110 (Sticky style)
     MEDIUM: 'medium',     // 150x50% height
     LARGE: 'large',       // 300xFull height (Traditional Sidebar)
@@ -223,7 +223,7 @@ const WINDOW_MODES = {
 };
 
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'user_settings.json');
-let currentWindowMode = WINDOW_MODES.SMALL;
+let currentWindowMode = WINDOW_MODES.BOOTLOADER;
 
 // Hand mesh style: 'v2' (único estilo activo)
 let handMeshStyle = 'v2';
@@ -262,7 +262,7 @@ const PINCH_MOVE_GAIN = 14.0;
 const PINCH_SMOOTHING = 0.2;
 const PINCH_SNAP_MIN_DISTANCE = 36;
 const PINCH_SNAP_MARGIN = 10;
-let isCompactMode = (currentWindowMode === WINDOW_MODES.SMALL || currentWindowMode === WINDOW_MODES.MEDIUM);
+let isCompactMode = (currentWindowMode === WINDOW_MODES.SMALL || currentWindowMode === WINDOW_MODES.MEDIUM || currentWindowMode === WINDOW_MODES.BOOTLOADER);
 
 function stopPinchSnapAnimation() {
     if (pinchSnapTimer) {
@@ -366,9 +366,15 @@ function getWindowBounds(mode) {
     let w, h, x, y;
 
     switch (mode) {
-        case WINDOW_MODES.SMALL:
+        case WINDOW_MODES.BOOTLOADER:
             w = 700; // Larger window to let shadows breathe and boot buttons fit
             h = 520;
+            x = Math.round((width - w) / 2);
+            y = Math.round((height - h) / 2);
+            break;
+        case WINDOW_MODES.SMALL:
+            w = 250; // Trimmer size for a smaller invisible bounding box
+            h = 250;
             x = Math.round((width - w) / 2);
             y = Math.round((height - h) / 2);
             break;
@@ -401,7 +407,7 @@ function applyWindowMode(mode, animate = true) {
 
     currentWindowMode = mode;
     saveSettings();
-    isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM);
+    isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM || mode === WINDOW_MODES.BOOTLOADER);
 
     // All modes use mainWindow — no independent renderer to preserve VisionManager continuity
     destroySmallWindow(); // Clean up any leftover independent window
@@ -409,21 +415,41 @@ function applyWindowMode(mode, animate = true) {
 
     const modeBounds = getWindowBounds(mode);
     const currentBounds = mainWindow.getBounds();
-    const currentDisplay = screen.getDisplayMatching(currentBounds);
-    const area = currentDisplay.workArea;
 
-    const maxX = area.x + area.width - modeBounds.width;
-    const maxY = area.y + area.height - modeBounds.height;
-    const clampedX = Math.max(area.x, Math.min(currentBounds.x, maxX));
-    const clampedY = Math.max(area.y, Math.min(currentBounds.y, maxY));
+    let bounds;
+    // Enforce center positioning ONLY when animating directly to SMALL mode from another mode (like Bootloader)
+    // Otherwise rely on current bounds / dragging
+    if (mode === WINDOW_MODES.SMALL) {
+        // Find accurate center
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width, height, x: areaX, y: areaY } = primaryDisplay.workArea;
+        const centerX = Math.round(areaX + (width - modeBounds.width) / 2);
+        const centerY = Math.round(areaY + (height - modeBounds.height) / 2);
 
-    const bounds = {
-        width: modeBounds.width,
-        height: modeBounds.height,
-        x: clampedX,
-        y: clampedY
-    };
-    mainWindow.setBounds(bounds, animate);
+        bounds = {
+            width: modeBounds.width,
+            height: modeBounds.height,
+            x: centerX,
+            y: centerY
+        };
+        mainWindow.setBounds(bounds, animate);
+
+        // After the window appears in the center, animate it to the top-left corner
+        const CORNER_MARGIN = 20;
+        const targetX = areaX + CORNER_MARGIN;
+        const targetY = areaY + CORNER_MARGIN;
+        setTimeout(() => {
+            animateMainWindowTo(targetX, targetY);
+        }, 1200);
+    } else {
+        bounds = {
+            width: modeBounds.width,
+            height: modeBounds.height,
+            x: currentBounds.x, // Dont force clamping to screen area so we can drag it freely
+            y: currentBounds.y
+        };
+        mainWindow.setBounds(bounds, animate);
+    }
 
     if (process.platform === 'darwin') {
         // SMALL mode: no system vibrancy — CSS backdrop-filter on the circle handles the effect.
