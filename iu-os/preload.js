@@ -107,7 +107,12 @@ contextBridge.exposeInMainWorld('iuOS', {
 
     // Hand gesture element selection (AX-based)
     getAxSnapshot: () => ipcRenderer.invoke('get-ax-snapshot'),
-    handSelectElement: (payload) => ipcRenderer.send('hand-select-element', payload),
+
+    // "Mirar juntos" mode — single-hand attentional focus
+    toggleMirarJuntos: (on) => ipcRenderer.invoke('toggle-mirar-juntos', on),
+    onMirarJuntosMode: (callback) => ipcRenderer.on('mirar-juntos-mode', (event, on) => callback(on)),
+    onHandElementFocused: (callback) => ipcRenderer.on('hand-element-focused', (event, el) => callback(el)),
+    handElementFocused: (payload) => ipcRenderer.send('hand-element-focused', payload),
 });
 
 

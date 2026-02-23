@@ -1364,21 +1364,28 @@ ipcMain.handle('get-ax-snapshot', async () => {
     return axSnapshotCache;
 });
 
-ipcMain.on('hand-select-element', async (event, { element, method }) => {
-    if (!element?.bbox) return;
-    const { bounds } = screen.getPrimaryDisplay();
-    const cx = Math.round((element.bbox.x + element.bbox.w / 2) * bounds.width);
-    const cy = Math.round((element.bbox.y + element.bbox.h / 2) * bounds.height);
-    console.log(`🖐️ [HandSelect] ${method}: "${element.label}" @ (${cx}, ${cy})`);
-    try {
-        const { mouse, Button, Point } = require('@nut-tree-fork/nut-js');
-        mouse.config.autoDelayMs = 0;
-        await mouse.setPosition(new Point(cx, cy));
-        await mouse.click(Button.LEFT);
-    } catch (e) {
-        // Fallback: osascript click (no requiere nut-js)
-        exec(`osascript -e 'tell application "System Events" to click at {${cx}, ${cy}}'`,
-            err => { if (err) console.warn('[HandSelect] Click fallback failed:', err.message); });
+// ── "Mirar juntos" — modo de foco atencional con dedo índice ────────────────
+
+let mirarJuntosEnabled = false;
+
+ipcMain.handle('toggle-mirar-juntos', (event, on) => {
+    mirarJuntosEnabled = !!on;
+    console.log(`👁️ [MirarJuntos] Mode: ${mirarJuntosEnabled ? 'ON' : 'OFF'}`);
+    // Propagar modo al overlay de manos
+    if (handMeshWindow && !handMeshWindow.isDestroyed()) {
+        handMeshWindow.webContents.send('mirar-juntos-mode', mirarJuntosEnabled);
+    }
+    return mirarJuntosEnabled;
+});
+
+ipcMain.on('hand-element-focused', (event, { element }) => {
+    if (!element) return;
+    const label = element.label || '(sin etiqueta)';
+    const type  = element.type  || '';
+    console.log(`👁️ [MirarJuntos] Elemento enfocado: "${label}" [${type}]`);
+    // Reenviar al mainWindow para que el asistente lo reciba como contexto
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('hand-element-focused', element);
     }
 });
 

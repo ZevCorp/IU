@@ -433,102 +433,103 @@
     }
 
     // ─────────────────────────────────────────
-    // HAND SELECTION — inicializar módulo de gestos
+    // HAND SELECTION — "Mirar juntos" mode
     // ─────────────────────────────────────────
     if (window.HandSelection && window.iuOS) {
       window.HandSelection.init({
         getAxElements: () => window.iuOS.getAxSnapshot?.() ?? Promise.resolve([]),
-        onHover: (_el) => { /* estado ya accesible via getState() en el loop */ },
-        onSelect: (el, method) => {
-          window.iuOS.handSelectElement?.({ element: el, method });
+        onFocus: (el) => {
+          // Enviar elemento enfocado al proceso principal → Brain
+          window.iuOS.handElementFocused?.({ element: el });
         },
-        onPinchRect: (_rect) => { /* estado ya accesible via getState() en el loop */ },
+      });
+
+      // Escuchar activación/desactivación desde el proceso principal
+      window.iuOS.onMirarJuntosMode?.((on) => {
+        window.HandSelection.setMode(on);
       });
     }
 
     // ─────────────────────────────────────────
-    // SELECTION OVERLAY — iluminación de elementos AX
+    // MIRAR JUNTOS OVERLAY — cyan contour glow + dwell arc
     // ─────────────────────────────────────────
 
+    // Color cian fijo para todo lo relacionado con "Mirar juntos"
+    const CYAN_CSS  = '0,245,255';    // #00f5ff
+    const CYAN_HEX  = '#00f5ff';
+
     function drawSelectionOverlay(selState) {
-      if (!selState) return;
+      if (!selState || !selState.enabled) return;
       const W = haloCanvas.width;
       const H = haloCanvas.height;
-      const m = pal.mainCSS;       // '255,255,255' o '10,10,10'
-      const sh = pal.shadowCSS;
 
-      // ── 1. Bounding box del elemento hovered ──────────────────────────────
-      const el = selState.hovered;
-      if (el?.bbox) {
-        const b = el.bbox;
-        const px = b.x * W, py = b.y * H;
-        const pw = b.w * W, ph = b.h * H;
-        const r = 6;                  // radio de esquinas
-        const progress = selState.dwell?.progress ?? 0;
+      // ── 1. Elementos ya seleccionados: contorno cian que se desvanece ─────
+      for (const focused of selState.focused) {
+        if (!focused.el?.bbox) continue;
+        const a = Math.max(0, focused.alpha);
+        const b = focused.el.bbox;
+        const px = b.x * W, py = b.y * H, pw = b.w * W, ph = b.h * H;
+        const r = 7;
 
         ctx.save();
 
-        // Halo exterior difuso
+        // Halo difuso exterior
         ctx.beginPath();
-        ctx.roundRect(px - 4, py - 4, pw + 8, ph + 8, r + 4);
-        ctx.strokeStyle = `rgba(${m},${0.12 + progress * 0.18})`;
-        ctx.lineWidth = 10;
-        ctx.shadowColor = sh;
-        ctx.shadowBlur = 24 + progress * 16;
+        ctx.roundRect(px - 6, py - 6, pw + 12, ph + 12, r + 6);
+        ctx.strokeStyle = `rgba(${CYAN_CSS},${a * 0.25})`;
+        ctx.lineWidth = 12;
+        ctx.shadowColor = CYAN_HEX;
+        ctx.shadowBlur = 28 * a;
         ctx.stroke();
 
-        // Borde principal animado con guiones
+        // Contorno principal
         ctx.beginPath();
         ctx.roundRect(px, py, pw, ph, r);
-        ctx.strokeStyle = `rgba(${m},${0.55 + progress * 0.4})`;
-        ctx.lineWidth = 1.5 + progress;
-        ctx.shadowColor = sh;
-        ctx.shadowBlur = 12 + progress * 8;
-        ctx.setLineDash([8, 5]);
-        ctx.lineDashOffset = -time * 18;
+        ctx.strokeStyle = `rgba(${CYAN_CSS},${a * 0.85})`;
+        ctx.lineWidth = 1.8;
+        ctx.shadowColor = CYAN_HEX;
+        ctx.shadowBlur = 16 * a;
         ctx.stroke();
-        ctx.setLineDash([]);
 
-        // Marcadores de esquina (L-brackets)
-        const cs = Math.min(12, pw * 0.25, ph * 0.25); // tamaño del bracket
-        ctx.strokeStyle = `rgba(${m},${0.9 + progress * 0.1})`;
+        // Brackets de esquina
+        const cs = Math.min(14, pw * 0.25, ph * 0.25);
+        ctx.strokeStyle = `rgba(${CYAN_CSS},${a})`;
         ctx.lineWidth = 2;
-        ctx.shadowBlur = 8;
-        for (const [cx2, cy2, sx2, sy2] of [
+        ctx.shadowBlur = 10 * a;
+        for (const [ex, ey, sx, sy] of [
           [px, py, 1, 1],
           [px + pw, py, -1, 1],
           [px, py + ph, 1, -1],
           [px + pw, py + ph, -1, -1],
         ]) {
           ctx.beginPath();
-          ctx.moveTo(cx2 + sx2 * cs, cy2);
-          ctx.lineTo(cx2, cy2);
-          ctx.lineTo(cx2, cy2 + sy2 * cs);
+          ctx.moveTo(ex + sx * cs, ey);
+          ctx.lineTo(ex, ey);
+          ctx.lineTo(ex, ey + sy * cs);
           ctx.stroke();
         }
 
-        // Etiqueta del elemento
-        if (el.label) {
-          const label = el.label.length > 28 ? el.label.slice(0, 26) + '…' : el.label;
+        // Etiqueta (solo mientras alpha > 0.3)
+        if (focused.el.label && a > 0.3) {
+          const label = focused.el.label.length > 30
+            ? focused.el.label.slice(0, 28) + '…'
+            : focused.el.label;
           ctx.font = 'bold 11px "SF Pro Text", system-ui, sans-serif';
-          ctx.fillStyle = `rgba(${m},0.85)`;
-          ctx.shadowBlur = 6;
-          // Fondo de la etiqueta
           const tw = ctx.measureText(label).width;
           const lx = px + 4, ly = py - 14;
-          ctx.fillStyle = `rgba(${m},0.12)`;
+          ctx.fillStyle = `rgba(${CYAN_CSS},${a * 0.15})`;
           ctx.fillRect(lx - 3, ly - 10, tw + 6, 14);
-          ctx.fillStyle = `rgba(${m},0.9)`;
+          ctx.fillStyle = `rgba(${CYAN_CSS},${a * 0.9})`;
+          ctx.shadowBlur = 6 * a;
           ctx.fillText(label, lx, ly);
         }
 
         ctx.restore();
       }
 
-      // ── 2. Anillo de progreso de dwell (sobre la punta del índice 3D) ─────
+      // ── 2. Arco de progreso de dwell (sobre la punta del índice) ─────────
       const ds = selState.dwell;
-      if (ds && ds.progress > 0) {
-        // Usar la proyección 3D del índice de la mano activa (más precisa que screen coords)
+      if (ds && ds.progress > 0 && ds.progress < 1) {
         let tipScreen = null;
         for (let i = 0; i < 2; i++) {
           if (hand3d[i].group.visible) {
@@ -538,75 +539,31 @@
         }
         if (tipScreen) {
           const tx = tipScreen.x, ty = tipScreen.y;
-          const r1 = 22 * fwScale, r2 = r1 + 4;
+          const r1 = 20 * fwScale;
           const startAngle = -Math.PI / 2;
-          const endAngle = startAngle + ds.progress * Math.PI * 2;
+          const endAngle   = startAngle + ds.progress * Math.PI * 2;
 
           ctx.save();
-          // Track completo (fondo tenue)
+
+          // Track completo tenue
           ctx.beginPath();
           ctx.arc(tx, ty, r1, 0, Math.PI * 2);
-          ctx.strokeStyle = `rgba(${m},0.15)`;
-          ctx.lineWidth = 3;
+          ctx.strokeStyle = `rgba(${CYAN_CSS},0.12)`;
+          ctx.lineWidth = 2.5;
           ctx.stroke();
 
-          // Arco de progreso
+          // Arco de progreso cian
           ctx.beginPath();
           ctx.arc(tx, ty, r1, startAngle, endAngle);
-          ctx.strokeStyle = `rgba(${m},${0.6 + ds.progress * 0.4})`;
-          ctx.lineWidth = 3;
-          ctx.shadowColor = sh;
-          ctx.shadowBlur = 14;
+          ctx.strokeStyle = `rgba(${CYAN_CSS},${0.5 + ds.progress * 0.5})`;
+          ctx.lineWidth = 2.5;
+          ctx.shadowColor = CYAN_HEX;
+          ctx.shadowBlur = 12 + ds.progress * 10;
           ctx.lineCap = 'round';
           ctx.stroke();
 
-          // Pulso al completar
-          if (ds.progress >= 1) {
-            ctx.beginPath();
-            ctx.arc(tx, ty, r2 + Math.sin(time * 20) * 4, 0, Math.PI * 2);
-            ctx.strokeStyle = `rgba(${m},0.5)`;
-            ctx.lineWidth = 1.5;
-            ctx.shadowBlur = 20;
-            ctx.stroke();
-          }
           ctx.restore();
         }
-      }
-
-      // ── 3. Pinch-rect: rectángulo interactivo entre ambas manos ──────────
-      const ps = selState.pinch;
-      if (ps?.rect) {
-        const { x, y, w, h } = ps.rect;
-        const px = x * W, py2 = y * H, pw = w * W, ph = h * H;
-
-        ctx.save();
-        // Área rellena tenue
-        ctx.fillStyle = `rgba(${m},0.04)`;
-        ctx.fillRect(px, py2, pw, ph);
-
-        // Borde punteado
-        ctx.strokeStyle = `rgba(${m},0.65)`;
-        ctx.lineWidth = 1.5;
-        ctx.shadowColor = sh;
-        ctx.shadowBlur = 10;
-        ctx.setLineDash([6, 4]);
-        ctx.lineDashOffset = -time * 20;
-        ctx.strokeRect(px, py2, pw, ph);
-        ctx.setLineDash([]);
-
-        // Indicadores en los centros de pinch (pequeña cruz)
-        for (const p of [ps.p0, ps.p1]) {
-          if (!p) continue;
-          const cx3 = p.x * W, cy3 = p.y * H, sz = 8 * fwScale;
-          ctx.beginPath();
-          ctx.moveTo(cx3 - sz, cy3); ctx.lineTo(cx3 + sz, cy3);
-          ctx.moveTo(cx3, cy3 - sz); ctx.lineTo(cx3, cy3 + sz);
-          ctx.strokeStyle = `rgba(${m},0.9)`;
-          ctx.lineWidth = 2;
-          ctx.shadowBlur = 8;
-          ctx.stroke();
-        }
-        ctx.restore();
       }
     }
 

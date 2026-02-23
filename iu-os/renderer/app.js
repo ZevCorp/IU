@@ -1179,6 +1179,22 @@ function init() {
         });
     }
 
+    // Mirar juntos button — toggle persistent mode
+    let mirarJuntosActive = false;
+    const mirarJuntosBtn = document.getElementById('btn-mirar-juntos');
+    if (mirarJuntosBtn) {
+        mirarJuntosBtn.addEventListener('click', () => {
+            mirarJuntosActive = !mirarJuntosActive;
+            mirarJuntosBtn.style.background = mirarJuntosActive ? '#00f5ff44' : '#00f5ff22';
+            mirarJuntosBtn.style.borderColor = '#00f5ff';
+            mirarJuntosBtn.textContent = mirarJuntosActive ? 'Mirar juntos ●' : 'Mirar juntos';
+            console.log(`👁️ [App] Mirar juntos: ${mirarJuntosActive ? 'ON' : 'OFF'}`);
+            if (window.iuOS && window.iuOS.toggleMirarJuntos) {
+                window.iuOS.toggleMirarJuntos(mirarJuntosActive);
+            }
+        });
+    }
+
     // Transfer button (Top) becomes Conversation Toggle
     const transferBtn = document.getElementById('btn-transfer-top');
     console.log('[DEBUG] Searching for #btn-transfer-top:', transferBtn);
