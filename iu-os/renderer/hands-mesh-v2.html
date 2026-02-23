@@ -92,12 +92,13 @@
 
     // ─────────────────────────────────────────
     // ESCALA DINÁMICA
-    // SCALE (sqrt): grosor visual de dedos/palma (no proporcional a pantalla)
-    // S_POS: cobertura lateral — las manos llegan a los bordes de la pantalla
+    // HAND_SCALE: factor de tamaño visual de las manos (1.0 = tamaño real, <1 = más pequeñas)
+    // S_POS: cobertura lateral — mapeo 1:1 con la pantalla
     // ─────────────────────────────────────────
+    const HAND_SCALE = 0.5;   // ← reduce a la mitad el tamaño visible de las manos
     const REF_H = 600;
     const SCALE = Math.sqrt(REF_H / window.innerHeight); // para grosor visual
-    const fwScale = 1 / SCALE;   // factor de grosor de dedos (módulo-level, usado en halo y overlay)
+    const fwScale = (1 / SCALE) * HAND_SCALE;   // factor de grosor de dedos (halo y overlay)
 
     // S_POS = mapeo 1:1 de coordenadas MediaPipe [0,1] al espacio 3D visible.
     // Con divisor 0.5, un landmark en x=0 o x=1 toca exactamente el borde de la pantalla.
@@ -169,7 +170,7 @@
           const isTip = TIPS.includes(i);
           const isKnuckle = KNUCKLES.includes(i);
           const isWrist = i === 0;
-          const r = isTip ? 0.055 : isWrist ? 0.07 : isKnuckle ? 0.048 : 0.032;
+          const r = (isTip ? 0.055 : isWrist ? 0.07 : isKnuckle ? 0.048 : 0.032) * HAND_SCALE;
 
           const mesh = new THREE.Mesh(
             new THREE.SphereGeometry(r, 10, 10),
@@ -222,13 +223,18 @@
         if (!lms) { this.group.visible = false; return; }
         this.group.visible = true;
 
-        // Mapeo 1:1 — sin compresión ni alteración de tamaño.
-        // Los landmarks se colocan directamente en sus coordenadas reales.
+        // Mapeo 1:1 para posición + HAND_SCALE para tamaño visual.
+        // El centro de la mano (landmark 9) mantiene su posición real;
+        // cada punto se acerca al centro según HAND_SCALE.
+        const cx = lms[9].x;
+        const cy = lms[9].y;
         for (let i = 0; i < 21; i++) {
+          const mx = cx + (lms[i].x - cx) * HAND_SCALE;
+          const my = cy + (lms[i].y - cy) * HAND_SCALE;
           this.tgt[i].set(
-            (0.5 - lms[i].x) * S_POS.x,
-            (0.5 - lms[i].y) * S_POS.y,
-            -lms[i].z * 3
+            (0.5 - mx) * S_POS.x,
+            (0.5 - my) * S_POS.y,
+            -lms[i].z * HAND_SCALE * 3
           );
           this.cur[i].lerp(this.tgt[i], 0.22);
           this.spheres[i].position.copy(this.cur[i]);
