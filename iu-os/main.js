@@ -367,8 +367,8 @@ function getWindowBounds(mode) {
 
     switch (mode) {
         case WINDOW_MODES.SMALL:
-            w = 400; // Larger window to let shadows breathe and boot buttons fit
-            h = 400;
+            w = 700; // Larger window to let shadows breathe and boot buttons fit
+            h = 520;
             x = Math.round((width - w) / 2);
             y = Math.round((height - h) / 2);
             break;
