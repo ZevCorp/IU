@@ -422,7 +422,7 @@ ACCIONES RECOMENDADAS:
 
         try {
             await this._openApp(app);
-            await this._wait(1500);
+            await this._wait(500); // Reduced from 1500ms — app is already focused via AppleScript
 
             let iteration = 0;
             let goalReached = false;
@@ -710,7 +710,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                         try {
                             // Use existing _openApp method
                             await this._openApp(args.app_name);
-                            await this._wait(2000); // Wait for app to open/focus
+                            await this._wait(1000); // Reduced from 2000ms — app opens/focuses faster now
 
                             this.currentApp = args.app_name; // Update context
                             actionSummary = `SWITCH APP to "${args.app_name}"`;
@@ -779,9 +779,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
 
                     // Wait between batched actions
                     if (i < toolCalls.length - 1) {
-                        await this._wait(500);
+                        await this._wait(300);
                     } else {
-                        await this._wait(1000);
+                        await this._wait(300); // Reduced from 1000ms — AX extraction will retry if needed
                     }
                 }
 
@@ -1120,9 +1120,9 @@ CONTEXTO DE VENTANAS:
                 // --- LIQUID BUBBLE LOGIC END ---
 
                 console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${args.px}, ${args.py})`);
-                // Use human-like move for the final approach too
-                await this._humanLikeMove(args.px, args.py, 1.1); // slightly faster for click
-                await this._wait(50);
+                // speedFactor 3.0 → duration = min(800,max(300,dist*0.6))/3.0 ≈ 100–267ms vs old 272–727ms
+                await this._humanLikeMove(args.px, args.py, 3.0);
+                await this._wait(30);
                 await mouse.click(Button.LEFT);
             }
         } catch (e) {
@@ -1225,6 +1225,8 @@ CONTEXTO DE VENTANAS:
                 }
 
                 // Wait briefly then force activate via AppleScript
+                // 100ms is enough — open -a already brings it forward if not running;
+                // activate is only needed to guarantee focus for already-running apps.
                 setTimeout(() => {
                     exec(cmdActivate, (err2) => {
                         if (err2) {
@@ -1233,10 +1235,10 @@ CONTEXTO DE VENTANAS:
                             console.log(`👆 [ScreenAgent] Activated "${normalizedApp}" via AppleScript`);
                         }
 
-                        // Final delay to ensure UI animation completes
-                        setTimeout(resolve, 1000);
+                        // Reduced from 1000ms: AX native addon retries if window not ready yet
+                        setTimeout(resolve, 400);
                     });
-                }, 500);
+                }, 100);
             });
         });
     }
@@ -1407,9 +1409,8 @@ CONTEXTO DE VENTANAS:
                 // --- LIQUID BUBBLE LOGIC END ---
 
                 console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
-                // Use human-like move
-                await this._humanLikeMove(px, py, 1.1);
-                await this._wait(50);
+                await this._humanLikeMove(px, py, 3.0);
+                await this._wait(30);
                 await mouse.click(Button.LEFT);
 
             } else if (fnName === 'type_text') {

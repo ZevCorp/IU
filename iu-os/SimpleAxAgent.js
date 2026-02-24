@@ -274,7 +274,7 @@ class SimpleAxAgent {
         return new Promise((resolve) => {
             execFile('open', ['-a', normalized], (err) => {
                 if (err) console.warn(`⚠️ [SimpleAxAgent] Could not open ${normalized}`);
-                setTimeout(resolve, 2000);
+                setTimeout(resolve, 500); // Reduced from 2000ms — AppleScript activate handles focus quickly
             });
         });
     }

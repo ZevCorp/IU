@@ -913,6 +913,20 @@ Responde en español.`;
                 const args = JSON.parse(call.function.arguments);
                 console.log('🎯 [Chat] Action planned:', args.goal);
 
+                // ── FIX: Cerrar el loop del tool_call en el historial ──────────
+                // 1. Guardar el mensaje del assistant CON su tool_call
+                contextManager.addMessage('assistant', reply || null, 'chat_api', {
+                    tool_calls: message.tool_calls
+                });
+                // 2. Guardar el tool_result inmediatamente para que el historial quede bien formado.
+                //    Sin este paso, el LLM ve un tool_call pendiente y lo re-ejecuta en la
+                //    siguiente llamada en lugar de procesar el nuevo mensaje del usuario.
+                contextManager.addMessage('tool', `Acción iniciada: ${args.goal} en ${args.app}`, 'action_result', {
+                    tool_call_id: call.id,
+                    name: call.function.name
+                });
+                // ───────────────────────────────────────────────────────────────
+
                 // Send reply + action to chat window
                 if (chatWindow && !chatWindow.isDestroyed()) {
                     chatWindow.webContents.send('chat-response', {
@@ -940,7 +954,7 @@ Responde en español.`;
             chatWindow.webContents.send('chat-response', { reply });
         }
 
-        // 2. Add reply to Central Context
+        // 2. Add reply to Central Context (conversational — no tool_call here)
         contextManager.addMessage('assistant', reply || null, 'chat_api', {
             tool_calls: message.tool_calls
         });
@@ -1381,7 +1395,7 @@ ipcMain.handle('toggle-mirar-juntos', (event, on) => {
 ipcMain.on('hand-element-focused', (event, { element }) => {
     if (!element) return;
     const label = element.label || '(sin etiqueta)';
-    const type  = element.type  || '';
+    const type = element.type || '';
     console.log(`👁️ [MirarJuntos] Elemento enfocado: "${label}" [${type}]`);
     // Reenviar al mainWindow para que el asistente lo reciba como contexto
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1547,7 +1561,22 @@ async function setupChatGPT() {
                 get: () => undefined
             });
         });
-        await chatPage.goto('https://chatgpt.com');
+        // Attempt navigation — fail silently if offline (app still starts)
+        try {
+            await chatPage.goto('https://chatgpt.com', { timeout: 8000, waitUntil: 'domcontentloaded' });
+        } catch (navErr) {
+            const isNetworkErr = navErr.message.includes('ERR_INTERNET_DISCONNECTED') ||
+                navErr.message.includes('ERR_NAME_NOT_RESOLVED') ||
+                navErr.message.includes('ERR_CONNECTION_REFUSED') ||
+                navErr.message.includes('net::') ||
+                navErr.message.includes('timeout');
+            if (isNetworkErr) {
+                console.warn('⚠️ [ChatGPT] Sin conexión a internet — el modo voz estará disponible cuando haya red. El resto del app funciona normalmente.');
+                // chatPage stays valid (browser is open, just blank) — no further action needed
+            } else {
+                throw navErr; // Re-throw unexpected errors
+            }
+        }
 
         console.log('🤖 ChatGPT window opened. Please login if needed.');
 
@@ -1577,8 +1606,19 @@ async function setupChatGPT() {
 
     } catch (error) {
         console.error('❌ Failed to setup ChatGPT:', error);
-        const { dialog } = require('electron');
-        dialog.showErrorBox('Error de ChatGPT', 'Error inesperado al configurar la integración con ChatGPT: ' + error.message);
+        // Only show dialog for unexpected errors — not network/connectivity issues
+        const isNetworkErr = error.message && (
+            error.message.includes('ERR_INTERNET_DISCONNECTED') ||
+            error.message.includes('ERR_NAME_NOT_RESOLVED') ||
+            error.message.includes('net::') ||
+            error.message.includes('timeout')
+        );
+        if (!isNetworkErr) {
+            const { dialog } = require('electron');
+            dialog.showErrorBox('Error de ChatGPT', 'Error inesperado al configurar la integración con ChatGPT: ' + error.message);
+        } else {
+            console.warn('⚠️ [ChatGPT] Inicio sin internet — funcionalidad de voz no disponible hasta reconectar.');
+        }
     }
 }
 
@@ -1861,11 +1901,20 @@ let lastImplicitActionContent = '';
 function startSmartConversationMonitoring() {
     if (conversationMonitorInterval) return;
 
-    console.log('🧠 [Smart Monitor] Starting deterministic conversation loop...');
+    console.log('🧠 [Smart Monitor] Starting stability-based conversation loop...');
     lastLoggedUserContent = '';
     lastLoggedAssistantContent = '';
     isActionPending = false;
     lastImplicitActionContent = '';
+
+    // --- Stability tracking (Problema 2: One prompt per full turn) ---
+    // The assistant streams in chunks arriving BEFORE user text is available.
+    // Strategy: poll every 200ms, count consecutive polls where assistant text
+    // does NOT change. When stable for STABLE_POLLS_REQUIRED consecutive polls
+    // AND we have new content → the response stream ended → fire ONE Brain call.
+    let lastSeenAssistantText = '';
+    let assistantStableCount = 0;
+    const STABLE_POLLS_REQUIRED = 3; // 3 × 200ms = 600ms of no change = stream ended
 
     conversationMonitorInterval = setInterval(async () => {
         if (!chatPage || chatPage.isClosed()) return;
@@ -1874,8 +1923,6 @@ function startSmartConversationMonitoring() {
         if (currentVoiceState !== 'active') return;
 
         try {
-            // Evaluates the conversation "tail" in one go
-            // Returns: { user: {text, isStable}, assistant: {text, isStable}, hasNewUser: bool, hasNewAssistant: bool }
             const state = await chatPage.evaluate(({ lastUser, lastAssistant }) => {
                 const userNodes = document.querySelectorAll('[data-message-author-role="user"], [data-testid^="conversation-turn-"] [data-message-author-role="user"]');
                 const assistNodes = document.querySelectorAll('[data-message-author-role="assistant"], [data-testid^="conversation-turn-"] [data-message-author-role="assistant"]');
@@ -1885,13 +1932,10 @@ function startSmartConversationMonitoring() {
 
                 const extractText = (node) => {
                     if (!node) return '';
-                    // Try pre-wrap first (streaming text area)
                     const pre = node.querySelector('.whitespace-pre-wrap');
                     if (pre) return pre.innerText;
-                    // Try markdown
                     const md = node.querySelector('.markdown');
                     if (md) return md.innerText;
-                    // Fallback for older structures or simple text
                     const ps = node.querySelectorAll('p');
                     if (ps.length > 0) return Array.from(ps).map(p => p.innerText).join('\n');
                     return node.innerText;
@@ -1900,8 +1944,7 @@ function startSmartConversationMonitoring() {
                 const userText = extractText(userNode).trim();
                 const assistText = extractText(assistNode).trim();
 
-                // Check stability (heuristic: non-empty & long enough)
-                // Note: ChatGPT uses Unicode ellipsis (…) not ASCII (...) in "Transcribing…"
+                // Note: ChatGPT uses Unicode ellipsis (…) in "Transcribing…"
                 const userStable = userText.length > 0 && !userText.startsWith('Transcribing');
                 const assistStable = assistText.length > 0 && !assistText.startsWith('Thinking');
 
@@ -1914,118 +1957,76 @@ function startSmartConversationMonitoring() {
                 };
             }, { lastUser: lastLoggedUserContent, lastAssistant: lastLoggedAssistantContent });
 
-            // Debug logs if silent
-            if (state.debug.userCount === 0 && state.debug.assistCount === 0) {
-                // console.log('⚠️ [Smart Monitor] No message nodes found! UI changed?');
-            }
+            // ── 1. USER TEXT: capture for UI & memory, but NO Brain call yet ──
+            // We wait until the full turn is complete (assistant stable) before
+            // calling the Brain, so we can send user + assistant together.
+            if (state.isNewUser && state.user.isStable && state.user.text !== lastLoggedUserContent) {
+                lastLoggedUserContent = state.user.text;
+                console.log('🗣️ [User] Captured:', lastLoggedUserContent.substring(0, 50) + '...');
 
-            // 1. Process User Text (Order Priority)
-            if (state.isNewUser && state.user.isStable) {
-                // If text changed, update buffer
-                if (state.user.text !== lastLoggedUserContent) {
-                    lastLoggedUserContent = state.user.text;
-                    console.log('🗣️ [User Stable] Captured:', lastLoggedUserContent.substring(0, 50) + '...');
-
-                    // UI Feedback
-                    if (chatWindow && !chatWindow.isDestroyed()) {
-                        chatWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
-                    }
-                    if (narrationWindow && !narrationWindow.isDestroyed()) {
-                        narrationWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
-                    }
-
-                    // Log to Memory
-                    contextManager.addMessage('user', lastLoggedUserContent, 'voice_transcription');
-
-                    // ACTION PLANNING (User Driven)
-                    // If Assistant hasn't executed anything yet, plan from User text
-                    if (!isActionPending) {
-                        isActionPending = true; // Lock immediately before any async call
-                        // Use classifier / planner
-                        const relevantContext = await contextManager.getRelevantContext(lastLoggedUserContent);
-                        if (actionPlanner) {
-                            const plan = await actionPlanner.planFromExplicit(lastLoggedUserContent, {
-                                recent: contextManager.getHistoryForAPI(5),
-                                longTerm: relevantContext.longTerm
-                            });
-
-                            if (plan && mainWindow) {
-                                console.log('🎯 [Action] Auto-executing plan from User Voice:', plan.goal);
-
-                                // AUTO-EXECUTE (Zero-Click)
-                                if (screenAgent) {
-                                    // Notify UI that action started
-                                    mainWindow.webContents.send('action-started', {
-                                        goal: plan.goal,
-                                        app: plan.app
-                                    });
-                                    screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint)
-                                        .finally(() => { isActionPending = false; });
-                                }
-                                // isActionPending stays true until screenAgent finishes
-                            } else {
-                                console.log('⚠️ [Action] No confident plan generated for:', lastLoggedUserContent);
-                                isActionPending = false; // Reset if no plan
-                            }
-                        } else {
-                            isActionPending = false;
-                        }
-                    }
+                // UI Feedback immediately
+                if (chatWindow && !chatWindow.isDestroyed()) {
+                    chatWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
                 }
+                if (narrationWindow && !narrationWindow.isDestroyed()) {
+                    narrationWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
+                }
+
+                // Memory
+                contextManager.addMessage('user', lastLoggedUserContent, 'voice_transcription');
+
+                // NOTE: Brain call is deferred — fires when assistant stream ends (see below)
             }
 
-            // 2. Process Assistant Text
-            if (state.isNewAssistant && state.assistant.isStable) {
-                const cleanAsst = state.assistant.text;
-                const cleanAsstText = state.assistant.text.replace(/\s+/g, ' ').trim();
-                const lastLoggedAsstClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
+            // ── 2. ASSISTANT TEXT: track stability, fire Brain only on TURN COMPLETE ──
+            if (state.assistant.isStable) {
+                const cleanAsst = state.assistant.text.replace(/\s+/g, ' ').trim();
 
-                // ACTION CHECK (Immediate / Heuristic)
-                // Guard: skip if already triggered for this assistant turn (prevents streaming duplicates)
-                const alreadyTriggeredForThisText = lastImplicitActionContent.length > 0 && cleanAsst.startsWith(lastImplicitActionContent);
-                if (!isActionPending && !alreadyTriggeredForThisText && actionPlanner) {
-                    const lower = cleanAsst.toLowerCase();
-                    if (lower.includes('abro') || lower.includes('voy a') || lower.includes('opening') || lower.includes('starting')) {
-                        isActionPending = true; // Lock immediately before async call
-                        lastImplicitActionContent = cleanAsst.substring(0, 50); // Track prefix to deduplicate streaming
-                        console.log('🧠 [Smart Monitor] Assistant implies action:', cleanAsst.substring(0, 40));
+                if (cleanAsst === lastSeenAssistantText) {
+                    // Text hasn't changed since last poll → count toward stability
+                    if (cleanAsst.length > 0) assistantStableCount++;
+                } else {
+                    // Text changed → stream still in progress, reset counter
+                    lastSeenAssistantText = cleanAsst;
+                    assistantStableCount = 0;
 
-                        const implicitPlan = await actionPlanner.planFromImplicit("User request missing (transcription lag)", cleanAsst, { recent: [] });
-                        if (implicitPlan && mainWindow) {
-                            console.log('🎯 [Action] Auto-executing from Assistant Reply (Backup):', implicitPlan.goal);
-
-                            // AUTO-EXECUTE (Zero-Click)
-                            if (screenAgent) {
-                                mainWindow.webContents.send('action-started', {
-                                    goal: implicitPlan.goal,
-                                    app: implicitPlan.app
-                                });
-                                screenAgent.executeAction(implicitPlan.goal, implicitPlan.app, implicitPlan.stepsHint)
-                                    .finally(() => { isActionPending = false; });
-                            }
-                            // isActionPending stays true until screenAgent finishes
-                        } else {
-                            isActionPending = false; // Reset if no plan
+                    // UI feedback as stream progresses (good UX — shows live text)
+                    const lastClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
+                    if (cleanAsst !== lastClean && cleanAsst.length > lastClean.length) {
+                        if (chatWindow && !chatWindow.isDestroyed()) {
+                            chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
+                        }
+                        if (narrationWindow && !narrationWindow.isDestroyed()) {
+                            narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                         }
                     }
                 }
 
-                // LOGGING & CONTEXT UPDATE
-                // Check if REALLY new content (ignoring whitespace differences)
-                // Also check length to avoid logging substrings during streaming
-                if (cleanAsstText !== lastLoggedAsstClean && cleanAsstText.length > lastLoggedAsstClean.length) {
-                    lastLoggedAssistantContent = state.assistant.text; // Store original
-                    console.log('🗣️ [Assistant Stable] Captured:', cleanAsstText.substring(0, 40) + '...');
+                // ── TURN COMPLETE: assistant stable for N polls AND freshly new ──
+                const lastLoggedClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
+                const isTurnNew = cleanAsst !== lastLoggedClean && cleanAsst.length > 0;
 
+                if (assistantStableCount >= STABLE_POLLS_REQUIRED && isTurnNew) {
+                    // Commit the assistant turn
+                    lastLoggedAssistantContent = state.assistant.text;
+                    assistantStableCount = 0;
+
+                    console.log('✅ [Turn Complete] Stream ended. Firing ONE Brain prompt.');
+                    console.log('   👤 User   :', lastLoggedUserContent.substring(0, 60));
+                    console.log('   🤖 Asst   :', cleanAsst.substring(0, 60));
+
+                    // Memory: log final assistant text
+                    contextManager.addMessage('assistant', state.assistant.text, 'voice_transcription');
+
+                    // Final UI update for assistant (ensure last chunk is shown)
                     if (chatWindow && !chatWindow.isDestroyed()) {
                         chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                     }
                     if (narrationWindow && !narrationWindow.isDestroyed()) {
                         narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                     }
-                    contextManager.addMessage('assistant', state.assistant.text, 'voice_transcription');
 
-                    // Check for JSON tasks
+                    // JSON task extraction (unchanged)
                     const jsonMatch = state.assistant.text.match(/```json\n([\s\S]*?)\n```/);
                     if (jsonMatch && jsonMatch[1]) {
                         try {
@@ -2035,7 +2036,38 @@ function startSmartConversationMonitoring() {
                             }
                         } catch (e) { }
                     }
+
+                    // ── ONE Brain call per turn: user intent + assistant context ──
+                    if (!isActionPending && actionPlanner && lastLoggedUserContent) {
+                        isActionPending = true;
+                        const relevantContext = await contextManager.getRelevantContext(lastLoggedUserContent);
+
+                        // Build combined prompt: user message is primary, assistant response
+                        // is appended as context so the planner understands what already happened.
+                        const combinedPrompt = lastLoggedUserContent +
+                            (cleanAsst ? `\n\n[Respuesta del asistente de voz]: "${cleanAsst}"` : '');
+
+                        const plan = await actionPlanner.planFromExplicit(combinedPrompt, {
+                            recent: contextManager.getHistoryForAPI(5),
+                            longTerm: relevantContext.longTerm
+                        });
+
+                        if (plan && mainWindow) {
+                            console.log('🎯 [Action] Auto-executing plan from complete turn:', plan.goal);
+                            if (screenAgent) {
+                                mainWindow.webContents.send('action-started', { goal: plan.goal, app: plan.app });
+                                screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint)
+                                    .finally(() => { isActionPending = false; });
+                            }
+                        } else {
+                            console.log('ℹ️ [Turn] No action needed for this turn.');
+                            isActionPending = false;
+                        }
+                    }
                 }
+            } else {
+                // Assistant not yet stable ("Thinking…", "Transcribing…") → reset counter
+                assistantStableCount = 0;
             }
 
         } catch (e) {
@@ -2175,6 +2207,14 @@ ipcMain.handle('start-voice-monitoring', () => {
 // ============================================
 ipcMain.handle('get-intent-predictions', async (event, data) => {
     console.log('🧠 [Main] Received request for intent predictions...');
+
+    // ⚠️ GEMINI RATE-LIMIT GUARD: Gemini Free tiene máx 5 req/min.
+    // El dwell-intent consume 2 requests (transcripción + chatCompletion) por cada mirada.
+    // Deshabilitarlo con Gemini evita alcanzar el límite innecesariamente.
+    if (ModelSwitch.PROVIDER === 'gemini') {
+        console.log('⏭️ [Intent] Skipping intent predictions — Gemini provider active (rate-limit protection)');
+        return { success: false, predictions: [] };
+    }
     const { audio, tasks } = data;
     let transcript = "";
 

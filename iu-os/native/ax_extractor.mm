@@ -272,30 +272,24 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
       return js_result;
     }
 
-    // Get window
+    // ── Window Selection Strategy ──────────────────────────────────────────
+    // Priority:
+    //   1. AXFocusedWindow  (reflects what the user is interacting with NOW)
+    //   2. Modal/Sheet detection: if AXWindows has >1 entry AND a smaller
+    //      window exists (sheet/modal), prefer it over the main window.
+    //   3. AXMainWindow  (fallback to main window)
+    //   4. AXWindows[0]  (last resort)
+    //
+    // This keeps the graph single-window (no merging) so the navigable map
+    // remains clean: each (appName, windowTitle) is a distinct node/room.
+    // ──────────────────────────────────────────────────────────────────────
+
     AXUIElementRef window = NULL;
     CFTypeRef windowRef = NULL;
 
-    // Try AXFocusedWindow
-    if (AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute,
-                                      &windowRef) == kAXErrorSuccess &&
-        windowRef) {
-      window = (AXUIElementRef)CFRetain(windowRef);
-      CFRelease(windowRef);
-    }
-
-    // Try AXMainWindow
-    if (!window) {
-      if (AXUIElementCopyAttributeValue(appElement, kAXMainWindowAttribute,
-                                        &windowRef) == kAXErrorSuccess &&
-          windowRef) {
-        window = (AXUIElementRef)CFRetain(windowRef);
-        CFRelease(windowRef);
-      }
-    }
-
-    // Try first window from AXWindows
-    if (!window) {
+    // Step 1: Collect all windows for modal detection
+    NSArray *allWindows = nil;
+    {
       CFTypeRef windowsRef = NULL;
       AXError axError = AXUIElementCopyAttributeValue(
           appElement, kAXWindowsAttribute, &windowsRef);
@@ -305,10 +299,8 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
         result[@"diagnostic"] = @"PERMISSION_DENIED";
         CFRelease(appElement);
 
-        // Convert to JS
         napi_value js_result;
         napi_create_object(env, &js_result);
-
         napi_value js_error, js_diagnostic, js_snapshot;
         napi_create_string_utf8(
             env, "Permission denied - Accessibility access required",
@@ -316,23 +308,93 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
         napi_create_string_utf8(env, "PERMISSION_DENIED", NAPI_AUTO_LENGTH,
                                 &js_diagnostic);
         napi_create_array(env, &js_snapshot);
-
         napi_set_named_property(env, js_result, "error", js_error);
         napi_set_named_property(env, js_result, "diagnostic", js_diagnostic);
         napi_set_named_property(env, js_result, "snapshot", js_snapshot);
-
         return js_result;
       }
 
       if (axError == kAXErrorSuccess && windowsRef &&
           CFGetTypeID(windowsRef) == CFArrayGetTypeID()) {
-        NSArray *windows = (__bridge_transfer NSArray *)windowsRef;
-        if (windows.count > 0) {
-          window = (AXUIElementRef)CFRetain((__bridge CFTypeRef)windows[0]);
-        }
+        allWindows = (__bridge_transfer NSArray *)windowsRef;
       } else if (windowsRef) {
         CFRelease(windowsRef);
       }
+    }
+
+    // Helper block: get CGSize of an AX window element
+    CGSize (^getWindowSize)(id) = ^CGSize(id winObj) {
+      AXUIElementRef winRef = (__bridge AXUIElementRef)winObj;
+      CFTypeRef sRef = NULL;
+      CGSize s = {0, 0};
+      if (AXUIElementCopyAttributeValue(winRef, kAXSizeAttribute, &sRef) ==
+              kAXErrorSuccess &&
+          sRef) {
+        AXValueGetValue((AXValueRef)sRef, (AXValueType)kAXValueCGSizeType, &s);
+        CFRelease(sRef);
+      }
+      return s;
+    };
+
+    // Step 2: Try AXFocusedWindow
+    if (AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute,
+                                      &windowRef) == kAXErrorSuccess &&
+        windowRef) {
+      window = (AXUIElementRef)CFRetain(windowRef);
+      CFRelease(windowRef);
+    }
+
+    // Step 3: Modal/Sheet override
+    // If there are multiple windows, check whether any of them is a modal/sheet
+    // (smaller area than the focused/main window). Sheets in SwiftUI appear as
+    // additional entries and are always narrower+shorter than the parent.
+    // We prefer the smallest window that is NOT the direct same reference as
+    // the already-selected focused window, because that is the active dialog.
+    if (allWindows && allWindows.count > 1) {
+      CGSize focusedSize =
+          window ? getWindowSize((__bridge id)window) : CGSizeMake(0, 0);
+      double focusedArea = focusedSize.width * focusedSize.height;
+
+      AXUIElementRef modalCandidate = NULL;
+      double smallestArea = focusedArea > 0 ? focusedArea : DBL_MAX;
+
+      for (id winObj in allWindows) {
+        AXUIElementRef candidate = (__bridge AXUIElementRef)winObj;
+        // Skip if same reference as already-selected window
+        if (window && CFEqual(candidate, window))
+          continue;
+
+        CGSize candidateSize = getWindowSize(winObj);
+        double candidateArea = candidateSize.width * candidateSize.height;
+
+        // Must be non-trivial (at least 100x100) and SMALLER than current
+        if (candidateArea > 10000 && candidateArea < smallestArea) {
+          smallestArea = candidateArea;
+          modalCandidate = candidate;
+        }
+      }
+
+      if (modalCandidate) {
+        // Release old window ref and adopt the modal/sheet
+        if (window)
+          CFRelease(window);
+        window = (AXUIElementRef)CFRetain(modalCandidate);
+      }
+    }
+
+    // Step 4: Fallback to AXMainWindow
+    if (!window) {
+      if (AXUIElementCopyAttributeValue(appElement, kAXMainWindowAttribute,
+                                        &windowRef) == kAXErrorSuccess &&
+          windowRef) {
+        window = (AXUIElementRef)CFRetain(windowRef);
+        CFRelease(windowRef);
+      }
+    }
+
+    // Step 5: Fallback to first window in AXWindows
+    if (!window && allWindows && allWindows.count > 0) {
+      window = (AXUIElementRef)CFRetain((__bridge CFTypeRef)allWindows[0]);
     }
 
     if (!window) {

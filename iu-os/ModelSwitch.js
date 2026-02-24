@@ -188,11 +188,12 @@ function _convertMessagesToGemini(messages) {
 
         if (msg.role === 'tool') {
             // Tool result → Gemini functionResponse
+            // ContextManager saves the function name in msg.name (via getHistoryForAPI)
             contents.push({
                 role: 'function',
                 parts: [{
                     functionResponse: {
-                        name: msg._functionName || 'unknown',
+                        name: msg.name || msg._functionName || 'unknown',
                         response: { result: msg.content }
                     }
                 }]
