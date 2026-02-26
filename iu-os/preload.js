@@ -113,6 +113,23 @@ contextBridge.exposeInMainWorld('iuOS', {
     onMirarJuntosMode: (callback) => ipcRenderer.on('mirar-juntos-mode', (event, on) => callback(on)),
     onHandElementFocused: (callback) => ipcRenderer.on('hand-element-focused', (event, el) => callback(el)),
     handElementFocused: (payload) => ipcRenderer.send('hand-element-focused', payload),
+
+    // ── Browser Agent (control transversal de páginas web + AgarIO) ──────────
+    // Establece el contexto del browser activo (URL del tab actual)
+    browserSetContext: (payload) => ipcRenderer.invoke('browser-set-context', payload),
+    // Lanza AgarIO: abre browser, escribe nickname, hace click en Play, espera anuncio
+    browserLaunchAgarIO: (payload) => ipcRenderer.invoke('browser-launch-agario', payload),
+    // Extrae los affordances DOM/ARIA de la tab activa (para uso agéntico futuro)
+    browserGetAffordances: () => ipcRenderer.invoke('browser-get-affordances'),
+    // Estado actual del BrowserAgent
+    browserGetStatus: () => ipcRenderer.invoke('browser-get-status'),
+    // Evento: cambio de contexto del browser (activo/inactivo, app detectada)
+    onBrowserContextChanged: (callback) => ipcRenderer.on('browser-context-changed', (event, data) => callback(data)),
+    // Evento: estado del BrowserAgent durante el lanzamiento de AgarIO
+    onBrowserAgentStatus: (callback) => ipcRenderer.on('browser-agent-status', (event, data) => callback(data)),
+    // 🎓 Learning Mode
+    invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
+    onLearningStatus: (callback) => ipcRenderer.on('learning-status', (event, data) => callback(data)),
 });
 
 

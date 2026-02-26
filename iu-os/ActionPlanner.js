@@ -39,6 +39,19 @@ class ActionPlanner {
             {
                 type: "function",
                 function: {
+                    name: "play_agario",
+                    description: "Open AgarIO and prepare it for play. Use this when the user says 'I want to play AgarIO' or similar. It automatically handles the nickname and starts the game.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            nickname: { type: "string", description: "Optional nickname to use. If not provided, a random one will be generated." }
+                        }
+                    }
+                }
+            },
+            {
+                type: "function",
+                function: {
                     name: "schedule_reminder",
                     description: "Schedule a future task or reminder for the user. Use this when the user says 'Remind me to...' or 'In 10 minutes...'.",
                     parameters: {
@@ -226,6 +239,12 @@ NO converses.`;
                     goal: args.goal,
                     app: cleanApp,
                     stepsHint: args.steps_hint
+                };
+            } else if (call.function.name === 'play_agario') {
+                console.log(`🎮 [Planner] Play AgarIO: nickname=${args.nickname}`);
+                return {
+                    type: 'play_agario',
+                    nickname: args.nickname
                 };
             } else if (call.function.name === 'schedule_reminder') {
                 console.log(`⏰ [Planner] Scheduled Reminder: ${args.task} in ${args.minutes} min`);

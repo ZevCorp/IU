@@ -529,18 +529,29 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
   }
 }
 
+// Get current mouse buttons state (mask)
+napi_value GetMouseButtons(napi_env env, napi_callback_info info) {
+  NSUInteger buttons = [NSEvent pressedMouseButtons];
+  napi_value js_buttons;
+  napi_create_uint32(env, (uint32_t)buttons, &js_buttons);
+  return js_buttons;
+}
+
 // Module initialization
 napi_value Init(napi_env env, napi_value exports) {
   napi_status status;
-  napi_value fn;
+  napi_value fn_extract, fn_buttons;
 
-  status = napi_create_function(env, NULL, 0, ExtractAXTree, NULL, &fn);
-  if (status != napi_ok)
-    return NULL;
+  status = napi_create_function(env, NULL, 0, ExtractAXTree, NULL, &fn_extract);
+  if (status == napi_ok) {
+    napi_set_named_property(env, exports, "extract", fn_extract);
+  }
 
-  status = napi_set_named_property(env, exports, "extract", fn);
-  if (status != napi_ok)
-    return NULL;
+  status =
+      napi_create_function(env, NULL, 0, GetMouseButtons, NULL, &fn_buttons);
+  if (status == napi_ok) {
+    napi_set_named_property(env, exports, "getMouseButtons", fn_buttons);
+  }
 
   return exports;
 }

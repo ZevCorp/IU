@@ -70,14 +70,16 @@ if (process.env.ANTHROPIC_API_KEY) {
 
 console.log(`🔀 [ModelSwitch] Provider: ${ModelSwitch.PROVIDER}, Model: ${ModelSwitch.MODELS[ModelSwitch.PROVIDER]?.vision || ModelSwitch.MODELS[ModelSwitch.PROVIDER]?.chat}`);
 
-// Action System: Planner + Screen Agent
 // Action System: Planner + Screen Agent + Brain
 const ActionPlanner = require('./ActionPlanner');
 const ScreenAgent = require('./ScreenAgent');
 const Brain = require('./Brain');
+// Browser Agent: control transversal de páginas web via CDP
+const BrowserAgent = require('./BrowserAgent');
 let actionPlanner = null;
 let screenAgent = null;
 let brain = null;
+let browserAgent = null; // Instanciado tras crear la mainWindow
 
 
 // Auto-updater for automatic updates from GitHub Releases
@@ -98,8 +100,12 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
 }
 
 
+const LearningAgent = require('./LearningAgent');
+
 let mainWindow = null;
 let chatWindow = null;
+let isLearningChatPinned = false;
+let chatWindowBoundsBeforeLearning = null;
 let compactWindow = null; // Mini circular window for action mode
 let handWindow = null; // Floating hand-tracking window (camera source + skeleton)
 let handMeshWindow = null; // 3D bone-mesh visualization window
@@ -321,11 +327,57 @@ function syncChatWindowPosition(animate = false) {
     if (!chatWindow || chatWindow.isDestroyed()) {
         return;
     }
+    if (isLearningChatPinned) {
+        return;
+    }
     const bounds = getChatBounds();
     if (!bounds) {
         return;
     }
     chatWindow.setBounds(bounds, animate);
+}
+
+function getFloatingChatBounds() {
+    const { workArea } = screen.getPrimaryDisplay();
+    const width = 420;
+    const height = Math.min(560, workArea.height - 40);
+    const x = workArea.x + workArea.width - width - 20;
+    const y = workArea.y + 20;
+    return { x, y, width, height };
+}
+
+function pinChatWindowForLearning() {
+    if (!chatWindow || chatWindow.isDestroyed()) {
+        createChatWindow({ floating: true });
+    }
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+
+    if (!isLearningChatPinned) {
+        chatWindowBoundsBeforeLearning = chatWindow.getBounds();
+    }
+
+    isLearningChatPinned = true;
+    chatWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+    chatWindow.setBounds(getFloatingChatBounds(), true);
+    chatWindow.show();
+}
+
+function unpinChatWindowAfterLearning() {
+    if (!isLearningChatPinned) return;
+    isLearningChatPinned = false;
+
+    if (!chatWindow || chatWindow.isDestroyed()) {
+        chatWindowBoundsBeforeLearning = null;
+        return;
+    }
+
+    chatWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    if (chatWindowBoundsBeforeLearning) {
+        chatWindow.setBounds(chatWindowBoundsBeforeLearning, true);
+    } else {
+        syncChatWindowPosition(true);
+    }
+    chatWindowBoundsBeforeLearning = null;
 }
 
 // System Prompt for personality and task formatting
@@ -564,20 +616,21 @@ function createWindow() {
 // Chat Window (Direct text to GPT-5-Mini)
 // ============================================
 
-function createChatWindow() {
+function createChatWindow(options = {}) {
     if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.focus();
         return;
     }
+    const floating = options.floating === true;
 
-    const bounds = getChatBounds();
+    const bounds = floating ? getFloatingChatBounds() : getChatBounds();
 
     chatWindow = new BrowserWindow({
         width: bounds?.width || SIDEBAR_WIDTH,
         height: bounds?.height || 600,
         x: bounds?.x || 0,
         y: bounds?.y || 0,
-        parent: mainWindow,
+        parent: floating ? undefined : mainWindow,
         frame: false,
         transparent: false,
         alwaysOnTop: true,
@@ -606,12 +659,16 @@ function createChatWindow() {
     chatWindow.loadFile('renderer/chat.html');
 
     chatWindow.once('ready-to-show', () => {
-        syncChatWindowPosition(false);
+        if (!isLearningChatPinned) {
+            syncChatWindowPosition(false);
+        }
         chatWindow.show();
     });
 
     chatWindow.on('closed', () => {
         chatWindow = null;
+        isLearningChatPinned = false;
+        chatWindowBoundsBeforeLearning = null;
     });
 
     console.log('💬 Chat window created');
@@ -864,6 +921,9 @@ ipcMain.on('chat-send-message', async (event, text) => {
 
     // 1. Add to Central Context
     contextManager.addMessage('user', text, 'chat_ui');
+    if (LearningAgent.isLearning) {
+        LearningAgent.addTeachingNote(text);
+    }
 
     if (!ModelSwitch.isReady()) {
         if (chatWindow && !chatWindow.isDestroyed()) {
@@ -966,6 +1026,57 @@ Responde en español.`;
         }
     }
 });
+
+// 🎓 Learning Mode IPCs
+ipcMain.handle('learning-start', async (event, { name }) => {
+    LearningAgent.startLearning(name);
+    pinChatWindowForLearning();
+    if (mainWindow) {
+        mainWindow.webContents.send('learning-status', { active: true, name });
+    }
+    return { success: true };
+});
+
+ipcMain.handle('learning-stop', async () => {
+    const synthesized = await LearningAgent.stopLearning();
+    unpinChatWindowAfterLearning();
+    if (mainWindow) {
+        mainWindow.webContents.send('learning-status', { active: false });
+    }
+    return { success: true, synthesized };
+});
+
+// 🎓 Global Mouse Monitoring for Learning Mode
+let lastMouseButtonState = 0;
+let isRecordingClick = false;
+
+setInterval(async () => {
+    if (LearningAgent.isLearning && screenAgent && screenAgent.axAgent && screenAgent.axAgent.nativeAddon) {
+        try {
+            const currentButtons = screenAgent.axAgent.nativeAddon.getMouseButtons();
+
+            // Mask 0x1 is left button (macOS)
+            const leftDown = (currentButtons & 0x1) !== 0;
+            const leftWasDown = (lastMouseButtonState & 0x1) !== 0;
+
+            if (leftDown && !leftWasDown && !isRecordingClick) {
+                isRecordingClick = true;
+                console.log('🖱️ [Learning] Click detected, recording step...');
+
+                // Trigger recording with short description
+                // The LearningAgent will handle hit-test and visual feedback (Green pulse)
+                LearningAgent.recordCurrentState("Click")
+                    .finally(() => {
+                        isRecordingClick = false;
+                    });
+            }
+
+            lastMouseButtonState = currentButtons;
+        } catch (e) {
+            // Silence polling errors
+        }
+    }
+}, 50); // 20Hz polling for responsiveness without high CPU usage
 
 // IPC Handlers
 ipcMain.handle('get-screen-size', () => {
@@ -1132,6 +1243,23 @@ ipcMain.on('main-window-pinch-drag', (event, payload) => {
     const xNorm = Number(payload.xNorm);
     const yNorm = Number(payload.yNorm);
 
+    // ── BROWSER MODE: redirigir pinch al cursor del SO cuando AgarIO está activo ──
+    // El cursor del SO controla la bola de AgarIO nativamente — no se mueve la ventana Electron.
+    if (browserAgent && browserAgent.isAgarIO) {
+        const handBounds = handWindow.getBounds();
+        const primaryDisplay = screen.getPrimaryDisplay();
+        browserAgent.handlePinchMove(
+            { phase, xNorm, yNorm },
+            handBounds,
+            primaryDisplay.size
+        );
+        // Cancelar el drag de ventana si estaba activo
+        mainWindowPinchDrag.active = false;
+        stopPinchSnapAnimation();
+        return; // ← No procesar el movimiento de ventana Electron
+    }
+    // ── FIN BROWSER MODE ─────────────────────────────────────────────────────────
+
     if (phase === 'end') {
         const dragDx = mainWindowPinchDrag.lastHandX - mainWindowPinchDrag.startHandX;
         const dragDy = mainWindowPinchDrag.lastHandY - mainWindowPinchDrag.startHandY;
@@ -1203,6 +1331,71 @@ ipcMain.on('main-window-pinch-drag', (event, payload) => {
     syncChatWindowPosition(false);
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// BROWSER AGENT IPC HANDLERS
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Establece el contexto activo del browser.
+ * Llamado cuando la app detecta que el usuario cambió a un tab específico.
+ * payload: { url: string } | null
+ */
+ipcMain.handle('browser-set-context', (event, payload) => {
+    if (!browserAgent) return { success: false, error: 'BrowserAgent not initialized' };
+    if (payload && payload.url) {
+        browserAgent.setBrowserContext(payload.url);
+        const isAgar = browserAgent.isAgarIO;
+        // Notificar al renderer el estado actual
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('browser-context-changed', {
+                active: true,
+                app: browserAgent.browserContext.app,
+                isAgarIO: isAgar,
+            });
+        }
+        return { success: true, app: browserAgent.browserContext.app, isAgarIO: isAgar };
+    } else {
+        browserAgent.clearBrowserContext();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('browser-context-changed', { active: false });
+        }
+        return { success: true, active: false };
+    }
+});
+
+/**
+ * Lanza el flujo completo de AgarIO:
+ * abre el browser, escribe nickname, hace click en Play, espera el anuncio.
+ */
+ipcMain.handle('browser-launch-agario', async (event, payload) => {
+    if (!browserAgent) return { success: false, error: 'BrowserAgent not initialized' };
+    const nickname = payload?.nickname || null;
+    const result = await browserAgent.launchAgarIO(nickname);
+    return result;
+});
+
+/**
+ * Extrae los affordances (DOM/ARIA) de la tab activa del browser.
+ * Para uso agéntico — base del control transversal de páginas web.
+ */
+ipcMain.handle('browser-get-affordances', async (event) => {
+    if (!browserAgent) return { elements: [], source: 'NOT_INITIALIZED' };
+    return await browserAgent.extractAffordances();
+});
+
+/**
+ * Devuelve el estado actual del BrowserAgent.
+ */
+ipcMain.handle('browser-get-status', (event) => {
+    if (!browserAgent) return { active: false };
+    return {
+        active: browserAgent.browserContext.active,
+        app: browserAgent.browserContext.app,
+        url: browserAgent.browserContext.url,
+        isAgarIO: browserAgent.isAgarIO,
+    };
+});
+
 // App lifecycle
 app.whenReady().then(async () => {
     // Request camera access first
@@ -1229,13 +1422,70 @@ app.whenReady().then(async () => {
     if (ModelSwitch.isReady()) {
         actionPlanner = new ActionPlanner(openai); // Pass openai (can be null if Gemini)
         screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
+        learningAgent = LearningAgent; // It's already an instance from the require if I exported as one
+        learningAgent.setup(screenAgent.axAgent);
         brain = new Brain(mainWindow, actionPlanner, screenAgent);
-        console.log('🎯 Action System initialized (Planner + ScreenAgent + Brain)');
+        console.log('🎯 Action System initialized (Planner + ScreenAgent + Brain + Learning)');
 
         // Initialize Context Manager with OpenAI/Gemini
         contextManager.init(openai);
         console.log('🧠 Context Manager initialized');
     }
+
+    // Initialize Browser Agent (always, independent of LLM availability)
+    browserAgent = new BrowserAgent(mainWindow);
+    browserAgent.on('status', (data) => {
+        // Reenviar estados del BrowserAgent al renderer para feedback visual
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('browser-agent-status', data);
+        }
+    });
+    console.log('🌐 Browser Agent initialized');
+
+    // ── BROWSER CONTEXT AUTO-DETECTION ──
+    // Every 3 seconds, check if Google Chrome is the frontmost app and what URL it has.
+    // This allows seamless transition to "AgarIO mode" without explicit agent trigger.
+    setInterval(async () => {
+        if (!browserAgent) return;
+        const { exec } = require('child_process');
+        const script = `
+            try
+                tell application "System Events"
+                    set frontAppName to name of first application process whose frontmost is true
+                end tell
+                set chromeUrl to ""
+                if frontAppName is "Google Chrome" then
+                    tell application "Google Chrome"
+                        set chromeUrl to URL of active tab of front window
+                    end tell
+                end if
+                return frontAppName & "|" & chromeUrl
+            on error
+                return "unknown|"
+            end try
+        `;
+        exec(`osascript -e '${script}'`, (err, stdout) => {
+            if (err) return;
+            const parts = stdout.trim().split('|');
+            const app = parts[0];
+            const url = parts[1];
+
+            if (app === 'Google Chrome' && url) {
+                if (url !== browserAgent.browserContext.url) {
+                    browserAgent.setBrowserContext(url);
+                    if (browserAgent.isAgarIO && mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('browser-agent-status', { phase: 'ready', message: 'Modo AgarIO activo. Usa la pinza!' });
+                    }
+                }
+            } else if (browserAgent.browserContext.active) {
+                // User switched to a native app or closed Chrome tab
+                browserAgent.clearBrowserContext();
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('browser-context-changed', { active: false });
+                }
+            }
+        });
+    }, 3000);
 
     // Check for updates (only in production)
     if (app.isPackaged) {
@@ -1975,6 +2225,11 @@ function startSmartConversationMonitoring() {
                 // Memory
                 contextManager.addMessage('user', lastLoggedUserContent, 'voice_transcription');
 
+                // 🎓 Learning Mode: Capture Step
+                if (LearningAgent.isLearning) {
+                    LearningAgent.recordCurrentState(lastLoggedUserContent);
+                }
+
                 // NOTE: Brain call is deferred — fires when assistant stream ends (see below)
             }
 
@@ -2038,7 +2293,10 @@ function startSmartConversationMonitoring() {
                     }
 
                     // ── ONE Brain call per turn: user intent + assistant context ──
-                    if (!isActionPending && actionPlanner && lastLoggedUserContent) {
+                    if (LearningAgent.isLearning) {
+                        console.log('🎓 [Learning] Skipping action planner during learning mode.');
+                        isActionPending = false;
+                    } else if (!isActionPending && actionPlanner && lastLoggedUserContent) {
                         isActionPending = true;
                         const relevantContext = await contextManager.getRelevantContext(lastLoggedUserContent);
 
@@ -2053,11 +2311,25 @@ function startSmartConversationMonitoring() {
                         });
 
                         if (plan && mainWindow) {
-                            console.log('🎯 [Action] Auto-executing plan from complete turn:', plan.goal);
-                            if (screenAgent) {
+                            if (plan.type === 'play_agario') {
+                                console.log('🎯 [Action] Auto-playing AgarIO');
+                                if (browserAgent) {
+                                    browserAgent.launchAgarIO(plan.nickname).finally(() => { isActionPending = false; });
+                                } else { isActionPending = false; }
+                            } else if (plan.type === 'schedule') {
+                                console.log('🎯 [Action] Auto-scheduling reminder');
+                                if (brain) {
+                                    const date = new Date(Date.now() + (plan.minutes * 60 * 1000));
+                                    brain.scheduleTask(plan.task, date);
+                                }
+                                isActionPending = false;
+                            } else if (screenAgent) {
+                                console.log('🎯 [Action] Auto-executing screen plan:', plan.goal);
                                 mainWindow.webContents.send('action-started', { goal: plan.goal, app: plan.app });
                                 screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint)
                                     .finally(() => { isActionPending = false; });
+                            } else {
+                                isActionPending = false;
                             }
                         } else {
                             console.log('ℹ️ [Turn] No action needed for this turn.');
@@ -2332,6 +2604,16 @@ ipcMain.handle('execute-explicit-action', async (event, userText) => {
                 return { success: true, scheduled: true, task };
             }
             return { success: false, error: 'Brain offline' };
+        }
+
+        if (plan.type === 'play_agario') {
+            console.log(`🎮 [Action] Playing AgarIO: nickname=${plan.nickname}`);
+            if (browserAgent) {
+                // Return immediately - the process is handled in the background
+                browserAgent.launchAgarIO(plan.nickname);
+                return { success: true, playing: true };
+            }
+            return { success: false, error: 'BrowserAgent not initialized' };
         }
 
         // Step 2: Send plan to renderer for user confirmation

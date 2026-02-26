@@ -152,6 +152,16 @@ const PRESETS = {
         eyeOpenness: 0.90, eyeSquint: 0.10, leftBrowHeight: 3, rightBrowHeight: 3, leftBrowCurve: 0.3, rightBrowCurve: 0.3,
         mouthCurve: 0.75, mouthWidth: 1.05, leftCornerHeight: 0.3, rightCornerHeight: 0.3, mouthOpenness: 0,
         leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 0
+    },
+    happy: {
+        eyeOpenness: 1.1, eyeSquint: -0.1, leftBrowHeight: 5, rightBrowHeight: 5, leftBrowCurve: 0.6, rightBrowCurve: 0.6,
+        mouthCurve: 0.8, mouthWidth: 1.1, leftCornerHeight: 0.5, rightCornerHeight: 0.5, mouthOpenness: 0.1,
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 5
+    },
+    idle: {
+        eyeOpenness: 0.88, eyeSquint: 0.12, leftBrowHeight: -0.5, rightBrowHeight: 3, leftBrowCurve: 0.15, rightBrowCurve: 0.45,
+        mouthCurve: 0.55, mouthWidth: 0.95, leftCornerHeight: 0.05, rightCornerHeight: 0.45, mouthOpenness: 0,
+        leftEyeOpenness: -1, rightEyeOpenness: -1, headTilt: 4
     }
 };
 
@@ -218,6 +228,14 @@ class Face {
         } else {
             this.thinkingLabel.classList.add('hidden');
         }
+    }
+
+    setEyeColor(color) {
+        if (this.leftEyeLine) this.leftEyeLine.style.stroke = color;
+        if (this.rightEyeLine) this.rightEyeLine.style.stroke = color;
+        if (this.leftEyebrow) this.leftEyebrow.style.stroke = color;
+        if (this.rightEyebrow) this.rightEyebrow.style.stroke = color;
+        if (this.mouth) this.mouth.style.stroke = color;
     }
 
     render() {
@@ -456,6 +474,10 @@ const wakeUpSound = new Audio('assets/hey_pss_pss.mp3');
 
 function init() {
     face = new Face();
+
+    // Global exposure for StickyFaceController
+    window.face = face;
+    window.setExpression = (name) => face.transitionTo(name);
 
     // Check for special window modes loaded via query param
     const urlParams = new URLSearchParams(window.location.search);
@@ -1175,6 +1197,36 @@ function init() {
                 window.iuOS.activateNarrationSpace();
             } else {
                 console.error('❌ iuOS.activateNarrationSpace API not available');
+            }
+        });
+    }
+
+    // Learning Mode button
+    let isLearning = false;
+    const btnLearningMode = document.getElementById('btn-learning-mode');
+    if (btnLearningMode) {
+        btnLearningMode.addEventListener('click', async () => {
+            isLearning = !isLearning;
+            if (isLearning) {
+                btnLearningMode.textContent = 'Parar Aprendizaje';
+                btnLearningMode.style.background = '#ff3b3022';
+                btnLearningMode.style.borderColor = '#ff3b30';
+                btnLearningMode.style.color = '#ff3b30';
+                console.log('🎓 [App] Starting Learning Mode...');
+                if (window.iuOS && window.iuOS.invoke) {
+                    await window.iuOS.invoke('learning-start', { name: 'Workflow ' + new Date().toLocaleTimeString() });
+                }
+            } else {
+                btnLearningMode.textContent = 'Modo Aprendizaje';
+                btnLearningMode.style.background = '#ff950022';
+                btnLearningMode.style.borderColor = '#ff9500';
+                btnLearningMode.style.color = '#ff9500';
+                console.log('🎓 [App] Stopping Learning Mode...');
+                if (window.iuOS && window.iuOS.invoke) {
+                    const result = await window.iuOS.invoke('learning-stop');
+                    console.log('🎓 Learning synthesized:', result.synthesized);
+                    alert('Aprendizaje finalizado y sintetizado con éxito.');
+                }
             }
         });
     }
@@ -2286,6 +2338,42 @@ if (window.iuOS && window.iuOS.onActionStatus) {
                 if (face) face.transitionTo('neutral', 400);
                 setTimeout(hideCompactPopup, 2000);
                 break;
+        }
+    });
+}
+
+// 🎓 Listen for Learning Mode updates
+if (window.iuOS && window.iuOS.onLearningStatus) {
+    window.iuOS.onLearningStatus((data) => {
+        console.log('[App] Learning status:', data);
+        if (data.active) {
+            showCompactPopup(`🎓 Aprendiendo: ${data.name || 'Workflow'}`);
+            if (face) face.transitionTo('thinking', 600);
+            document.body.classList.add('learning-mode');
+        } else {
+            showCompactPopup('🎓 Aprendizaje completado');
+            if (face) face.transitionTo('smile', 800);
+            document.body.classList.remove('learning-mode');
+            setTimeout(hideCompactPopup, 3000);
+        }
+    });
+}
+
+// 🌐 Listen for Browser Agent status
+if (window.iuOS && window.iuOS.onBrowserAgentStatus) {
+    window.iuOS.onBrowserAgentStatus((data) => {
+        console.log('[App] Browser Agent status:', data);
+        if (data.message) {
+            showCompactPopup(data.message);
+            if (data.phase === 'ready') {
+                if (face) {
+                    face.transitionTo('smile', 600);
+                    face.setEyeColor('#00ffcc'); // Color especial para modo browser/AgarIO
+                }
+            } else if (data.phase === 'active') {
+                if (face) face.transitionTo('thinking', 600);
+            }
+            setTimeout(hideCompactPopup, 4000);
         }
     });
 }

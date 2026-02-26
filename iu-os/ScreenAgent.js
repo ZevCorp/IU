@@ -306,7 +306,24 @@ ACCIONES RECOMENDADAS:
      * Returns standard elements list or null on failure.
      */
     /**
+     * Public method to extract screen context (AX Tree).
+     * Used by main.js for persistent context capture.
+     */
+    async extract(appName = null) {
+        const detection = await this._runAxDetection(appName);
+        if (!detection) return { app: null, window: null, tree: [], elements: [] };
+
+        return {
+            app: detection.app,
+            window: detection.window,
+            tree: detection.elements, // Standard format
+            elements: detection.elements
+        };
+    }
+
+    /**
      * Run intelligent AX detection using AxExtractionAgent
+
      * The agent will use GPT-4.1 to diagnose problems and search the web for solutions
      */
     async _runAxDetection(appName = null) {

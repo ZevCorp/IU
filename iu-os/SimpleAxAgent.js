@@ -11,13 +11,15 @@ const fs = require('fs');
 
 class SimpleAxAgent {
     constructor() {
+        const isPackaged = __dirname.includes('app.asar');
+        this.axScriptPath = this._resolveAxScriptPath();
+
         // Try to load native addon
         this.nativeAddon = null;
         this.useNative = false;
 
         try {
             // In packaged app, the build dir is in Resources (extraResources)
-            const isPackaged = __dirname.includes('app.asar');
             let addonPath;
 
             if (isPackaged) {
@@ -43,19 +45,34 @@ class SimpleAxAgent {
 
         // Fallback: osascript path (old method)
         if (!this.useNative) {
-            const isPackaged = __dirname.includes('app.asar');
-            if (isPackaged) {
-                this.axScriptPath = path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'ax-reader.js');
-            } else {
-                this.axScriptPath = path.join(__dirname, 'ax-reader.js');
-            }
-
             console.log(`📂 [SimpleAxAgent] Fallback to osascript: ${this.axScriptPath}`);
+        }
 
-            if (!fs.existsSync(this.axScriptPath)) {
-                console.error(`❌ [SimpleAxAgent] Script not found at: ${this.axScriptPath}`);
+        if (this.axScriptPath) {
+            console.log(`📍 [SimpleAxAgent] Hit-test script: ${this.axScriptPath}`);
+        } else {
+            console.error('❌ [SimpleAxAgent] ax-reader script not found in known locations');
+        }
+    }
+
+    _resolveAxScriptPath() {
+        const candidates = [];
+
+        candidates.push(path.join(__dirname, 'ax-reader.js'));
+        if (__dirname.includes('app.asar')) {
+            candidates.push(path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'ax-reader.js'));
+        }
+        if (process.resourcesPath) {
+            candidates.push(path.join(process.resourcesPath, 'ax-reader.js'));
+            candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'ax-reader.js'));
+        }
+
+        for (const candidate of candidates) {
+            if (candidate && fs.existsSync(candidate)) {
+                return candidate;
             }
         }
+        return null;
     }
 
     /**
@@ -120,6 +137,43 @@ class SimpleAxAgent {
     }
 
     /**
+     * Perform hit-testing to find the element under the given coordinates
+     */
+    async hitTest(x, y, appName = null) {
+        console.log(`🎯 [SimpleAxAgent] Hit-testing at (${x}, ${y})...`);
+        if (!this.axScriptPath) {
+            return { error: 'AX_HITTEST_SCRIPT_NOT_FOUND', diagnostic: 'NO_HITTEST_SCRIPT', snapshot: [] };
+        }
+
+        // Always use osascript for hit-testing for now as it's easier to verify
+        // (Native addon would need update to support it)
+        return new Promise((resolve) => {
+            const args = ['-l', 'JavaScript', this.axScriptPath];
+            if (appName) args.push(appName);
+            else args.push(""); // Empty app name means frontmost
+
+            args.push(x.toString());
+            args.push(y.toString());
+
+            execFile('osascript', args, {
+                timeout: 5000,
+                maxBuffer: 1024 * 512
+            }, (err, stdout, stderr) => {
+                if (err) {
+                    resolve({ error: err.message, snapshot: [], stderr });
+                    return;
+                }
+                try {
+                    const result = JSON.parse(stdout);
+                    resolve(result);
+                } catch (e) {
+                    resolve({ error: 'Parse error', snapshot: [], stdout, stderr });
+                }
+            });
+        });
+    }
+
+    /**
      * Ensure app is open and focused
      */
     async _ensureAppReady(appName) {
@@ -173,6 +227,14 @@ class SimpleAxAgent {
 
         // FALLBACK: osascript method (old way)
         return new Promise((resolve) => {
+            if (!this.axScriptPath) {
+                resolve({
+                    error: 'AX extraction script not found',
+                    diagnostic: 'NO_AX_SCRIPT',
+                    snapshot: []
+                });
+                return;
+            }
             const args = ['-l', 'JavaScript', this.axScriptPath];
             if (appName) {
                 args.push(appName);

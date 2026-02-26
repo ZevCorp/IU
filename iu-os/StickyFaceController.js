@@ -32,32 +32,28 @@ class StickyFaceController {
         const cursor = getCursorScreenPoint();
 
         this.window = new BrowserWindow({
-            width: 110, // Increased size for more visual space
+            width: 350, // Increased to fit text
             height: 110,
             x: cursor.x + this.offset.x,
             y: cursor.y + this.offset.y,
             frame: false,
-            transparent: true, // Required for circular shape
-            // backgroundColor: '#000000', // Removed: handled by CSS
+            transparent: true,
             hasShadow: false,
             alwaysOnTop: true,
             resizable: false,
-            movable: false, // Moved programmatically
-            focusable: false, // Don't steal focus
+            movable: false,
+            focusable: false,
             skipTaskbar: true,
-            // vibrancy: 'hud' REMOVED to avoid transparency issues
-            // visualEffectState: 'active',
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
-                backgroundThrottling: false // Keep animating in background
+                backgroundThrottling: false
             }
         });
 
-        // Make it ignore mouse events so clicks pass through
+        // Make it ignore mouse events
         this.window.setIgnoreMouseEvents(true);
 
-        // macOS: Ensure it stays on top of everything including full screen apps
         if (process.platform === 'darwin') {
             this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
             this.window.setAlwaysOnTop(true, 'screen-saver', 2);
@@ -67,33 +63,68 @@ class StickyFaceController {
         this.window.loadURL(`file://${path.join(__dirname, 'renderer/index.html')}?mode=sticky`);
 
         this.window.once('ready-to-show', () => {
-            // FORCE CSS OVERRIDE for Sticky Mode Background + hide all UI buttons
+            // FORCE CSS OVERRIDE for Sticky Mode
             this.window.webContents.insertCSS(`
                 body, #app {
-                     background-color: rgba(0, 0, 0, 0.35) !important;
-                     backdrop-filter: blur(20px) !important;
-                     -webkit-backdrop-filter: blur(20px) !important;
-                     border-radius: 20px !important;
+                     background: transparent !important;
+                     overflow: hidden !important;
                 }
-                /* Aggressively hide all UI elements — do not rely on body.sticky-mode class timing */
+                #face-container {
+                    background-color: rgba(0, 0, 0, 0.5) !important;
+                    backdrop-filter: blur(20px) !important;
+                    -webkit-backdrop-filter: blur(20px) !important;
+                    border-radius: 50% !important;
+                    width: 100px !important;
+                    height: 100px !important;
+                    position: absolute !important;
+                    left: 5px !important;
+                    top: 5px !important;
+                }
+                #floating-message {
+                    position: absolute;
+                    left: 115px;
+                    top: 25px;
+                    background: rgba(0, 0, 0, 0.75);
+                    backdrop-filter: blur(15px);
+                    color: white;
+                    padding: 8px 14px;
+                    border-radius: 12px;
+                    font-family: 'Outfit', sans-serif;
+                    font-size: 14px;
+                    width: 200px;
+                    opacity: 0;
+                    transform: translateX(-10px);
+                    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    pointer-events: none;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                }
+                #floating-message.visible {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
                 #btn-chat-toggle, #btn-voice-icon, #btn-transfer-top,
                 .transfer-btn-top, #menu-toggle, .menu-toggle,
                 #controls-panel, #nav-hud, #intent-carousel,
                 #transcript-container, #checklist-container, #neural-canvas {
                     display: none !important;
-                    opacity: 0 !important;
-                    pointer-events: none !important;
                 }
             `);
-            // Inject styles for the specific look requested:
-            // "rostro vectorial en blanco, el blur un poco opaco, medio oscuro"
-            // We use the query param to trigger CSS/JS changes in value, but we can also inject specific overrides here if needed.
 
-            // Set face color to WHITE because background is black
+            // Inject message element and controller
             this.window.webContents.executeJavaScript(`
-                 if (window.uFace) {
-                     window.uFace.setEyeColor('#ffffff');
-                 }
+                const msg = document.createElement('div');
+                msg.id = 'floating-message';
+                document.body.appendChild(msg);
+                
+                window.showStickyMessage = (text) => {
+                    msg.textContent = text;
+                    msg.classList.add('visible');
+                };
+                window.hideStickyMessage = () => {
+                    msg.classList.remove('visible');
+                };
+                if (window.uFace) window.uFace.setEyeColor('#ffffff');
             `);
 
             this.window.show();
@@ -140,7 +171,26 @@ class StickyFaceController {
 
     setExpression(expression) {
         if (this.window && !this.window.isDestroyed()) {
-            this.window.webContents.executeJavaScript(`window.setExpression('${expression}')`);
+            this.window.webContents.executeJavaScript(`if (window.setExpression) window.setExpression('${expression}')`);
+        }
+    }
+
+    setFaceColor(color) {
+        if (this.window && !this.window.isDestroyed()) {
+            this.window.webContents.executeJavaScript(`if (window.face) face.setEyeColor('${color}')`);
+        }
+    }
+
+    showMessage(text, duration = 3000) {
+        if (this.window && !this.window.isDestroyed()) {
+            const safeText = JSON.stringify(String(text || ''));
+            this.window.webContents.executeJavaScript(`window.showStickyMessage(${safeText})`);
+            if (this.messageTimeout) clearTimeout(this.messageTimeout);
+            this.messageTimeout = setTimeout(() => {
+                if (this.window && !this.window.isDestroyed()) {
+                    this.window.webContents.executeJavaScript(`window.hideStickyMessage()`);
+                }
+            }, duration);
         }
     }
 }
