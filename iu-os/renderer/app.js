@@ -1231,6 +1231,63 @@ function init() {
         });
     }
 
+    // View Learnings button + modal
+    const btnViewLearnings = document.getElementById('btn-view-learnings');
+    const learningsModal = document.getElementById('learnings-modal');
+    const learningsList = document.getElementById('learnings-list');
+    const btnCloseLearnings = document.getElementById('btn-close-learnings');
+
+    const closeLearningsModal = () => {
+        if (learningsModal) learningsModal.style.display = 'none';
+    };
+
+    const renderLearningCard = (wf) => {
+        const steps = Array.isArray(wf.steps) ? wf.steps : [];
+        const topSteps = steps.slice(0, 4).map((s) => {
+            const target = s.target || 'paso';
+            const purpose = s.purpose || '';
+            return `<div style="font-size:12px; color:#c9d2dc; line-height:1.35;">• ${target}${purpose ? ` — ${purpose}` : ''}</div>`;
+        }).join('');
+
+        return `
+          <div style="border:1px solid rgba(255,255,255,0.12); border-radius:10px; padding:10px 12px; background:rgba(255,255,255,0.02);">
+            <div style="font-size:15px; font-weight:600; color:#f2f5f7;">${wf.workflowName || 'Aprendizaje'}</div>
+            <div style="font-size:12px; color:#9fb0c1; margin-top:3px;">${wf.summary || 'Sin resumen'}</div>
+            <div style="font-size:11px; color:#7f8b96; margin-top:6px;">Apps: ${(wf.apps || []).join(', ') || 'N/A'} · Pasos: ${steps.length}</div>
+            <div style="margin-top:8px; display:flex; flex-direction:column; gap:4px;">${topSteps}</div>
+          </div>
+        `;
+    };
+
+    const openLearningsModal = async () => {
+        if (!window.iuOS || !window.iuOS.listLearnedWorkflows || !learningsModal || !learningsList) return;
+        learningsModal.style.display = 'flex';
+        learningsList.innerHTML = '<div style="font-size:12px; color:#9fb0c1;">Cargando aprendizajes...</div>';
+        try {
+            const result = await window.iuOS.listLearnedWorkflows();
+            const workflows = (result && result.success && Array.isArray(result.workflows)) ? result.workflows : [];
+            if (workflows.length === 0) {
+                learningsList.innerHTML = '<div style="font-size:12px; color:#9fb0c1;">No hay aprendizajes guardados todavía.</div>';
+                return;
+            }
+            learningsList.innerHTML = workflows.map(renderLearningCard).join('');
+        } catch (e) {
+            learningsList.innerHTML = `<div style="font-size:12px; color:#ff8f8f;">Error cargando aprendizajes: ${e.message}</div>`;
+        }
+    };
+
+    if (btnViewLearnings) {
+        btnViewLearnings.addEventListener('click', openLearningsModal);
+    }
+    if (btnCloseLearnings) {
+        btnCloseLearnings.addEventListener('click', closeLearningsModal);
+    }
+    if (learningsModal) {
+        learningsModal.addEventListener('click', (e) => {
+            if (e.target === learningsModal) closeLearningsModal();
+        });
+    }
+
     // Mirar juntos button — toggle persistent mode
     let mirarJuntosActive = false;
     const mirarJuntosBtn = document.getElementById('btn-mirar-juntos');
@@ -2777,7 +2834,6 @@ if (window.iuOS && window.iuOS.onGestureWakeSound) {
 //     }
 //     // Timeout disabled.
 // }, 1000);
-
 
 
 

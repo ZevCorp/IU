@@ -82,13 +82,13 @@ const MODELS = {
 // Interfaz unificada: { messages, tools, tool_choice, max_tokens }
 // Retorna: formato OpenAI-compatible { choices: [{ message: { content, tool_calls } }] }
 // ============================================================
-async function chatCompletion({ messages, tools, tool_choice, max_tokens }) {
+async function chatCompletion({ messages, tools, tool_choice, max_tokens, model }) {
     if (PROVIDER === 'openai') {
-        return _chatOpenAI({ messages, tools, tool_choice, max_tokens });
+        return _chatOpenAI({ messages, tools, tool_choice, max_tokens, model });
     } else if (PROVIDER === 'anthropic') {
-        return _chatAnthropic({ messages, tools, tool_choice, max_tokens });
+        return _chatAnthropic({ messages, tools, tool_choice, max_tokens, model });
     } else {
-        return _chatGemini({ messages, tools, tool_choice, max_tokens });
+        return _chatGemini({ messages, tools, tool_choice, max_tokens, model });
     }
 }
 
@@ -96,22 +96,23 @@ async function chatCompletion({ messages, tools, tool_choice, max_tokens }) {
 // visionCompletion — multimodal (imagen + texto) con function calling
 // Misma interfaz que chatCompletion, pero messages puede tener image_url
 // ============================================================
-async function visionCompletion({ messages, tools, tool_choice, max_tokens }) {
+async function visionCompletion({ messages, tools, tool_choice, max_tokens, model }) {
     if (PROVIDER === 'openai') {
-        return _visionOpenAI({ messages, tools, tool_choice, max_tokens });
+        return _visionOpenAI({ messages, tools, tool_choice, max_tokens, model });
     } else if (PROVIDER === 'anthropic') {
-        return _visionAnthropic({ messages, tools, tool_choice, max_tokens });
+        return _visionAnthropic({ messages, tools, tool_choice, max_tokens, model });
     } else {
-        return _visionGemini({ messages, tools, tool_choice, max_tokens });
+        return _visionGemini({ messages, tools, tool_choice, max_tokens, model });
     }
 }
 
 // ============================================================
 // OpenAI implementations (directo, ya funciona)
 // ============================================================
-async function _chatOpenAI({ messages, tools, tool_choice, max_tokens }) {
+async function _chatOpenAI({ messages, tools, tool_choice, max_tokens, model }) {
+    const selectedModel = model || MODELS.openai.chat;
     const options = {
-        model: MODELS.openai.chat,
+        model: selectedModel,
         messages,
         tools,
         tool_choice,
@@ -120,7 +121,7 @@ async function _chatOpenAI({ messages, tools, tool_choice, max_tokens }) {
     if (tools && tools.length > 0) {
         options.parallel_tool_calls = false;
     }
-    console.log(`🤖 [ModelSwitch] Using OpenAI model: ${MODELS.openai.chat}`);
+    console.log(`🤖 [ModelSwitch] Using OpenAI model: ${selectedModel}`);
     return _openai.chat.completions.create(options);
 }
 

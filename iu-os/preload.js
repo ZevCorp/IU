@@ -130,6 +130,7 @@ contextBridge.exposeInMainWorld('iuOS', {
     // 🎓 Learning Mode
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
     onLearningStatus: (callback) => ipcRenderer.on('learning-status', (event, data) => callback(data)),
+    listLearnedWorkflows: () => ipcRenderer.invoke('learning-list-workflows'),
 });
 
 

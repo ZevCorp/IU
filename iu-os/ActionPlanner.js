@@ -6,6 +6,7 @@
  */
 
 const ModelSwitch = require('./ModelSwitch');
+const LearningAgent = require('./LearningAgent');
 
 class ActionPlanner {
     constructor(openai) {
@@ -101,6 +102,16 @@ Responde en español.`;
 
             if (context.longTerm) {
                 systemContent += `\n\nMEMORIA A LARGO PLAZO RELEVANTE:\n${context.longTerm}`;
+            }
+
+            const relevantLearned = LearningAgent.findRelevantWorkflows(userText, 3);
+            if (relevantLearned.length > 0) {
+                const learnedText = relevantLearned.map((wf, i) =>
+                    `${i + 1}. ${wf.workflowName} — ${wf.summary}`
+                ).join('\n');
+                systemContent += `\n\nAPRENDIZAJES ENSEÑADOS RELEVANTES:\n${learnedText}
+\nSi vas a ejecutar usando uno de estos, prioriza esa ruta enseñada por el usuario.
+Si hay ambigüedad fuerte entre dos aprendizajes, pide una aclaración breve en lugar de ejecutar mal.`;
             }
 
             // System instructions

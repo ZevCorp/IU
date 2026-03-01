@@ -19,6 +19,7 @@ const ModelSwitch = require('./ModelSwitch');
 const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
 const WhatsAppContext = require('./WhatsAppContext');
+const LearningAgent = require('./LearningAgent');
 const stickyFace = require('./StickyFaceController'); // Sticky Face Controller for Automation Mode
 // const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window - REMOVING FOR ISOLATION
 
@@ -252,6 +253,8 @@ class ScreenAgent {
         // For complex future scenarios, see AxExtractionAgent.js.future
         const SimpleAxAgent = require('./SimpleAxAgent');
         this.axAgent = new SimpleAxAgent();
+        this.workflowGuidance = null;
+        this.workflowAnchorIndex = 0;
     }
 
     /**
@@ -411,6 +414,8 @@ ACCIONES RECOMENDADAS:
 
         this.isRunning = true;
         this.currentApp = app; // Track current app context
+        this.workflowGuidance = null;
+        this.workflowAnchorIndex = 0;
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
 
         this._notify('action-status', { phase: 'starting', goal, app });
@@ -438,6 +443,16 @@ ACCIONES RECOMENDADAS:
         }
 
         try {
+            const relevant = LearningAgent.findRelevantWorkflows(goal, 1);
+            if (relevant.length > 0 && Array.isArray(relevant[0].anchors) && relevant[0].anchors.length > 0) {
+                this.workflowGuidance = relevant[0];
+                console.log(`🧭 [ScreenAgent] Using learned workflow guidance: ${relevant[0].workflowName} (${relevant[0].anchors.length} anchors)`);
+                this._notify('action-status', {
+                    phase: 'confirming',
+                    step: `Perfecto, lo voy a hacer como me enseñaste en ${relevant[0].workflowName}.`
+                });
+            }
+
             await this._openApp(app);
             await this._wait(500); // Reduced from 1500ms — app is already focused via AppleScript
 
@@ -688,7 +703,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                     let actionSummary = '';
 
                     if (fnName === 'select_element') {
-                        const targetElement = elements.find(e => e.id == args.element_id);
+                        let targetElement = elements.find(e => e.id == args.element_id);
+                        const resolved = this._resolveElementByAnchor(elements, targetElement);
+                        if (resolved) targetElement = resolved;
                         if (!targetElement) {
                             console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
                             actionSummary = `SELECT #${args.element_id} — NOT FOUND`;
@@ -751,7 +768,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                             const stepStr = `Step ${j + 1}/${subActions.length}`;
 
                             if (sub.action === 'click') {
-                                const targetElement = elements.find(e => e.id == sub.element_id);
+                                let targetElement = elements.find(e => e.id == sub.element_id);
+                                const resolved = this._resolveElementByAnchor(elements, targetElement);
+                                if (resolved) targetElement = resolved;
                                 if (!targetElement) {
                                     console.warn(`⚠️ [ScreenAgent] ${stepStr}: Element #${sub.element_id} not found`);
                                     continue;
@@ -822,6 +841,8 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
             return { success: false, error: e.message };
         } finally {
             this.isRunning = false;
+            this.workflowGuidance = null;
+            this.workflowAnchorIndex = 0;
 
             // RESTORE WINDOWS & HIDE STICKY FACE
             try {
@@ -1530,6 +1551,101 @@ CONTEXTO DE VENTANAS:
      */
     _wait(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    _normalizeText(text) {
+        return String(text || '')
+            .toLowerCase()
+            .replace(/[\u200E\u200F\u202A-\u202E]/g, '')
+            .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    _inferZoneFromBbox(bbox) {
+        if (!bbox) return 'content';
+        const cx = Number(bbox.x || 0) + (Number(bbox.w || 0) / 2);
+        const cy = Number(bbox.y || 0) + (Number(bbox.h || 0) / 2);
+        if (cy > 0.82) return 'bottom';
+        if (cy < 0.17) return 'top';
+        if (cx < 0.33) return 'sidebar';
+        return 'content';
+    }
+
+    _tokens(text) {
+        return this._normalizeText(text).split(' ').filter((t) => t.length > 2);
+    }
+
+    _labelScore(anchorLabel, candidateLabel) {
+        const a = this._tokens(anchorLabel);
+        const c = new Set(this._tokens(candidateLabel));
+        if (a.length === 0) return 0;
+        let overlap = 0;
+        for (const token of a) {
+            if (c.has(token)) overlap++;
+        }
+        const ratio = overlap / a.length;
+        if (ratio >= 0.9) return 4;
+        if (ratio >= 0.6) return 3;
+        if (ratio >= 0.35) return 2;
+        if (ratio > 0) return 1;
+        return 0;
+    }
+
+    _resolveElementByAnchor(elements, llmTarget) {
+        if (!this.workflowGuidance || !Array.isArray(this.workflowGuidance.anchors) || this.workflowGuidance.anchors.length === 0) {
+            return llmTarget;
+        }
+
+        const appNorm = this._normalizeText(this.currentApp);
+        let anchor = null;
+        let anchorIdx = -1;
+        for (let i = this.workflowAnchorIndex; i < this.workflowGuidance.anchors.length; i++) {
+            const a = this.workflowGuidance.anchors[i];
+            if (!a) continue;
+            const aApp = this._normalizeText(a.app);
+            if (!aApp || !appNorm || aApp.includes(appNorm) || appNorm.includes(aApp)) {
+                anchor = a;
+                anchorIdx = i;
+                break;
+            }
+        }
+        if (!anchor) return llmTarget;
+
+        let best = null;
+        let bestScore = -1;
+        for (const el of elements) {
+            let score = 0;
+            score += this._labelScore(anchor.target, el.label || el.type || '');
+            if (anchor.type && el.type && String(anchor.type).toLowerCase() === String(el.type).toLowerCase()) score += 2;
+            if (anchor.zone && this._inferZoneFromBbox(el.bbox) === String(anchor.zone).toLowerCase()) score += 1;
+            if (anchor.bbox && el.bbox) {
+                const ax = Number(anchor.bbox.x || 0) + Number(anchor.bbox.w || 0) / 2;
+                const ay = Number(anchor.bbox.y || 0) + Number(anchor.bbox.h || 0) / 2;
+                const ex = Number(el.bbox.x || 0) + Number(el.bbox.w || 0) / 2;
+                const ey = Number(el.bbox.y || 0) + Number(el.bbox.h || 0) / 2;
+                const dist = Math.hypot(ax - ex, ay - ey);
+                if (dist < 0.05) score += 2;
+                else if (dist < 0.12) score += 1;
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = el;
+            }
+        }
+
+        const llmId = llmTarget ? llmTarget.id : 'none';
+        if (best && bestScore >= 5) {
+            if (!llmTarget || best.id !== llmTarget.id) {
+                console.log(`🧭 [ScreenAgent] Anchor override: #${llmId} -> #${best.id} (score=${bestScore}, target="${anchor.target}")`);
+            } else {
+                console.log(`🧭 [ScreenAgent] Anchor confirmed LLM target #${best.id} (score=${bestScore})`);
+            }
+            this.workflowAnchorIndex = anchorIdx + 1;
+            return best;
+        }
+
+        return llmTarget;
     }
 
     /**

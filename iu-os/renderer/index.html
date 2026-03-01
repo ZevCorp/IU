@@ -166,6 +166,8 @@
           style="background:#00f5ff22; border-color:#00f5ff; color:#00f5ff;">Mirar juntos</button>
         <button id="btn-learning-mode" class="state-btn"
           style="background:#ff950022; border-color:#ff9500; color:#ff9500;">Modo Aprendizaje</button>
+        <button id="btn-view-learnings" class="state-btn"
+          style="background:#66ff9922; border-color:#66ff99; color:#66ff99;">Ver aprendizajes</button>
       </div>
 
       <div class="status-row" id="connection-status">
@@ -176,6 +178,17 @@
 
     <!-- Compact Mode Popup -->
     <div id="compact-popup">Ejecutando acción...</div>
+
+    <!-- Minimal Learnings Modal -->
+    <div id="learnings-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999; align-items:center; justify-content:center;">
+      <div style="width:min(760px, 92vw); max-height:78vh; overflow:auto; background:#0f1114; border:1px solid rgba(255,255,255,0.14); border-radius:14px; padding:18px 18px 14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <div style="font-size:18px; font-weight:700; color:#f3f5f7;">Aprendizajes</div>
+          <button id="btn-close-learnings" class="state-btn" style="padding:6px 10px;">Cerrar</button>
+        </div>
+        <div id="learnings-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- Sync Modules -->

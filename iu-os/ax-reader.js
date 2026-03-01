@@ -62,6 +62,7 @@ function run(argv) {
     }
 
     function mapRoleToType(role) {
+        if (role === 'AXDockItem') return 'button';
         if (role === 'AXButton' || role === 'AXPopUpButton') return 'button';
         if (role === 'AXLink') return 'link';
         if (role === 'AXTextField' || role === 'AXTextArea') return 'input';

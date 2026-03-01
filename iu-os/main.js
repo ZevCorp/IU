@@ -935,6 +935,7 @@ ipcMain.on('chat-send-message', async (event, text) => {
     try {
         // Retrieve relevant context from disk/semantic memory
         const relevantContext = await contextManager.getRelevantContext(text);
+        const relevantLearned = LearningAgent.findRelevantWorkflows(text, 3);
 
         let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
 
@@ -942,6 +943,16 @@ Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, 
 
 Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
 Responde en español.`;
+
+        if (relevantLearned && relevantLearned.length > 0) {
+            const list = relevantLearned.map((wf, i) => {
+                return `${i + 1}. ${wf.workflowName}\n   Resumen: ${wf.summary}\n   Estilo: ${wf.executionStyle}`;
+            }).join('\n');
+            systemPrompt += `\n\nAPRENDIZAJES RELEVANTES DEL USUARIO:\n${list}
+\nSi vas a usar uno, di explícitamente en la PRIMERA línea:
+"Perfecto, lo voy a hacer como me enseñaste en <nombre del aprendizaje>."
+Si no estás seguro cuál aplicar, pregunta una sola aclaración corta antes de ejecutar.`;
+        }
 
         if (relevantContext.longTerm) {
             systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
@@ -990,7 +1001,9 @@ Responde en español.`;
                 // Send reply + action to chat window
                 if (chatWindow && !chatWindow.isDestroyed()) {
                     chatWindow.webContents.send('chat-response', {
-                        reply: reply || `Entendido. Voy a ${args.goal.toLowerCase()}.`,
+                        reply: reply || (relevantLearned && relevantLearned[0]
+                            ? `Perfecto, lo voy a hacer como me enseñaste en ${relevantLearned[0].workflowName}.`
+                            : `Entendido. Voy a ${args.goal.toLowerCase()}.`),
                         action: args
                     });
                 }
@@ -1044,6 +1057,15 @@ ipcMain.handle('learning-stop', async () => {
         mainWindow.webContents.send('learning-status', { active: false });
     }
     return { success: true, synthesized };
+});
+
+ipcMain.handle('learning-list-workflows', async () => {
+    try {
+        const workflows = LearningAgent.listWorkflows(60);
+        return { success: true, workflows };
+    } catch (e) {
+        return { success: false, error: e.message, workflows: [] };
+    }
 });
 
 // 🎓 Global Mouse Monitoring for Learning Mode
