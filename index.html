@@ -1,111 +1,180 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="es">
 
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Animated Parametric SVG Face - Living UI Interface POC">
-  <title>Drifting Sagan - Living Face UI</title>
-  <link rel="stylesheet" href="/src/styles/main.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="I&Ü - El reverso del UI. Ü te analiza e interactúa con tus dispositivos.">
+    <title>I&Ü | Tú y Yo</title>
+    <link rel="stylesheet" href="/src/landing.css">
 </head>
 
 <body>
-  <!-- Main Face Container -->
-  <div id="face-container">
-    <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Animated parametric face">
-      <!-- Face components will be injected here by TypeScript -->
-      <g id="face-group" transform="translate(200, 250)">
-        <!-- Eyebrows -->
-        <g id="eyebrows-group">
-          <path id="left-eyebrow" class="face-stroke" />
-          <path id="right-eyebrow" class="face-stroke" />
-        </g>
-
-        <!-- Eyes -->
-        <g id="eyes-group">
-          <g id="left-eye" class="eye-group">
-            <path id="left-eye-top" class="face-stroke" />
-            <path id="left-eye-line" class="face-stroke" />
-            <path id="left-eye-bottom" class="face-stroke" />
-          </g>
-          <g id="right-eye" class="eye-group">
-            <path id="right-eye-top" class="face-stroke" />
-            <path id="right-eye-line" class="face-stroke" />
-            <path id="right-eye-bottom" class="face-stroke" />
-          </g>
-        </g>
-
-        <!-- Mouth -->
-        <g id="mouth-group">
-          <path id="mouth" class="face-stroke" />
-        </g>
-      </g>
-    </svg>
-
-    <!-- Thinking Label (for future AI integration) -->
-    <div id="thinking-label" class="hidden">
-      <span class="thinking-text">Thinking</span>
-      <span class="thinking-dots">...</span>
-    </div>
-  </div>
-
-  <!-- Menu Toggle Button -->
-  <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
-    <span class="menu-icon">☰</span>
-  </button>
-
-  <!-- Demo Controls Panel -->
-  <div id="controls-panel">
-    <h3>Face States</h3>
-    <div class="button-group">
-      <button id="btn-neutral" class="state-btn">Neutral</button>
-      <button id="btn-smile" class="state-btn active">Smile</button>
-      <button id="btn-thinking" class="state-btn">Thinking</button>
-      <button id="btn-wink" class="state-btn">Wink</button>
+    <!-- Cinematic Hero Background -->
+    <div class="hero-container">
+        <video autoplay loop muted playsinline class="hero-video" poster="/assets/iu_hero.png">
+            <source src="/assets/hero_video.mp4" type="video/mp4">
+        </video>
+        <div class="hero-overlay"></div>
     </div>
 
-    <h3>Theme</h3>
-    <div class="button-group">
-      <button id="btn-dark" class="theme-btn">Dark</button>
-      <button id="btn-light" class="theme-btn active">Light</button>
+    <nav>
+        <div class="logo">I<span>&</span>Ü</div>
+        <ul class="nav-links">
+            <li><a href="#lista">Registrarme</a></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        <div id="floating-u">
+            <!-- The Face (Ü) will be rendered here via JS if possible, 
+           or we can use the same SVG structure for a more direct look -->
+            <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg"
+                aria-label="Animated parametric face">
+                <g id="face-group" transform="translate(200, 250)">
+                    <!-- Eyes -->
+                    <g id="eyes-group">
+                        <g id="left-eye" class="eye-group">
+                            <path class="face-stroke" d="M -60 -20 Q -40 -40 -20 -20" stroke="white" fill="none"
+                                stroke-width="3" />
+                        </g>
+                        <g id="right-eye" class="eye-group">
+                            <path class="face-stroke" d="M 20 -20 Q 40 -40 60 -20" stroke="white" fill="none"
+                                stroke-width="3" />
+                        </g>
+                    </g>
+                    <!-- Mouth -->
+                    <g id="mouth-group">
+                        <path id="mouth" class="face-stroke" d="M -30 40 Q 0 60 30 40" stroke="white" fill="none"
+                            stroke-width="3" />
+                    </g>
+                </g>
+            </svg>
+        </div>
+
+        <div class="hero-text">
+            <div class="badge">Reinventamos la interacción humano - tecnología</div>
+            <h1>
+                <span class="alt">Un asistente que controla tus dispositivos</span>
+                Creamos IÜ
+            </h1>
+
+            <section id="vision">
+                <div class="vision-content">
+                    <p>
+                        La base de la interacción humana es un sistema natural que ha evolucionado durante millones de
+                        años para comprender constantemente las necesidades de quienes nos rodean. Si analizas en una
+                        habitación la interacción de las personas, ya sea con bebés, estudiantes o adultos mayores,
+                        todos son muy buenos para detectar lo que quieren los demás y ayudarles. Así que... <strong>¿Por
+                            qué la tecnología sería diferente?</strong>
+                    </p>
+                    <p>
+                        Actualmente, la interacción funciona así: el humano está analizando constantemente la UI para
+                        decidir qué botones lo llevan a su objetivo, ¿y la tecnología? Sólo ejecuta esos clics.
+                    </p>
+                    <p class="highlight">
+                        I&Ü le da la vuelta a este proceso. Analiza constantemente la expresión corporal, el lenguaje y
+                        el contexto del usuario para entenderlo y rápidamente ayudarle en lo que necesite.
+                    </p>
+                    <p>
+                        Por ejemplo, tienes que enviar rápidamente un trabajo y te lo acaban de decir en clase. Volteas
+                        a ver a Ü y te pregunta <em>"¿Te ayudo con eso?"</em>. Tú solo asientes con la cabeza y él toma
+                        el control de tu computador hasta lograrlo. Puedes detenerlo diciéndole "para" y levantando tus
+                        dos manos frente a Ü, darle feedback, decirle cómo lograrlo, o tomar tú el control del mouse y
+                        mostrarle la mejor forma de hacerlo; en adelante, <strong>él lo recordará haciéndolo tal como tú
+                            lo harías.</strong>
+                    </p>
+                    <p>
+                        Puedes convertirlo en un experto en Excel, PowerBI, subir trabajos, gestionar WhatsApp o tu
+                        calendario. Lo que quieras.
+                    </p>
+                    <p>
+                        ¿Y lo mejor? Puedes añadir habilidades que tengan tus amigos. ¿Hay un amigo experto en Excel?
+                        Pídele descargar su habilidad en tu pc, y tendrás la habilidad de ese amigo ayudándote todo el
+                        tiempo, tal como si él estuviese en tu computador.
+                    </p>
+                    <p class="outro">
+                        La forma de trabajar se está reinventando. Y si decides cobrar por tus habilidades,
+                        <strong>podrías trabajar en miles de ordenadores alrededor del mundo, al mismo tiempo.</strong>
+                    </p>
+                </div>
+            </section>
+
+            <div class="waitlist-section" id="lista">
+                <form id="waitlist-form" action="mailto:join@iu.os" method="post" enctype="text/plain">
+                    <div class="input-container">
+                        <input type="email" name="email" placeholder="Tu correo electrónico" id="email-input" required>
+                        <button type="submit" class="btn-join" id="join-btn">Únete ahora</button>
+                    </div>
+                </form>
+                <p style="font-size: 1rem; color: #fff; font-style: italic; margin-top: 10px; opacity: 0.9;">
+                    Acceso anticipado limitado.
+                </p>
+            </div>
+
+            <!-- Countdown Timer -->
+            <div class="countdown-container">
+                <div class="countdown-item">
+                    <span class="count-num" id="days">00</span>
+                    <span class="count-label">Días</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="count-num" id="hours">00</span>
+                    <span class="count-label">Horas</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="count-num" id="minutes">00</span>
+                    <span class="count-label">Min</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="count-num" id="seconds">00</span>
+                    <span class="count-label">Seg</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Epic Modal -->
+    <div id="form-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close" id="close-modal">&times;</button>
+            <h2>¿En qué te podría ayudar Ü?</h2>
+            <p>Cuéntanos un poco sobre cómo imaginas tu vida con Ü.</p>
+
+            <textarea id="help-text"
+                placeholder="Ej: Ayúdame a gestionar mis correos y organizar mi agenda de estudio..."
+                rows="4"></textarea>
+
+            <h3>Dispositivos en los que usarías Ü</h3>
+            <div class="device-checklist">
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="MacOS">
+                    <span class="check-box"></span> MacOS
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Windows">
+                    <span class="check-box"></span> Windows
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Iphone">
+                    <span class="check-box"></span> iPhone
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Android">
+                    <span class="check-box"></span> Android
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Ipad">
+                    <span class="check-box"></span> iPad
+                </label>
+            </div>
+
+            <button id="final-submit" class="btn-join">Confirmar Registro</button>
+        </div>
     </div>
 
-    <h3>Microexpressions</h3>
-    <div class="toggle-group">
-      <label>
-        <input type="checkbox" id="toggle-micro" checked>
-        Enable organic animations
-      </label>
-    </div>
-
-    <h3>Connect</h3>
-    <div class="button-group">
-      <button id="btn-qr" class="state-btn">📱 Scan QR</button>
-    </div>
-    <div id="connection-status" class="connection-status">
-      <span class="status-indicator"></span>
-      <span class="status-text">Not connected</span>
-    </div>
-
-    <h3>Face Detection</h3>
-    <div class="button-group">
-      <button id="btn-camera" class="state-btn">📷 Start Camera</button>
-    </div>
-    <div id="camera-status" class="connection-status">
-      <span class="status-indicator"></span>
-      <span class="status-text">Camera off</span>
-    </div>
-  </div>
-
-  <!-- Hidden video element for camera -->
-  <video id="camera-video" style="display:none;" playsinline></video>
-
-  <!-- Swipe hint overlay -->
-  <div id="swipe-hint" class="swipe-hint hidden">
-    <span>← Swipe to transfer →</span>
-  </div>
-
-  <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/landing.ts"></script>
 </body>
 
 </html>

@@ -15,7 +15,8 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 main: resolve(__dirname, 'index.html'),
-                graph: resolve(__dirname, 'graph.html'),
+                poc: resolve(__dirname, 'poc-face.html'),
+                dashboard: resolve(__dirname, 'dashboard.html'),
             },
         },
     },

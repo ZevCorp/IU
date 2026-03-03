@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>U Face</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #app {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+    }
+
+    #face-svg {
+      width: 100%;
+      height: 100%;
+      max-width: 860px;
+      max-height: 860px;
+    }
+
+    .face-stroke {
+      stroke: #fff;
+      stroke-width: 6;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      transition: stroke 220ms ease;
+    }
+
+    #status {
+      position: fixed;
+      top: 14px;
+      left: 14px;
+      color: rgba(255, 255, 255, 0.7);
+      font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="U Face">
+      <g id="face-group" transform="translate(200,250)">
+        <path id="left-eyebrow" class="face-stroke" />
+        <path id="right-eyebrow" class="face-stroke" />
+        <path id="left-eye-line" class="face-stroke" />
+        <path id="right-eye-line" class="face-stroke" />
+        <path id="mouth" class="face-stroke" />
+      </g>
+    </svg>
+  </div>
+  <div id="status">U</div>
+
+  <script>
+    const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+    function quadraticBezier(start, control, end) {
+      return `M${start.x},${start.y} Q${control.x},${control.y} ${end.x},${end.y}`;
+    }
+
+    function cubicBezier(start, c1, c2, end) {
+      return `M${start.x},${start.y} C${c1.x},${c1.y} ${c2.x},${c2.y} ${end.x},${end.y}`;
+    }
+
+    function verticalLine(start, length) {
+      return `M${start.x},${start.y} L${start.x},${start.y + length}`;
+    }
+
+    function generateEyebrowPath(baseX, baseY, width, height, curve, flip = false) {
+      const halfWidth = width / 2;
+      const flipMultiplier = flip ? -1 : 1;
+      const startX = baseX - halfWidth * flipMultiplier;
+      const endX = baseX + halfWidth * flipMultiplier;
+      const startY = baseY - height;
+      const endY = baseY - height;
+      const controlX = baseX;
+      const controlY = baseY - height - (curve * 15);
+      return quadraticBezier(
+        { x: startX, y: startY },
+        { x: controlX, y: controlY },
+        { x: endX, y: endY }
+      );
+    }
+
+    function generateEyePath(centerX, centerY, openness) {
+      const lineHeight = 25 * openness;
+      const verticalOffset = lineHeight / 2;
+      return verticalLine(
+        { x: centerX, y: centerY - verticalOffset },
+        Math.max(0, lineHeight)
+      );
+    }
+
+    function generateMouthPath(centerX, centerY, width, curve, leftCorner, rightCorner, openness = 0) {
+      const halfWidth = width / 2;
+      const baseOffset = curve * 15;
+      const leftY = centerY - baseOffset - (leftCorner * 8);
+      const rightY = centerY - baseOffset - (rightCorner * 8);
+      const start = { x: centerX - halfWidth, y: leftY };
+      const end = { x: centerX + halfWidth, y: rightY };
+      const curveDepth = -curve * 12;
+      const midY = centerY + curveDepth;
+      const asymmetryShift = (rightCorner - leftCorner) * 10;
+      const c1 = { x: centerX - halfWidth * 0.3 + asymmetryShift, y: midY };
+      const c2 = { x: centerX + halfWidth * 0.3 + asymmetryShift, y: midY };
+
+      if (openness > 0.05) {
+        const topPath = cubicBezier(start, c1, c2, end);
+        const bottomY = centerY + openness * 15;
+        const bottomPath = ` Q${centerX},${bottomY} ${start.x},${leftY}`;
+        return topPath + bottomPath;
+      }
+
+      return cubicBezier(start, c1, c2, end);
+    }
+
+    const state = {
+      preset: 'neutral',
+      eyeOpenness: 0.88,
+      leftEyeOpenness: -1,
+      rightEyeOpenness: -1,
+      eyeSquint: 0.12,
+      leftBrowHeight: -0.5,
+      rightBrowHeight: 3,
+      leftBrowCurve: 0.15,
+      rightBrowCurve: 0.45,
+      mouthCurve: 0.55,
+      mouthWidth: 0.95,
+      leftCornerHeight: 0.05,
+      rightCornerHeight: 0.45,
+      mouthOpenness: 0,
+      headTilt: 4,
+      gazeX: 0,
+      gazeY: 0,
+      confidence: 0.6
+    };
+
+    const el = {
+      group: document.getElementById('face-group'),
+      leftEyebrow: document.getElementById('left-eyebrow'),
+      rightEyebrow: document.getElementById('right-eyebrow'),
+      leftEyeLine: document.getElementById('left-eye-line'),
+      rightEyeLine: document.getElementById('right-eye-line'),
+      mouth: document.getElementById('mouth'),
+      status: document.getElementById('status')
+    };
+
+    function render() {
+      const s = state;
+      el.group.setAttribute('transform', `translate(200,250) rotate(${s.headTilt})`);
+
+      el.leftEyebrow.setAttribute('d', generateEyebrowPath(-55, -55, 35, s.leftBrowHeight, s.leftBrowCurve, false));
+      el.rightEyebrow.setAttribute('d', generateEyebrowPath(55, -55, 35, s.rightBrowHeight, s.rightBrowCurve, true));
+
+      const leftOpen = s.leftEyeOpenness >= 0 ? s.leftEyeOpenness : s.eyeOpenness;
+      const rightOpen = s.rightEyeOpenness >= 0 ? s.rightEyeOpenness : s.eyeOpenness;
+      const leftEye = leftOpen * (1 - s.eyeSquint * 0.4);
+      const rightEye = rightOpen * (1 - s.eyeSquint * 0.4);
+
+      el.leftEyeLine.setAttribute('d', generateEyePath(-55 + s.gazeX, -25 + s.gazeY, clamp(leftEye, 0, 1.2)));
+      el.rightEyeLine.setAttribute('d', generateEyePath(55 + s.gazeX, -25 + s.gazeY, clamp(rightEye, 0, 1.2)));
+
+      el.mouth.setAttribute('d', generateMouthPath(0, 50, 60 * s.mouthWidth, s.mouthCurve, s.leftCornerHeight, s.rightCornerHeight, s.mouthOpenness));
+      el.status.textContent = `${s.preset} ${Math.round((s.confidence || 0) * 100)}%`;
+    }
+
+    function applyState(next) {
+      Object.assign(state, next || {});
+      render();
+    }
+
+    window.uFace = {
+      applyState
+    };
+
+    render();
+    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.uFaceReady) {
+      window.webkit.messageHandlers.uFaceReady.postMessage('ready');
+    }
+
+    setInterval(() => {
+      if (Math.random() > 0.72 && state.eyeOpenness > 0.2) {
+        const prevL = state.leftEyeOpenness;
+        const prevR = state.rightEyeOpenness;
+        state.leftEyeOpenness = 0;
+        state.rightEyeOpenness = 0;
+        render();
+        setTimeout(() => {
+          state.leftEyeOpenness = prevL;
+          state.rightEyeOpenness = prevR;
+          render();
+        }, 90);
+      }
+    }, 2100);
+  </script>
+</body>
+
+</html>
