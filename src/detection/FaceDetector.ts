@@ -176,6 +176,13 @@ export class FaceDetector {
     }
 
     /**
+     * Alias for compatibility with biometric demos
+     */
+    onFaceDataDetected(callback: (data: any) => void): () => void {
+        return this.onDetection(callback as any);
+    }
+
+    /**
      * Get current state
      */
     getState(): FaceDetectionState {
