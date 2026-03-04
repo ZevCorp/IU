@@ -12,7 +12,7 @@
 <body>
     <!-- Cinematic Hero Background -->
     <div class="hero-container">
-        <video autoplay loop muted playsinline class="hero-video" poster="/assets/iu_hero.png">
+        <video autoplay loop muted playsinline class="hero-video" id="main-video" poster="/assets/iu_hero.png">
             <source src="/assets/hero_video.mp4" type="video/mp4">
         </video>
         <div class="hero-overlay"></div>
@@ -60,55 +60,168 @@
                 Creamos IÜ
             </h1>
 
-            <section id="vision">
-                <div class="vision-content">
-                    <p>
-                        La base de la interacción humana es un sistema natural que ha evolucionado durante millones de
-                        años para comprender constantemente las necesidades de otros seres humanos. Si analizas en una
-                        habitación la interacción de las personas, todos son muy buenos para detectar lo que quieren los
-                        demás y ayudarles solo intercambiando miradas y un par de palabras, tú no me has dicho qué
-                        quieres que te alcance el cargador, pero lo vi en tu mirada, te lo alcanzo y luego nos
-                        sonreímos. Así que... <strong>¿Por qué la tecnología sería diferente?</strong>
-                    </p>
-                    <p>
-                        Actualmente, la interacción humano dispositivos funciona así: yo analizo constantemente la UI (
-                        Interfaz de Usuario ) para decidir cuáles son los botones que me llevan a mi objetivo, ¿y la
-                        tecnología? Sólo ejecuta esos clics.
-                    </p>
-                    <p class="highlight">
-                        I&Ü invierte la interacción humano dispositivos. Analiza constantemente la expresión corporal,
-                        lenguaje y contexto del usuario para entenderlo y rápidamente ayudarle, tal como si fuese otro
-                        humano. Acercamos la UI a la evolución de la comunicación humana, la interfaz ahora mira su
-                        entorno, analiza rápidamente cómo ayudarte y hace los clics por sí misma.
-                    </p>
-                    <p>
-                        Imagina tu que tu Smartphone analice y te ayude cuando hay algo demorado que buscar en Whatsapp,
-                        o tu computador ayudándote a subir un trabajo o hacer un Excel, o un cajero ayudando a una
-                        abuelita a sacar dinero sin tener que oprimir botones.
-                    </p>
-                    <p>
-                        ¿Y lo mejor? Puedes añadir habilidades que tengan tus amigos. ¿Hay un amigo experto en Excel?
-                        Pídele descargar su habilidad en tu pc, y tendrás la habilidad de ese amigo ayudándote todo el
-                        tiempo, tal como si él estuviese en tu computador.
-                    </p>
-                    <p class="outro">
-                        La forma de trabajar se está reinventando. Y si decides cobrar por tus habilidades,
-                        <strong>podrías trabajar en miles de ordenadores alrededor del mundo, al mismo tiempo.</strong>
-                    </p>
+        </div>
+
+        <!-- Cinematic Storytelling Sections - One Paragraph per Slide -->
+        <div id="story-container">
+            <section class="story-slide" id="theme-new-1">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text">Creamos Ü un asistente que controla tu teléfono y tu computador. ejecuta tus
+                        órdenes, escucha el contexto de tu ambiente y entiende tu lenguaje corporal.</p>
                 </div>
             </section>
 
-            <div class="waitlist-section" id="lista">
-                <form id="waitlist-form" action="mailto:join@iu.os" method="post" enctype="text/plain">
-                    <div class="input-container">
-                        <input type="email" name="email" placeholder="Tu correo electrónico" id="email-input" required>
-                        <button type="submit" class="btn-join" id="join-btn">Únete ahora</button>
-                    </div>
-                </form>
-                <p style="font-size: 1rem; color: #fff; font-style: italic; margin-top: 10px; opacity: 0.9;">
-                    Acceso anticipado limitado.
-                </p>
-            </div>
+            <section class="story-slide" id="theme-new-3">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Gracias a haber desarrollado la comunicación más eficiente sobre
+                        todas las especies, hemos dominado el planeta.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-2a">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text">La comunicación corporal nos brinda una habilidad única, alcanzar la
+                        consciencia compartida con otros seres humanos.</p>
+                    <p class="reveal-text highlight">Nos sincronizamos entre nosotros para alcanzar un objetivo casi sin
+                        mediar palabras. Solo gestos y contexto.</p>
+                </div>
+            </section>
+
+
+
+            <section class="story-slide" id="theme-new-3a">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text">Hoy trabajamos con la herramienta más poderosa de la humanidad, los
+                        computadores, pero debemos aprender a usar cada app.</p>
+                    <p class="reveal-text">Excel, PowerBI, Ads, cada una es muy diferente.</p>
+                    <p class="reveal-text highlight">¿Y si mejor nos sincronizamos con ellos?</p>
+                </div>
+            </section>
+
+
+
+            <section class="story-slide" id="theme-new-2c">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Te permite saber lo que haría esa persona si estuviese aquí.</p>
+                </div>
+            </section>
+
+
+
+
+
+            <section class="story-slide" id="theme-new-6">
+                <div class="slide-visual">
+                    <div class="glow-object purple"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text">¿Y si recreamos la interacción humano a humano con Inteligencia Artificial?
+                        Compartiendo intenciones y miradas con nuestros dispositivos, que la Interfaz sea capaz de
+                        leernos a nosotros e interactuar de forma autónoma tomando control del computador. Dando la
+                        vuelta al proceso dónde sólo nosotros nos encargamos del análisis y clics.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-7">
+                <div class="slide-visual">
+                    <div class="glow-object purple"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">¿Y si solo miro mis dispositivos y ellos me entienden como si fuese
+                        otro ser humano en la habitación?</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-7a">
+                <div class="slide-visual">
+                    <div class="glow-object purple"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">¿Y si creamos una consciencia compartida con Ü?</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-8">
+                <div class="slide-visual">
+                    <div class="glow-object white"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Podemos crear con Ü una consciencia compartida, para que actúe tal
+                        como lo haríamos nosotros en el mundo digital.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-9">
+                <div class="slide-visual">
+                    <div class="glow-object white"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text">¿Y si lo entrenamos con nuestras habilidades? Excel, PowerBI, edición de
+                        vídeo... ¿Acaso se convertiría en una versión de nosotros trabajando constantemente en nuestro
+                        computador?</p>
+                    <p class="reveal-text">Quisiera tener la habilidad de un amigo muy bueno en excel, en mi computador,
+                        ¿me cobrará?, uh genial, ¡lo hace de maravilla!</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-10">
+                <div class="slide-visual">
+                    <div class="glow-object white"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Esto cambia el juego, te permite trabajar en miles de computadores
+                        alrededor del mundo al mismo tiempo. Tal como si fueras tú, y cobrar como freelance, increíble
+                        ¿cierto? Hoy es posible. Con Ü.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-11">
+                <div class="slide-visual">
+                    <div class="glow-object white"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Plenitud, así se siente usar a Ü.</p>
+                    <p class="reveal-text">¿No tienes habilidades digitales? Trabaja con las de alguien más como si
+                        fueras un experto.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-12">
+                <div class="slide-visual">
+                    <div class="glow-object white"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text">Lo probaremos durante un tiempo limitado, entrena a tu asistente, y prepárate
+                        para liberarte del mundo digital mientras extiendes tus habilidades alrededor del mundo.
+                        Trabajando al mismo tiempo en miles de computadores.</p>
+                </div>
+            </section>
+        </div>
+
+        <div class="waitlist-section" id="lista">
+            <h2 class="final-cta">Sé parte de la revolución</h2>
+            <p class="limited-access">Acceso anticipado limitado.</p>
+            <form id="waitlist-form">
+                <div class="input-container">
+                    <input type="email" name="email" placeholder="Tu correo electrónico" id="email-input" required>
+                    <button type="submit" class="btn-join" id="join-btn">Únete ahora</button>
+                </div>
+            </form>
 
             <!-- Countdown Timer -->
             <div class="countdown-container">

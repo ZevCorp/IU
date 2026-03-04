@@ -8,36 +8,136 @@ document.addEventListener('DOMContentLoaded', () => {
     initWaitlist();
     initReadingMode();
 
+    // Force play on background videos for better browser support
+    const v1 = document.getElementById('main-video') as HTMLVideoElement;
+    const v2 = document.getElementById('story-video') as HTMLVideoElement;
+    // Force play and set initial state
+    if (v1) v1.play().catch(() => { });
+    window.dispatchEvent(new Event('scroll'));
+
     console.log('🌟 I&Ü Landing Page Ready');
 });
 
 /**
- * Precise Scroll-Driven Reading Mode
+ * Cinematic Storytelling Scroll System
  */
 function initReadingMode() {
+    let autoScrollTimer: any = null;
+    let isAutoScrolling = false;
+
+    // Pausar y reiniciar auto-scroll si el usuario interactúa manualmente
+    const handleUserInteraction = () => {
+        if (autoScrollTimer) clearTimeout(autoScrollTimer);
+        // Si el usuario scrollea, le damos más tiempo (12s) antes de retomar el control
+        autoScrollTimer = setTimeout(triggerAutoScroll, 12000);
+    };
+
+    window.addEventListener('wheel', handleUserInteraction, { passive: true });
+    window.addEventListener('touchmove', handleUserInteraction, { passive: true });
+    window.addEventListener('keydown', handleUserInteraction, { passive: true });
+
+    const triggerAutoScroll = () => {
+        const slides = Array.from(document.querySelectorAll('.story-slide'));
+        // Encontrar cuál es el slide activo actual
+        const activeIndex = slides.findIndex(slide => slide.classList.contains('active'));
+
+        if (activeIndex >= 0 && activeIndex < slides.length - 1) {
+            isAutoScrolling = true;
+            slides[activeIndex + 1].scrollIntoView({ behavior: 'smooth' });
+
+            // Retomar intervalo de lectura normal (8 segundos por slide)
+            if (autoScrollTimer) clearTimeout(autoScrollTimer);
+            autoScrollTimer = setTimeout(triggerAutoScroll, 8000);
+
+            setTimeout(() => { isAutoScrolling = false; }, 1000);
+        } else if (activeIndex === slides.length - 1) {
+            // Si estamos en el último, bajar al final
+            const final = document.querySelector('.waitlist-section');
+            if (final) final.scrollIntoView({ behavior: 'smooth' });
+            if (autoScrollTimer) clearTimeout(autoScrollTimer);
+        }
+    };
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('active');
+
+                // Si es un slide de historia, gestionamos el auto-scroll
+                if (entry.target.classList.contains('story-slide')) {
+                    updateBackgroundTheme(entry.target.id);
+                    // Solo activar el timer normal si no venimos de un autoscroll forzado
+                    if (!isAutoScrolling) {
+                        if (autoScrollTimer) clearTimeout(autoScrollTimer);
+                        autoScrollTimer = setTimeout(triggerAutoScroll, 8000);
+                    }
+                }
+
+                // Redundancia para textos
+                if (entry.target.classList.contains('reveal-text')) {
+                    const section = (entry.target as HTMLElement).closest('.story-slide');
+                    if (section) section.classList.add('active');
+                }
+            } else {
+                // Al salir, removemos la clase para que la animación se reinicie al volver
+                entry.target.classList.remove('active');
+
+                // Si el usuario subió al Hero (antes de la historia), paramos el auto-scroll
+                if (entry.target.id === 'theme-new-1' && window.scrollY < 200) {
+                    if (autoScrollTimer) clearTimeout(autoScrollTimer);
+                }
+            }
+        });
+    }, { threshold: 0.2 });
+
+    // Observar tanto textos como las secciones mismas
+    document.querySelectorAll('.reveal-text, .final-cta, .story-slide').forEach(el => observer.observe(el));
+
+    // Control de Parallax y Video Único
     window.addEventListener('scroll', () => {
         const scroll = window.scrollY;
         const windowHeight = window.innerHeight;
         const totalHeight = document.documentElement.scrollHeight;
-
-        // --- TRANSICIÓN INICIAL (FADE OUT VIDEO) ---
-        const fadeStart = 100;
-        const fadeEnd = 500;
-        let startProgress = (scroll - fadeStart) / (fadeEnd - fadeStart);
-        startProgress = Math.max(0, Math.min(1, startProgress));
-
-        // --- TRANSICIÓN FINAL (FADE IN VIDEO) ---
         const scrollBottom = totalHeight - windowHeight;
-        const bottomFadeZone = 600; // Distancia desde el fondo para empezar a mostrar el video
-        let bottomProgress = (scrollBottom - scroll) / bottomFadeZone;
-        bottomProgress = Math.max(0, Math.min(1, bottomProgress));
 
-        // El progreso final es 1 solo si estamos fuera del inicio Y lejos del final
-        const finalProgress = startProgress * bottomProgress;
+        // --- GESTIÓN DE VIDEO ÚNICO ---
+        let videoOpacity = 0.8;
+        let overlayOpacity = 0.1;
 
-        // Sincronizamos la variable CSS con el progreso del scroll
-        document.body.style.setProperty('--read-progress', finalProgress.toString());
+        if (scroll > 200 && scroll < scrollBottom - 200) {
+            // Zona de lectura (Slides)
+            videoOpacity = 0.12;
+            overlayOpacity = 0.85;
+        } else {
+            // Inicio y Final
+            videoOpacity = 0.8;
+            overlayOpacity = 0.1;
+        }
+
+        document.documentElement.style.setProperty('--video-opacity', videoOpacity.toString());
+        document.documentElement.style.setProperty('--overlay-opacity', overlayOpacity.toString());
+
+        // --- PARALLAX EN LOS GLOW OBJECTS ---
+        document.querySelectorAll('.story-slide').forEach((slide: any) => {
+            const rect = slide.getBoundingClientRect();
+            const visual = slide.querySelector('.glow-object');
+
+            if (rect.top < windowHeight && rect.bottom > 0 && visual) {
+                const progress = 1 - (rect.top / windowHeight);
+                const scale = 0.8 + (progress * 0.4);
+                const opacity = Math.sin(progress * Math.PI) * 0.4;
+
+                visual.style.transform = `scale(${scale})`;
+                visual.style.opacity = opacity.toString();
+            }
+        });
     });
+}
+
+function updateBackgroundTheme(themeId: string) {
+    const body = document.body;
+    // Opcional: Cambiar variables CSS globales para el aura de la página
+    console.log(`Switching to theme: ${themeId}`);
 }
 
 /**
