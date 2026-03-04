@@ -106,8 +106,8 @@ function initReadingMode() {
 
         if (scroll > 200 && scroll < scrollBottom - 200) {
             // Zona de lectura (Slides)
-            videoOpacity = 0.12;
-            overlayOpacity = 0.85;
+            videoOpacity = 0.30;
+            overlayOpacity = 0.70;
         } else {
             // Inicio y Final
             videoOpacity = 0.8;
