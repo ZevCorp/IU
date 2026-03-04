@@ -163,8 +163,9 @@ main {
     align-items: center;
     justify-content: center;
     scroll-snap-align: center;
-    padding: 120px 20px 60px 20px;
+    padding: 80px 20px 80px 20px;
     background: transparent;
+    position: relative;
 }
 
 .badge {
@@ -222,7 +223,7 @@ h1 {
     font-weight: 100;
     font-size: clamp(3rem, 10vw, 8rem);
     line-height: 0.9;
-    margin-bottom: 120px;
+    margin-bottom: 0;
     letter-spacing: -4px;
 }
 
@@ -243,6 +244,33 @@ h1 .alt {
     margin-bottom: 40px;
     mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.35), black 35%, black 65%, rgba(0, 0, 0, 0.35));
     -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.35), black 35%, black 65%, rgba(0, 0, 0, 0.35));
+}
+
+/* Scroll Indicator */
+.scroll-indicator {
+    position: absolute;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    opacity: 0.5;
+    animation: bounce 2s ease-in-out infinite;
+}
+
+.scroll-indicator svg {
+    width: 28px;
+    height: 28px;
+}
+
+@keyframes bounce {
+
+    0%,
+    100% {
+        transform: translateX(-50%) translateY(0);
+    }
+
+    50% {
+        transform: translateX(-50%) translateY(10px);
+    }
 }
 
 /* =====================================================
