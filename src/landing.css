@@ -544,45 +544,83 @@ input::placeholder {
 }
 
 @media (max-width: 768px) {
+
+    /* --- NAV: Show button, space between logo and CTA --- */
     nav {
-        padding: 24px;
-        justify-content: center;
+        padding: 20px 24px;
+        justify-content: space-between;
     }
 
     .nav-links {
-        display: none;
+        display: flex;
     }
 
-    h1 {
-        font-size: clamp(2.5rem, 8vw, 3.5rem);
-        margin-bottom: 30px;
+    .nav-links a {
+        font-size: 0.7rem;
+        padding: 8px 18px;
+        letter-spacing: 0.5px;
     }
 
-    h1 .alt {
-        font-size: 0.45em;
-        mask-image: none;
-        -webkit-mask-image: none;
+    .logo {
+        font-size: 2rem;
     }
 
-    .reveal-text {
-        font-size: 1.1rem;
-    }
-
-    .reveal-text.highlight {
-        font-size: 1.25rem;
-    }
-
-    .slide-content {
-        padding: 40px 24px;
-    }
-
-    .countdown-container {
-        gap: 15px;
+    /* --- HERO: Fill the viewport with impact --- */
+    .hero-text {
+        padding: 100px 24px 40px 24px;
         justify-content: center;
     }
 
-    .count-num {
-        font-size: 2.5rem;
+    .badge {
+        font-size: 0.55rem;
+        padding: 8px 16px;
+        letter-spacing: 1.5px;
+        margin-bottom: 40px;
+    }
+
+    h1 {
+        font-size: clamp(3rem, 14vw, 5rem);
+        margin-bottom: 50px;
+        letter-spacing: -3px;
+    }
+
+    h1 .alt {
+        font-size: 0.38em;
+        margin-bottom: 24px;
+        mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.3), black 25%, black 75%, rgba(0, 0, 0, 0.3));
+        -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.3), black 25%, black 75%, rgba(0, 0, 0, 0.3));
+    }
+
+    /* --- STORY SLIDES: Bigger text, more room to breathe --- */
+    .slide-content {
+        max-width: 100%;
+        padding: 40px 28px;
+    }
+
+    .reveal-text {
+        font-size: 1.35rem;
+        line-height: 1.8;
+    }
+
+    .reveal-text.highlight {
+        font-size: 1.5rem;
+        line-height: 1.6;
+    }
+
+    /* --- WAITLIST: Premium mobile form --- */
+    .waitlist-section {
+        gap: 50px;
+        padding: 40px 24px 80px 24px;
+    }
+
+    .final-cta {
+        font-size: clamp(1.8rem, 7vw, 2.8rem);
+        letter-spacing: -1px;
+    }
+
+    .limited-access {
+        font-size: 0.85rem;
+        letter-spacing: 2px;
     }
 
     .input-container {
@@ -590,36 +628,63 @@ input::placeholder {
         background: transparent;
         border: none;
         padding: 0;
-        gap: 12px;
+        gap: 14px;
     }
 
     input {
         background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.15);
-        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 14px;
         padding: 18px;
         text-align: center;
         width: 100%;
+        font-size: 1rem;
     }
 
     .btn-join {
         padding: 18px;
         width: 100%;
+        border-radius: 14px;
+        font-size: 0.85rem;
     }
 
+    /* --- COUNTDOWN: Scaled for mobile --- */
+    .countdown-container {
+        gap: 20px;
+        justify-content: center;
+    }
+
+    .count-num {
+        font-size: 3rem;
+        letter-spacing: -2px;
+    }
+
+    .count-label {
+        font-size: 0.7rem;
+        letter-spacing: 2px;
+    }
+
+    /* --- FLOATING FACE --- */
     #floating-u {
-        width: 350px;
-        height: 350px;
-        opacity: 0.1;
+        width: 300px;
+        height: 300px;
+        opacity: 0.08;
     }
 
+    /* --- MODAL --- */
     .modal-content {
-        padding: 40px 24px;
+        padding: 36px 24px;
         border-radius: 24px;
     }
 
     .modal-content h2 {
-        font-size: 1.6rem;
+        font-size: 1.5rem;
+    }
+
+    /* --- GLOW: Slightly smaller on mobile --- */
+    .glow-object {
+        width: 200px;
+        height: 200px;
     }
 }
 
