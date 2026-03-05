@@ -2,21 +2,77 @@
    I&Ü LANDING PAGE - Logic
    ===================================================== */
 
+// ── Scroll Restoration Fix ──────────────────────────
+// Must run BEFORE DOMContentLoaded so the browser
+// doesn't restore a previous scroll position that
+// would cause snap to land on the wrong slide.
+if ('scrollRestoration' in history) {
+    history.scrollRestoration = 'manual';
+}
+
+// Force top immediately (handles bfcache and refresh cases)
+window.scrollTo(0, 0);
+// Also reset body scroll (our snap container)
+document.documentElement.scrollTop = 0;
+
 document.addEventListener('DOMContentLoaded', () => {
+    // Double-ensure we start at top after DOM is ready
+    document.body.scrollTop = 0;
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' as ScrollBehavior });
+
     initCountdown();
     initFaceAnimation();
     initWaitlist();
     initReadingMode();
+    initVideoAutoplay();
 
-    // Force play on background videos for better browser support
-    const v1 = document.getElementById('main-video') as HTMLVideoElement;
-    const v2 = document.getElementById('story-video') as HTMLVideoElement;
-    // Force play and set initial state
-    if (v1) v1.play().catch(() => { });
     window.dispatchEvent(new Event('scroll'));
-
     console.log('🌟 I&Ü Landing Page Ready');
 });
+
+/**
+ * Robust video autoplay — handles iOS Safari restrictions.
+ * iOS requires: muted + playsinline + autoplay attributes (in HTML)
+ * AND a programmatic .play() call. On strict iOS, we also unlock
+ * on first user touch.
+ */
+function initVideoAutoplay() {
+    const video = document.getElementById('main-video') as HTMLVideoElement;
+    if (!video) return;
+
+    // Ensure all required iOS attributes are set programmatically too
+    video.muted = true;
+    video.playsInline = true;
+    video.loop = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', ''); // older iOS
+
+    const tryPlay = () => {
+        const promise = video.play();
+        if (promise !== undefined) {
+            promise.catch(() => {
+                // Autoplay blocked — attach a one-time touch/click unlock
+                const unlock = () => {
+                    video.play().catch(() => { });
+                    document.removeEventListener('touchstart', unlock);
+                    document.removeEventListener('click', unlock);
+                };
+                document.addEventListener('touchstart', unlock, { once: true, passive: true });
+                document.addEventListener('click', unlock, { once: true });
+            });
+        }
+    };
+
+    // Try immediately
+    tryPlay();
+
+    // iOS sometimes needs a slight delay after DOM ready
+    setTimeout(tryPlay, 300);
+
+    // Also re-try on any scroll/touch (helps after iOS low-power mode)
+    document.addEventListener('touchstart', tryPlay, { once: true, passive: true });
+}
+
 
 /**
  * Cinematic Storytelling Scroll System
