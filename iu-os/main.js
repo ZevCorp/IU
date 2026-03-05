@@ -2702,7 +2702,7 @@ function connectPhoneBridge() {
     if (!phoneBridgeActive) return;
     if (phoneBridgeWs && phoneBridgeWs.readyState <= WebSocket.OPEN) return;
 
-    const serverUrl = process.env.WS_SERVER_URL || 'ws://localhost:3001';
+    const serverUrl = process.env.WS_SERVER_URL || 'wss://iu-rw9m.onrender.com';
 
     if (phoneBridgeReconnectAttempts === 0) {
         console.log(`📱 [PhoneBridge] Connecting to: ${serverUrl}`);

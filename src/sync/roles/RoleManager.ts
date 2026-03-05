@@ -1,69 +1,30 @@
 /**
- * Role Manager
- * Handles negotiation of device roles (Main vs Display)
- * to ensure only one device listens/looks.
+ * Role Manager (Simplified)
+ * Mac = MAIN (always executes), Phone = INPUT (sends commands, displays face).
+ * No complex negotiation — just a flag based on device type.
  */
 
-import { getSharedState } from '../../sync/SharedState';
-
 export enum DeviceRole {
-    MAIN = 'main',      // Has eyes & ears (processes inputs)
-    DISPLAY = 'display' // Only shows face/output
+    MAIN = 'main',      // Executes actions, processes inputs
+    INPUT = 'input'     // Sends commands, displays face
 }
 
 class RoleManager {
-    private currentRole: DeviceRole = DeviceRole.DISPLAY;
-    private deviceId: string;
-    private listeners: ((role: DeviceRole) => void)[] = [];
+    private currentRole: DeviceRole;
 
     constructor() {
-        this.deviceId = this.generateDeviceId();
-        this.initializeNetworkListeners();
+        // Desktop/Electron = MAIN, everything else = INPUT
+        this.currentRole = this.detectRole();
     }
 
-    private generateDeviceId(): string {
-        let id = localStorage.getItem('ds_device_id');
-        if (!id) {
-            id = `device_${Math.random().toString(36).substr(2, 9)}`;
-            localStorage.setItem('ds_device_id', id);
+    private detectRole(): DeviceRole {
+        // In Electron (desktop), we're always MAIN
+        // @ts-ignore
+        if (typeof window !== 'undefined' && window.iuOS) {
+            return DeviceRole.MAIN;
         }
-        return id;
-    }
-
-    private initializeNetworkListeners() {
-        // Listen for changes in who the "main" device is
-        const sharedState = getSharedState();
-
-        // Initial check
-        this.checkIfMain(sharedState.get('mainDeviceId') as string);
-
-        sharedState.onRemoteChange('mainDeviceId', (mainId) => {
-            console.log(`[RoleManager] Main device changed to: ${mainId}`);
-            this.checkIfMain(mainId);
-        });
-    }
-
-    private checkIfMain(mainId: string | null) {
-        const previousRole = this.currentRole;
-
-        if (mainId === this.deviceId) {
-            this.currentRole = DeviceRole.MAIN;
-        } else {
-            this.currentRole = DeviceRole.DISPLAY;
-        }
-
-        if (previousRole !== this.currentRole) {
-            console.log(`[RoleManager] Role switched to: ${this.currentRole}`);
-            this.notifyListeners();
-        }
-    }
-
-    public claimMainRole() {
-        console.log('[RoleManager] Claiming MAIN role');
-        const sharedState = getSharedState();
-        sharedState.set('mainDeviceId', this.deviceId);
-        this.currentRole = DeviceRole.MAIN;
-        this.notifyListeners();
+        // In a browser (phone client), we're INPUT
+        return DeviceRole.INPUT;
     }
 
     public getRole(): DeviceRole {
@@ -74,12 +35,8 @@ class RoleManager {
         return this.currentRole === DeviceRole.MAIN;
     }
 
-    public onRoleChange(callback: (role: DeviceRole) => void) {
-        this.listeners.push(callback);
-    }
-
-    private notifyListeners() {
-        this.listeners.forEach(cb => cb(this.currentRole));
+    public isInput(): boolean {
+        return this.currentRole === DeviceRole.INPUT;
     }
 }
 

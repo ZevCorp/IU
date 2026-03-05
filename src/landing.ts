@@ -82,8 +82,8 @@ function initReadingMode() {
                 // Al salir, removemos la clase para que la animación se reinicie al volver
                 entry.target.classList.remove('active');
 
-                // Si el usuario subió al Hero (antes de la historia), paramos el auto-scroll
-                if (entry.target.id === 'theme-new-1' && window.scrollY < 200) {
+                // Si el usuario subió al inicio, paramos el auto-scroll
+                if (window.scrollY < 200) {
                     if (autoScrollTimer) clearTimeout(autoScrollTimer);
                 }
             }

@@ -42,6 +42,9 @@ const rooms = new Map();
 /** @type {Map<WebSocket, Client>} */
 const clients = new Map();
 
+/** @type {Map<string, Array>} Room conversation contexts */
+const roomContexts = new Map();
+
 // =====================================================
 // Server Setup
 // =====================================================
@@ -249,6 +252,33 @@ Start-Process $ExePath
         return;
     }
 
+    // ── Phone Client Static Files ──────────────────────────────────
+    // Serve the phone remote UI from server/public/
+    const PHONE_FILES = {
+        '/phone': { file: 'phone.html', type: 'text/html' },
+        '/phone.html': { file: 'phone.html', type: 'text/html' },
+        '/phone.css': { file: 'phone.css', type: 'text/css' },
+        '/phone.js': { file: 'phone.js', type: 'application/javascript' }
+    };
+
+    const phoneRoute = PHONE_FILES[req.url.split('?')[0]];
+    if (phoneRoute) {
+        const filePath = path.join(__dirname, 'public', phoneRoute.file);
+        try {
+            const content = fs.readFileSync(filePath, 'utf-8');
+            res.writeHead(200, {
+                'Content-Type': `${phoneRoute.type}; charset=utf-8`,
+                'Cache-Control': 'no-cache'
+            });
+            res.end(content);
+        } catch (e) {
+            res.writeHead(404);
+            res.end(`File not found: ${phoneRoute.file}`);
+        }
+        return;
+    }
+    // ─────────────────────────────────────────────────────────────────
+
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Drifting Sagan Sync Server - Use WebSocket to connect');
 });
@@ -340,6 +370,7 @@ function handleMessage(client, message) {
         case 'transfer_complete':
         case 'transfer_cancel':
         case 'shared_state':
+        case 'face_state':
             // Broadcast to room
             broadcastToRoom(client, message);
             break;
@@ -358,9 +389,71 @@ function handleMessage(client, message) {
             handleNavigationRequest(client, message);
             break;
 
+        // ── Phone ↔ Mac Bridge ──────────────────────────────────
+        case 'phone_chat':
+        case 'phone_voice':
+        case 'phone_voice_toggle':
+            // Forward to all other devices in the room (Mac Electron will pick it up)
+            broadcastToRoom(client, message);
+            // Store chat messages in room context
+            if (type === 'phone_chat' && payload?.text) {
+                storeContextMessage(client.roomId, { role: 'user', text: payload.text, source: 'phone', timestamp: Date.now() });
+            }
+            break;
+
+        case 'phone_reply':
+            // Response from Mac → broadcast to all (phone will pick it up)
+            broadcastToRoom(client, message);
+            // Store assistant replies in room context
+            if (payload?.reply) {
+                storeContextMessage(client.roomId, { role: 'assistant', text: payload.reply, source: 'mac', timestamp: Date.now() });
+            }
+            break;
+
+        case 'context_request':
+            // Phone requesting conversation history on connect
+            handleContextRequest(client);
+            break;
+
+        case 'context_sync':
+            // Mac sending full context to server for storage
+            if (payload?.history && client.roomId) {
+                roomContexts.set(client.roomId, payload.history);
+                console.log(`[Server] Context synced for room ${client.roomId}: ${payload.history.length} messages`);
+            }
+            break;
+        // ────────────────────────────────────────────────────────
+
         default:
             console.log(`[Server] Unknown message type: ${type}`);
     }
+}
+
+// =====================================================
+// Phone Context Helpers
+// =====================================================
+
+const MAX_CONTEXT_PER_ROOM = 100;
+
+function storeContextMessage(roomId, msg) {
+    if (!roomId) return;
+    if (!roomContexts.has(roomId)) {
+        roomContexts.set(roomId, []);
+    }
+    const ctx = roomContexts.get(roomId);
+    ctx.push(msg);
+    if (ctx.length > MAX_CONTEXT_PER_ROOM) ctx.shift();
+}
+
+function handleContextRequest(client) {
+    const ctx = roomContexts.get(client.roomId) || [];
+    send(client.ws, {
+        type: 'context_sync',
+        deviceId: 'server',
+        payload: { history: ctx },
+        timestamp: Date.now()
+    });
+    console.log(`[Server] Sent ${ctx.length} context messages to ${client.deviceId}`);
 }
 
 /**
