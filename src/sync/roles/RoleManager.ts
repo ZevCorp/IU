@@ -38,6 +38,16 @@ class RoleManager {
     public isInput(): boolean {
         return this.currentRole === DeviceRole.INPUT;
     }
+
+    /**
+     * Register a callback for role changes.
+     * Since the role is determined once at startup (static detection),
+     * the callback is invoked immediately with the current role.
+     */
+    public onRoleChange(callback: (role: DeviceRole) => void): void {
+        // Role is static — fire once with the current role
+        callback(this.currentRole);
+    }
 }
 
 // Singleton
