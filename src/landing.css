@@ -23,17 +23,27 @@
     box-sizing: border-box;
 }
 
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
 html {
-    scroll-snap-type: mandatory;
-    scroll-behavior: smooth;
+    /* html NO puede scrollear - body es el único scroll container */
+    height: 100%;
+    overflow: hidden;
 }
 
 body {
     background-color: var(--bg-black);
     color: var(--accent-white);
     font-family: var(--font-body);
+    /* body es el scroll container con snap */
+    height: 100%;
+    overflow-y: scroll;
     overflow-x: hidden;
-    min-height: 100vh;
+    scroll-snap-type: y mandatory;
 }
 
 /* =====================================================
@@ -148,8 +158,6 @@ main {
     position: relative;
     z-index: 5;
     width: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
 }
 
 /* =====================================================
@@ -158,14 +166,23 @@ main {
 .hero-text {
     width: 100%;
     min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    scroll-snap-align: center;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
     padding: 80px 20px 80px 20px;
     background: transparent;
     position: relative;
+}
+
+/* Beta Testers slide — mismo layout hero pero badge diferenciado */
+.beta-slide .badge {
+    background: linear-gradient(135deg, rgba(255, 200, 80, 0.12), rgba(255, 160, 40, 0.06));
+    border-color: rgba(255, 200, 80, 0.25);
+    color: rgba(255, 220, 120, 0.95);
 }
 
 .badge {
@@ -282,6 +299,7 @@ h1 .alt {
 
 .story-slide {
     min-height: 100vh;
+    height: 100vh;
     width: 100%;
     display: flex;
     align-items: center;
@@ -408,24 +426,36 @@ h1 .alt {
 }
 
 /* =====================================================
-   Waitlist Form
+   Waitlist / Beta-Testers Final Section
    ===================================================== */
 .waitlist-section {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 80px;
+    display: grid;
+    grid-template-rows: auto auto auto auto;
+    place-items: center;
+    row-gap: 32px;
     width: 100%;
-    min-height: 100vh;
+    height: 100vh;
     scroll-snap-align: start;
-    padding: 40px 20px 100px 20px;
+    scroll-snap-stop: always;
+    padding: 0 20px;
+    /* faux glow background */
+    background: radial-gradient(ellipse 60% 50% at 50% 60%, rgba(160, 80, 255, 0.06) 0%, transparent 70%);
+}
+
+.waitlist-section .badge {
+    margin-bottom: 0;
+}
+
+.waitlist-section h1 {
+    margin: 0;
+    line-height: 1;
 }
 
 .waitlist-section form {
     width: 100%;
     display: flex;
     justify-content: center;
+    margin: 0;
 }
 
 .input-container {
@@ -496,30 +526,46 @@ input::placeholder {
    ===================================================== */
 .countdown-container {
     display: flex;
-    gap: 60px;
+    gap: 48px;
     justify-content: center;
+    align-items: flex-start;
+    padding: 20px 40px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .countdown-item {
     display: flex;
     flex-direction: column;
     align-items: center;
+    min-width: 60px;
+}
+
+/* Separador visual entre items */
+.countdown-item:not(:last-child)::after {
+    content: ':';
+    display: none;
+    /* mantenemos limpio, sin separadores */
 }
 
 .count-num {
     font-family: var(--font-hero);
-    font-weight: 600;
-    font-size: 5rem;
-    letter-spacing: -4px;
+    font-weight: 300;
+    font-size: 3.5rem;
+    letter-spacing: -2px;
     line-height: 1;
+    color: var(--accent-white);
 }
 
 .count-label {
-    font-size: 0.8rem;
+    font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 3px;
     color: var(--text-gray);
-    margin-top: 12px;
+    margin-top: 8px;
     font-weight: 400;
 }
 

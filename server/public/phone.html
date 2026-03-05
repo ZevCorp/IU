@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Ü Remote</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0f">
+    <link rel="stylesheet" href="phone.css">
+</head>
+
+<body>
+    <div id="app">
+        <!-- Face Area -->
+        <div class="face-area">
+            <div class="face-container" id="face-container">
+                <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
+                    <g id="face-group" transform="translate(200, 250)">
+                        <!-- Eyebrows -->
+                        <g id="eyebrows-group">
+                            <path id="left-eyebrow" class="face-stroke" />
+                            <path id="right-eyebrow" class="face-stroke" />
+                        </g>
+                        <!-- Eyes -->
+                        <g id="eyes-group">
+                            <g id="left-eye" class="eye-group">
+                                <path id="left-eye-top" class="face-stroke" />
+                                <path id="left-eye-line" class="face-stroke" />
+                                <path id="left-eye-bottom" class="face-stroke" />
+                            </g>
+                            <g id="right-eye" class="eye-group">
+                                <path id="right-eye-top" class="face-stroke" />
+                                <path id="right-eye-line" class="face-stroke" />
+                                <path id="right-eye-bottom" class="face-stroke" />
+                            </g>
+                        </g>
+                        <!-- Mouth -->
+                        <g id="mouth-group">
+                            <path id="mouth" class="face-stroke" />
+                        </g>
+                    </g>
+                </svg>
+            </div>
+            <div class="face-status" id="face-status"></div>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="connection-bar">
+            <div class="connection-dot" id="connection-dot"></div>
+            <span id="connection-text">Conectando...</span>
+        </div>
+
+        <!-- Chat Area -->
+        <div class="chat-area">
+            <div class="messages" id="messages">
+                <div class="welcome" id="welcome">
+                    <div class="welcome-icon">Ü</div>
+                    <div class="welcome-hint">Mantén presionada la cara para hablar, o escribe un mensaje</div>
+                </div>
+            </div>
+
+            <div class="typing" id="typing">
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            </div>
+
+            <!-- Input -->
+            <div class="input-area">
+                <button class="voice-toggle" id="voice-toggle" aria-label="Toggle voice on Mac">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                        <line x1="12" y1="19" x2="12" y2="23" />
+                        <line x1="8" y1="23" x2="16" y2="23" />
+                    </svg>
+                </button>
+                <textarea class="input-field" id="input" placeholder="Escribe un mensaje..." rows="1"></textarea>
+                <button class="send-btn" id="send-btn" disabled aria-label="Send">
+                    <svg viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="phone.js"></script>
+</body>
+
+</html>

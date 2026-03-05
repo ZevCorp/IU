@@ -22,94 +22,44 @@ document.addEventListener('DOMContentLoaded', () => {
  * Cinematic Storytelling Scroll System
  */
 function initReadingMode() {
-    let autoScrollTimer: any = null;
-    let isAutoScrolling = false;
-
-    // Pausar y reiniciar auto-scroll si el usuario interactúa manualmente
-    const handleUserInteraction = () => {
-        if (autoScrollTimer) clearTimeout(autoScrollTimer);
-        // Si el usuario scrollea, le damos más tiempo (12s) antes de retomar el control
-        autoScrollTimer = setTimeout(triggerAutoScroll, 12000);
-    };
-
-    window.addEventListener('wheel', handleUserInteraction, { passive: true });
-    window.addEventListener('touchmove', handleUserInteraction, { passive: true });
-    window.addEventListener('keydown', handleUserInteraction, { passive: true });
-
-    const triggerAutoScroll = () => {
-        const slides = Array.from(document.querySelectorAll('.story-slide'));
-        // Encontrar cuál es el slide activo actual
-        const activeIndex = slides.findIndex(slide => slide.classList.contains('active'));
-
-        if (activeIndex >= 0 && activeIndex < slides.length - 1) {
-            isAutoScrolling = true;
-            slides[activeIndex + 1].scrollIntoView({ behavior: 'smooth' });
-
-            // Retomar intervalo de lectura normal (8 segundos por slide)
-            if (autoScrollTimer) clearTimeout(autoScrollTimer);
-            autoScrollTimer = setTimeout(triggerAutoScroll, 8000);
-
-            setTimeout(() => { isAutoScrolling = false; }, 1000);
-        } else if (activeIndex === slides.length - 1) {
-            // Si estamos en el último, bajar al final
-            const final = document.querySelector('.waitlist-section');
-            if (final) final.scrollIntoView({ behavior: 'smooth' });
-            if (autoScrollTimer) clearTimeout(autoScrollTimer);
-        }
-    };
-
+    // Solo usamos IntersectionObserver para las animaciones de reveal-text.
+    // El scroll sección-a-sección lo maneja CSS scroll-snap nativamente.
     const observer = new IntersectionObserver((entries) => {
         entries.forEach(entry => {
             if (entry.isIntersecting) {
                 entry.target.classList.add('active');
 
-                // Si es un slide de historia, gestionamos el auto-scroll
                 if (entry.target.classList.contains('story-slide')) {
                     updateBackgroundTheme(entry.target.id);
-                    // Solo activar el timer normal si no venimos de un autoscroll forzado
-                    if (!isAutoScrolling) {
-                        if (autoScrollTimer) clearTimeout(autoScrollTimer);
-                        autoScrollTimer = setTimeout(triggerAutoScroll, 8000);
-                    }
                 }
 
-                // Redundancia para textos
                 if (entry.target.classList.contains('reveal-text')) {
                     const section = (entry.target as HTMLElement).closest('.story-slide');
                     if (section) section.classList.add('active');
                 }
             } else {
-                // Al salir, removemos la clase para que la animación se reinicie al volver
                 entry.target.classList.remove('active');
-
-                // Si el usuario subió al inicio, paramos el auto-scroll
-                if (window.scrollY < 200) {
-                    if (autoScrollTimer) clearTimeout(autoScrollTimer);
-                }
             }
         });
-    }, { threshold: 0.2 });
+    }, { threshold: 0.4 });
 
-    // Observar tanto textos como las secciones mismas
-    document.querySelectorAll('.reveal-text, .final-cta, .story-slide').forEach(el => observer.observe(el));
+    document.querySelectorAll('.reveal-text, .final-cta, .story-slide, .waitlist-section').forEach(el => observer.observe(el));
 
-    // Control de Parallax y Video Único
+    // Parallax en los glow-objects
     window.addEventListener('scroll', () => {
         const scroll = window.scrollY;
         const windowHeight = window.innerHeight;
         const totalHeight = document.documentElement.scrollHeight;
         const scrollBottom = totalHeight - windowHeight;
 
-        // --- GESTIÓN DE VIDEO ÚNICO ---
+        // Ajustar opacidad del video según posición
         let videoOpacity = 0.8;
         let overlayOpacity = 0.1;
 
         if (scroll > 200 && scroll < scrollBottom - 200) {
-            // Zona de lectura (Slides)
             videoOpacity = 0.30;
             overlayOpacity = 0.70;
         } else {
-            // Inicio y Final
             videoOpacity = 0.8;
             overlayOpacity = 0.1;
         }
@@ -117,7 +67,7 @@ function initReadingMode() {
         document.documentElement.style.setProperty('--video-opacity', videoOpacity.toString());
         document.documentElement.style.setProperty('--overlay-opacity', overlayOpacity.toString());
 
-        // --- PARALLAX EN LOS GLOW OBJECTS ---
+        // Parallax en los glow-objects
         document.querySelectorAll('.story-slide').forEach((slide: any) => {
             const rect = slide.getBoundingClientRect();
             const visual = slide.querySelector('.glow-object');
@@ -131,8 +81,10 @@ function initReadingMode() {
                 visual.style.opacity = opacity.toString();
             }
         });
-    });
+    }, { passive: true });
 }
+
+
 
 function updateBackgroundTheme(themeId: string) {
     const body = document.body;
