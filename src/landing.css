@@ -630,17 +630,28 @@ input::placeholder {
         font-size: 2rem;
     }
 
-    /* --- HERO: Fill the viewport with impact --- */
+    /* --- HERO: Grid simétrico igual al slide de registro --- */
     .hero-text {
-        padding: 60px 24px 40px 24px;
-        justify-content: center;
+        display: grid;
+        grid-template-rows: auto 1fr auto;
+        place-items: center;
+        row-gap: 28px;
+        padding: 80px 28px 52px 28px;
+        justify-items: center;
+    }
+
+    /* Scroll indicator al fondo del grid */
+    .hero-text .scroll-indicator {
+        align-self: end;
+        margin-bottom: 8px;
     }
 
     .badge {
         font-size: 0.65rem;
         padding: 10px 20px;
         letter-spacing: 1.5px;
-        margin-bottom: 36px;
+        margin-bottom: 0;
+        /* grid gestiona el espacio */
     }
 
     h1 {
@@ -656,10 +667,15 @@ input::placeholder {
         -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.3), black 25%, black 75%, rgba(0, 0, 0, 0.3));
     }
 
-    /* --- STORY SLIDES: Bigger text, more room to breathe --- */
+    /* --- STORY SLIDES: Texto un poco arriba del centro --- */
+    .story-slide {
+        align-items: flex-start;
+        padding-top: 22vh;
+    }
+
     .slide-content {
         max-width: 100%;
-        padding: 40px 28px;
+        padding: 0 28px;
     }
 
     .reveal-text {
