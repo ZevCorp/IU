@@ -160,6 +160,11 @@ class DeviceSync {
             payload: { roomId },
             timestamp: Date.now()
         });
+
+        // Notify Electron main process so the Phone Bridge can join the same room
+        if (window.iuOS && window.iuOS.notifyPhoneBridgeRoom) {
+            window.iuOS.notifyPhoneBridgeRoom(roomId);
+        }
     }
 
     sendMessage(message) {
@@ -295,14 +300,21 @@ class DeviceSync {
 
     getConnectionUrl() {
         const roomId = this.getRoomId();
+
+        // Build HTTP base URL from the WS server URL
+        // wss://host → https://host, ws://host → http://host
+        const httpBase = this.serverUrl
+            .replace('wss://', 'https://')
+            .replace('ws://', 'http://');
+
         const params = new URLSearchParams({
             connect: this.deviceId,
             room: roomId,
             server: this.serverUrl
         });
 
-        // Point to iü.space web app with connection params
-        return `${RENDER_APP_URL}?${params.toString()}`;
+        // Point to the phone client served by the same server
+        return `${httpBase}/phone?${params.toString()}`;
     }
 
     isConnected() {

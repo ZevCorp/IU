@@ -46,13 +46,16 @@ class QRConnect {
                 left: 0;
                 right: 0;
                 bottom: 0;
-                background: rgba(0, 0, 0, 0.9);
+                background: rgba(0, 0, 0, 0.95);
                 display: flex;
-                align-items: center;
+                align-items: flex-start;
                 justify-content: center;
                 z-index: 2000;
                 animation: qr-fade-in 0.3s ease;
                 -webkit-app-region: no-drag;
+                overflow-y: auto;
+                overflow-x: hidden;
+                padding: 8px;
             }
             
             @keyframes qr-fade-in {
@@ -63,13 +66,14 @@ class QRConnect {
             .qr-modal {
                 background: var(--bg-primary, #0a0a0a);
                 border: 1px solid var(--control-border, rgba(255, 255, 255, 0.1));
-                border-radius: 24px;
-                padding: 40px;
+                border-radius: 16px;
+                padding: 14px 12px 12px;
                 text-align: center;
+                width: 100%;
                 max-width: 400px;
-                width: 90%;
                 position: relative;
                 animation: qr-slide-up 0.3s ease;
+                margin: auto 0;
             }
             
             @keyframes qr-slide-up {
@@ -79,47 +83,48 @@ class QRConnect {
             
             .qr-close {
                 position: absolute;
-                top: 16px;
-                right: 16px;
-                background: transparent;
+                top: 6px;
+                right: 6px;
+                background: rgba(255,255,255,0.1);
                 border: none;
-                color: var(--text-secondary, #888);
-                font-size: 28px;
+                color: var(--text-primary, #fff);
+                font-size: 20px;
                 cursor: pointer;
-                width: 44px;
-                height: 44px;
+                width: 32px;
+                height: 32px;
                 border-radius: 50%;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 transition: all 0.2s;
                 -webkit-app-region: no-drag;
+                z-index: 10;
             }
             
             .qr-close:hover {
-                background: var(--control-hover, rgba(255, 255, 255, 0.1));
-                color: var(--text-primary, #fff);
+                background: var(--control-hover, rgba(255, 255, 255, 0.2));
             }
             
             .qr-title {
-                font-size: 24px;
+                font-size: clamp(14px, 5vw, 24px);
                 font-weight: 600;
                 color: var(--text-primary, #fff);
-                margin: 0 0 8px 0;
+                margin: 0 0 4px 0;
             }
             
             .qr-subtitle {
-                font-size: 14px;
+                font-size: clamp(10px, 3vw, 14px);
                 color: var(--text-secondary, #888);
-                margin: 0 0 24px 0;
+                margin: 0 0 12px 0;
             }
             
             .qr-code-wrapper {
                 background: #fff;
-                padding: 20px;
-                border-radius: 16px;
+                padding: 10px;
+                border-radius: 12px;
                 display: inline-block;
-                margin-bottom: 24px;
+                margin-bottom: 12px;
+                max-width: calc(100% - 20px);
             }
             
             #qr-target {
@@ -127,28 +132,30 @@ class QRConnect {
                 justify-content: center;
             }
             
-            #qr-target img {
+            #qr-target img, #qr-target canvas {
                 display: block;
+                max-width: 100% !important;
+                height: auto !important;
             }
             
             .qr-instruction {
-                font-size: 13px;
+                font-size: clamp(9px, 2.8vw, 13px);
                 color: var(--text-secondary, #888);
-                margin: 0 0 16px 0;
+                margin: 0 0 8px 0;
             }
             
             .qr-devices-status {
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: 8px;
-                font-size: 13px;
+                gap: 6px;
+                font-size: clamp(9px, 2.8vw, 13px);
                 color: var(--text-secondary, #888);
             }
             
             .status-dot {
-                width: 8px;
-                height: 8px;
+                width: 7px;
+                height: 7px;
                 border-radius: 50%;
                 background: #666;
                 animation: status-pulse 2s ease-in-out infinite;
@@ -188,10 +195,14 @@ class QRConnect {
                 // Clear previous if any
                 target.innerHTML = '';
 
+                // Adaptive QR size: smaller in compact windows
+                const winW = window.innerWidth || 400;
+                const qrSize = winW < 300 ? 130 : winW < 400 ? 160 : 200;
+
                 new QRCode(target, {
                     text: url,
-                    width: 200,
-                    height: 200,
+                    width: qrSize,
+                    height: qrSize,
                     colorDark: "#000000",
                     colorLight: "#ffffff",
                     correctLevel: QRCode.CorrectLevel.M

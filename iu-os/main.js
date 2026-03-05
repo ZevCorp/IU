@@ -2682,3 +2682,423 @@ ipcMain.handle('confirm-action', async (event, data) => {
 });
 
 // Add setupChatGPT to initialization
+
+// ============================================
+// Phone ↔ Mac WebSocket Bridge
+// ============================================
+// Connects Electron main process to the same WS server as the phone client.
+// Relays phone_chat/phone_voice → existing chat pipeline → phone_reply
+
+const WebSocket = require('ws');
+
+let phoneBridgeWs = null;
+let phoneBridgeDeviceId = 'electron-bridge-' + Date.now().toString(36);
+let phoneBridgeRoomId = null;
+let phoneBridgeReconnectAttempts = 0;
+let phoneBridgeMaxReconnects = 5;
+let phoneBridgeActive = false; // Only true after user triggers QR connect
+
+function connectPhoneBridge() {
+    if (!phoneBridgeActive) return;
+    if (phoneBridgeWs && phoneBridgeWs.readyState <= WebSocket.OPEN) return;
+
+    const serverUrl = process.env.WS_SERVER_URL || 'ws://localhost:3001';
+
+    if (phoneBridgeReconnectAttempts === 0) {
+        console.log(`📱 [PhoneBridge] Connecting to: ${serverUrl}`);
+    }
+
+    try {
+        phoneBridgeWs = new WebSocket(serverUrl);
+    } catch (e) {
+        console.error('📱 [PhoneBridge] Connection error:', e.message);
+        schedulePhoneBridgeReconnect();
+        return;
+    }
+
+    phoneBridgeWs.on('open', () => {
+        console.log('📱 [PhoneBridge] ✅ Connected to sync server');
+        phoneBridgeReconnectAttempts = 0;
+
+        if (phoneBridgeRoomId) {
+            phoneBridgeRegisterAndJoin(phoneBridgeRoomId);
+        }
+
+        syncContextToServer();
+    });
+
+    phoneBridgeWs.on('message', (data) => {
+        try {
+            const msg = JSON.parse(data.toString());
+            handlePhoneBridgeMessage(msg);
+        } catch (e) {
+            console.error('📱 [PhoneBridge] Parse error:', e);
+        }
+    });
+
+    phoneBridgeWs.on('close', () => {
+        phoneBridgeWs = null;
+        schedulePhoneBridgeReconnect();
+    });
+
+    phoneBridgeWs.on('error', () => {
+        // Error is logged implicitly by the close event
+    });
+}
+
+function schedulePhoneBridgeReconnect() {
+    if (!phoneBridgeActive) return;
+    phoneBridgeReconnectAttempts++;
+    if (phoneBridgeReconnectAttempts > phoneBridgeMaxReconnects) {
+        console.log('📱 [PhoneBridge] Server not available. Will retry when QR connect is triggered again.');
+        phoneBridgeActive = false;
+        phoneBridgeReconnectAttempts = 0;
+        return;
+    }
+    const delay = Math.min(5000 * Math.pow(2, phoneBridgeReconnectAttempts - 1), 60000);
+    setTimeout(connectPhoneBridge, delay);
+}
+
+function phoneBridgeRegisterAndJoin(roomId) {
+    phoneBridgeRoomId = roomId;
+    if (!phoneBridgeWs || phoneBridgeWs.readyState !== WebSocket.OPEN) return;
+
+    phoneBridgeSend({
+        type: 'register',
+        deviceId: phoneBridgeDeviceId,
+        payload: { deviceType: 'electron', roomId }
+    });
+
+    phoneBridgeSend({
+        type: 'join_room',
+        deviceId: phoneBridgeDeviceId,
+        payload: { roomId }
+    });
+
+    console.log(`📱 [PhoneBridge] Joined room: ${roomId}`);
+}
+
+function phoneBridgeSend(msg) {
+    if (phoneBridgeWs && phoneBridgeWs.readyState === WebSocket.OPEN) {
+        phoneBridgeWs.send(JSON.stringify({ ...msg, timestamp: Date.now() }));
+    }
+}
+
+function syncContextToServer() {
+    if (!contextManager) return;
+    const history = contextManager.getFullHistory();
+    phoneBridgeSend({
+        type: 'context_sync',
+        deviceId: phoneBridgeDeviceId,
+        payload: { history }
+    });
+}
+
+async function handlePhoneBridgeMessage(msg) {
+    if (msg.deviceId === phoneBridgeDeviceId) return;
+
+    switch (msg.type) {
+        case 'phone_chat':
+            await handlePhoneChat(msg.payload);
+            break;
+
+        case 'phone_voice':
+            await handlePhoneVoice(msg.payload);
+            break;
+
+        case 'phone_voice_toggle':
+            handlePhoneVoiceToggle(msg.payload);
+            break;
+
+        case 'context_request':
+            syncContextToServer();
+            break;
+
+        default:
+            // Ignore other messages (register, pong, etc.)
+            break;
+    }
+}
+
+/**
+ * Handle text chat from phone — same pipeline as chat-send-message IPC
+ */
+async function handlePhoneChat(payload) {
+    const text = payload?.text;
+    if (!text) return;
+
+    console.log(`📱 [PhoneBridge] Chat from phone: "${text.substring(0, 60)}"`);
+
+    // Send face state: thinking
+    phoneBridgeSend({
+        type: 'face_state',
+        deviceId: phoneBridgeDeviceId,
+        payload: { state: 'thinking' }
+    });
+
+    // Add to context
+    contextManager.addMessage('user', text, 'phone_chat');
+
+    if (!ModelSwitch.isReady()) {
+        phoneBridgeSend({
+            type: 'phone_reply',
+            deviceId: phoneBridgeDeviceId,
+            payload: { error: 'Model provider no inicializado' }
+        });
+        return;
+    }
+
+    try {
+        const relevantContext = await contextManager.getRelevantContext(text);
+        const LearningAgent = require('./LearningAgent');
+        const relevantLearned = LearningAgent.findRelevantWorkflows(text, 3);
+
+        let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe desde su teléfono para controlar su computador remotamente.
+
+Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que harás y llama la función execute_screen_action.
+
+Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
+Responde en español.`;
+
+        if (relevantLearned && relevantLearned.length > 0) {
+            const list = relevantLearned.map((wf, i) => {
+                return `${i + 1}. ${wf.workflowName}\n   Resumen: ${wf.summary}\n   Estilo: ${wf.executionStyle}`;
+            }).join('\n');
+            systemPrompt += `\n\nAPRENDIZAJES RELEVANTES DEL USUARIO:\n${list}`;
+        }
+
+        if (relevantContext.longTerm) {
+            systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
+        }
+
+        const history = contextManager.getHistoryForAPI(20);
+
+        const response = await ModelSwitch.chatCompletion({
+            messages: [
+                { role: 'system', content: systemPrompt },
+                ...history
+            ],
+            tools: actionPlanner ? actionPlanner.tools : undefined,
+            tool_choice: actionPlanner ? 'auto' : undefined
+        });
+
+        const message = response.choices[0].message;
+        const reply = message.content || '';
+
+        // Check for action
+        if (message.tool_calls && message.tool_calls.length > 0) {
+            const call = message.tool_calls[0];
+            if (call.function.name === 'execute_screen_action') {
+                const args = JSON.parse(call.function.arguments);
+                console.log(`📱 [PhoneBridge] Action from phone: ${args.goal}`);
+
+                contextManager.addMessage('assistant', reply || null, 'phone_api', {
+                    tool_calls: message.tool_calls
+                });
+                contextManager.addMessage('tool', `Acción iniciada: ${args.goal} en ${args.app}`, 'action_result', {
+                    tool_call_id: call.id,
+                    name: call.function.name
+                });
+
+                // Send reply + action to phone
+                phoneBridgeSend({
+                    type: 'phone_reply',
+                    deviceId: phoneBridgeDeviceId,
+                    payload: {
+                        reply: reply || `Entendido. Voy a ${args.goal.toLowerCase()}.`,
+                        action: args
+                    }
+                });
+
+                // Send face state: executing
+                phoneBridgeSend({
+                    type: 'face_state',
+                    deviceId: phoneBridgeDeviceId,
+                    payload: { state: 'executing' }
+                });
+
+                // Execute on Mac
+                if (mainWindow) {
+                    mainWindow.webContents.send('action-confirm-request', {
+                        goal: args.goal,
+                        app: args.app,
+                        stepsHint: args.steps_hint,
+                        source: 'phone'
+                    });
+                }
+
+                // Sync context
+                syncContextToServer();
+                return;
+            }
+        }
+
+        // Regular reply
+        phoneBridgeSend({
+            type: 'phone_reply',
+            deviceId: phoneBridgeDeviceId,
+            payload: { reply }
+        });
+
+        // Send face state: idle
+        phoneBridgeSend({
+            type: 'face_state',
+            deviceId: phoneBridgeDeviceId,
+            payload: { state: 'idle' }
+        });
+
+        contextManager.addMessage('assistant', reply || null, 'phone_api', {
+            tool_calls: message.tool_calls
+        });
+
+        // Sync context
+        syncContextToServer();
+
+    } catch (e) {
+        console.error('❌ [PhoneBridge] Chat failed:', e.message);
+        phoneBridgeSend({
+            type: 'phone_reply',
+            deviceId: phoneBridgeDeviceId,
+            payload: { error: e.message }
+        });
+        phoneBridgeSend({
+            type: 'face_state',
+            deviceId: phoneBridgeDeviceId,
+            payload: { state: 'idle' }
+        });
+    }
+}
+
+/**
+ * Handle voice message from phone — transcribe with Whisper then chat
+ */
+async function handlePhoneVoice(payload) {
+    const audio = payload?.audio;
+    if (!audio) return;
+
+    console.log('📱 [PhoneBridge] Voice message received from phone');
+
+    // Send face state: listening
+    phoneBridgeSend({
+        type: 'face_state',
+        deviceId: phoneBridgeDeviceId,
+        payload: { state: 'listening' }
+    });
+
+    try {
+        // Decode base64 audio
+        const base64Data = audio.replace(/^data:audio\/[^;]+[^,]*,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+
+        if (buffer.length < 1000) {
+            console.warn('📱 [PhoneBridge] Audio too small, ignoring');
+            phoneBridgeSend({
+                type: 'face_state',
+                deviceId: phoneBridgeDeviceId,
+                payload: { state: 'idle' }
+            });
+            return;
+        }
+
+        // Save temp file
+        const tempFile = path.join(app.getPath('temp'), `phone_audio_${Date.now()}.webm`);
+        fs.writeFileSync(tempFile, buffer);
+
+        // Transcribe
+        const transcription = await ModelSwitch.transcription({
+            filePath: tempFile,
+            buffer: buffer,
+            mimeType: 'audio/webm'
+        });
+
+        const transcript = transcription.text;
+        console.log(`📱 [PhoneBridge] Transcription: "${transcript}"`);
+
+        // Cleanup temp file
+        try { fs.unlinkSync(tempFile); } catch (e) { /* ignore */ }
+
+        if (!transcript || transcript.trim().length === 0) {
+            phoneBridgeSend({
+                type: 'phone_reply',
+                deviceId: phoneBridgeDeviceId,
+                payload: { reply: 'No pude entender el audio.' }
+            });
+            phoneBridgeSend({
+                type: 'face_state',
+                deviceId: phoneBridgeDeviceId,
+                payload: { state: 'idle' }
+            });
+            return;
+        }
+
+        // Process as chat
+        await handlePhoneChat({ text: transcript });
+
+    } catch (e) {
+        console.error('❌ [PhoneBridge] Voice processing failed:', e.message);
+        phoneBridgeSend({
+            type: 'phone_reply',
+            deviceId: phoneBridgeDeviceId,
+            payload: { error: 'Error procesando audio: ' + e.message }
+        });
+        phoneBridgeSend({
+            type: 'face_state',
+            deviceId: phoneBridgeDeviceId,
+            payload: { state: 'idle' }
+        });
+    }
+}
+
+/**
+ * Handle voice toggle from phone — activate/deactivate Mac voice mode
+ */
+function handlePhoneVoiceToggle(payload) {
+    const action = payload?.action;
+    console.log(`📱 [PhoneBridge] Voice toggle from phone: ${action}`);
+
+    // Trigger voice control via the existing conversation-control IPC
+    if (mainWindow) {
+        mainWindow.webContents.send('voice-state-changed', action === 'start' ? 'active' : 'inactive');
+    }
+
+    // If we have a chatPage (ChatGPT), try to toggle voice
+    if (chatPage) {
+        try {
+            if (action === 'start') {
+                chatPage.evaluate(() => {
+                    const btn = document.querySelector('button[aria-label="Start Voice"]') ||
+                        document.querySelector('button[aria-label="Iniciar voz"]') ||
+                        document.querySelector('button[data-testid="composer-speech-button"]');
+                    if (btn) btn.click();
+                });
+            } else {
+                chatPage.evaluate(() => {
+                    const btn = document.querySelector('button[aria-label="End Voice"]') ||
+                        document.querySelector('button[aria-label="Terminar voz"]') ||
+                        document.querySelector('button[aria-label="Finalizar voz"]');
+                    if (btn) btn.click();
+                });
+            }
+        } catch (e) {
+            console.error('📱 [PhoneBridge] Voice toggle failed:', e.message);
+        }
+    }
+}
+
+// ── Start the phone bridge when renderer DeviceSync creates/joins a room ─────
+
+ipcMain.on('phone-bridge-room', (event, { roomId }) => {
+    console.log(`📱 [PhoneBridge] Room ID received from renderer: ${roomId}`);
+    phoneBridgeRoomId = roomId;
+
+    // Activate and connect (or re-join if already connected)
+    phoneBridgeActive = true;
+    phoneBridgeReconnectAttempts = 0;
+
+    if (phoneBridgeWs && phoneBridgeWs.readyState === WebSocket.OPEN) {
+        phoneBridgeRegisterAndJoin(roomId);
+    } else {
+        connectPhoneBridge();
+    }
+});
+

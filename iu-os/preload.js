@@ -131,6 +131,9 @@ contextBridge.exposeInMainWorld('iuOS', {
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
     onLearningStatus: (callback) => ipcRenderer.on('learning-status', (event, data) => callback(data)),
     listLearnedWorkflows: () => ipcRenderer.invoke('learning-list-workflows'),
+
+    // Phone Bridge: notify main process of the current room ID
+    notifyPhoneBridgeRoom: (roomId) => ipcRenderer.send('phone-bridge-room', { roomId }),
 });
 
 

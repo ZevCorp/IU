@@ -134,6 +134,18 @@ class ContextManager extends EventEmitter {
         this.history = [];
         this.emit('history-updated', this.history);
     }
+    /**
+     * Get full conversation history for cross-device context sync
+     * Returns simplified format suitable for WebSocket transmission
+     */
+    getFullHistory() {
+        return this.history.map(msg => ({
+            role: msg.role,
+            text: msg.text,
+            source: msg.source,
+            timestamp: msg.timestamp
+        }));
+    }
 }
 
 module.exports = new ContextManager();
