@@ -635,15 +635,17 @@ input::placeholder {
         display: grid;
         grid-template-rows: auto 1fr auto;
         place-items: center;
-        row-gap: 28px;
-        padding: 80px 28px 52px 28px;
+        row-gap: 20px;
+        padding: 70px 28px 44px 28px;
         justify-items: center;
     }
 
-    /* Scroll indicator al fondo del grid */
+    /* Scroll indicator sep del h1 */
     .hero-text .scroll-indicator {
         align-self: end;
-        margin-bottom: 8px;
+        margin-top: 20px;
+        /* baja el indicador, separa del h1 */
+        margin-bottom: 4px;
     }
 
     .badge {
@@ -656,7 +658,8 @@ input::placeholder {
 
     h1 {
         font-size: clamp(3.5rem, 16vw, 6rem);
-        margin-bottom: 40px;
+        margin-bottom: 16px;
+        /* sube el bloque h1 */
         letter-spacing: -3px;
     }
 
@@ -667,10 +670,12 @@ input::placeholder {
         -webkit-mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.3), black 25%, black 75%, rgba(0, 0, 0, 0.3));
     }
 
-    /* --- STORY SLIDES: Texto un poco arriba del centro --- */
+    /* --- STORY SLIDES: Contenido ligeramente sobre el centro --- */
     .story-slide {
-        align-items: flex-start;
-        padding-top: 22vh;
+        align-items: center;
+        padding-top: 0;
+        padding-bottom: 18vh;
+        /* el espacio abajo empuja el contenido suavemente hacia arriba */
     }
 
     .slide-content {
@@ -690,8 +695,17 @@ input::placeholder {
 
     /* --- WAITLIST: Premium mobile form --- */
     .waitlist-section {
-        gap: 50px;
-        padding: 40px 24px 80px 24px;
+        row-gap: 28px;
+        padding: 40px 0 60px 0;
+        /* sin padding lateral — lo gestionan los hijos */
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .waitlist-section form {
+        width: 100%;
+        padding: 0 24px;
+        box-sizing: border-box;
     }
 
     .final-cta {
