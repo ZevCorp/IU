@@ -1,92 +1,113 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" data-theme="dark">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Ü Remote</title>
+    <title>Ü</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0a0a0f">
+    <meta name="theme-color" content="#0a0a0a">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="phone.css">
 </head>
 
 <body>
     <div id="app">
-        <!-- Face Area -->
-        <div class="face-area">
-            <div class="face-container" id="face-container">
-                <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
-                    <g id="face-group" transform="translate(200, 250)">
-                        <!-- Eyebrows -->
-                        <g id="eyebrows-group">
-                            <path id="left-eyebrow" class="face-stroke" />
-                            <path id="right-eyebrow" class="face-stroke" />
+
+        <!-- Face Container — exact replica of Electron -->
+        <div id="face-container">
+            <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
+                <g id="face-group" transform="translate(200, 250)">
+                    <g id="eyebrows-group">
+                        <path id="left-eyebrow" class="face-stroke" />
+                        <path id="right-eyebrow" class="face-stroke" />
+                    </g>
+                    <g id="eyes-group">
+                        <g id="left-eye" class="eye-group">
+                            <path id="left-eye-line" class="face-stroke" />
                         </g>
-                        <!-- Eyes -->
-                        <g id="eyes-group">
-                            <g id="left-eye" class="eye-group">
-                                <path id="left-eye-top" class="face-stroke" />
-                                <path id="left-eye-line" class="face-stroke" />
-                                <path id="left-eye-bottom" class="face-stroke" />
-                            </g>
-                            <g id="right-eye" class="eye-group">
-                                <path id="right-eye-top" class="face-stroke" />
-                                <path id="right-eye-line" class="face-stroke" />
-                                <path id="right-eye-bottom" class="face-stroke" />
-                            </g>
-                        </g>
-                        <!-- Mouth -->
-                        <g id="mouth-group">
-                            <path id="mouth" class="face-stroke" />
+                        <g id="right-eye" class="eye-group">
+                            <path id="right-eye-line" class="face-stroke" />
                         </g>
                     </g>
-                </svg>
-            </div>
-            <div class="face-status" id="face-status"></div>
-        </div>
+                    <g id="mouth-group">
+                        <path id="mouth" class="face-stroke" />
+                    </g>
+                </g>
+            </svg>
 
-        <!-- Connection Status -->
-        <div class="connection-bar">
-            <div class="connection-dot" id="connection-dot"></div>
-            <span id="connection-text">Conectando...</span>
-        </div>
-
-        <!-- Chat Area -->
-        <div class="chat-area">
-            <div class="messages" id="messages">
-                <div class="welcome" id="welcome">
-                    <div class="welcome-icon">Ü</div>
-                    <div class="welcome-hint">Mantén presionada la cara para hablar, o escribe un mensaje</div>
+            <!-- Thinking / State label -->
+            <div id="intent-carousel" class="hidden">
+                <div id="thinking-label">
+                    <span class="thinking-text">thinking</span>
                 </div>
             </div>
 
-            <div class="typing" id="typing">
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-                <div class="typing-dot"></div>
-            </div>
-
-            <!-- Input -->
-            <div class="input-area">
-                <button class="voice-toggle" id="voice-toggle" aria-label="Toggle voice on Mac">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                        stroke-linejoin="round">
-                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                        <line x1="12" y1="19" x2="12" y2="23" />
-                        <line x1="8" y1="23" x2="16" y2="23" />
-                    </svg>
-                </button>
-                <textarea class="input-field" id="input" placeholder="Escribe un mensaje..." rows="1"></textarea>
-                <button class="send-btn" id="send-btn" disabled aria-label="Send">
-                    <svg viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-                    </svg>
-                </button>
+            <!-- Transcript / Response text -->
+            <div id="transcript-container" class="hidden">
+                <p id="transcript-text"></p>
             </div>
         </div>
+
+        <!-- "Hablar" button — same as Electron's transfer-btn-top -->
+        <button id="btn-voice" class="transfer-btn-top" aria-label="Hablar con Ü">
+            <span class="transfer-text" id="voice-label">Hablar</span>
+        </button>
+
+        <!-- Chat button — same as Electron's chat-toggle-btn (top-right) -->
+        <button id="btn-chat-toggle" class="chat-toggle-btn" aria-label="Abrir chat">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+        </button>
+
+        <!-- Menu button — same as Electron's menu-toggle (bottom-right) -->
+        <button id="menu-toggle" class="menu-toggle" aria-label="Menú">
+            <span class="menu-icon">☰</span>
+        </button>
+
+        <!-- Controls Panel — same structure as Electron -->
+        <div id="controls-panel" class="collapsed">
+            <h3>Conexión</h3>
+            <div class="status-row" id="connection-status">
+                <span class="status-indicator" id="sync-indicator"></span>
+                <span id="sync-status-text">Conectando...</span>
+            </div>
+        </div>
+
+        <!-- Chat Overlay -->
+        <div id="chat-overlay" class="hidden">
+            <div class="chat-modal">
+                <div class="chat-header">
+                    <span class="chat-title">Ü</span>
+                    <button id="chat-close" class="chat-close-btn">×</button>
+                </div>
+                <div class="messages" id="messages">
+                    <div class="welcome" id="welcome">
+                        <span class="welcome-hint">Escribe un mensaje para controlar tu Mac</span>
+                    </div>
+                </div>
+                <div class="typing" id="typing">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                </div>
+                <div class="chat-input-area">
+                    <textarea class="chat-input" id="chat-input" placeholder="Escribe un mensaje..."
+                        rows="1"></textarea>
+                    <button class="chat-send-btn" id="chat-send" disabled>
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
+                            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script src="phone.js"></script>

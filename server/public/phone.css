@@ -1,276 +1,620 @@
-/* ══════════════════════════════════════════
-   Phone Remote – Premium Dark Mobile Style
-   ══════════════════════════════════════════ */
+/**
+ * Ü Phone Remote — CSS
+ * Exact replica of the Electron app's styles.css,
+ * adapted for mobile (no -webkit-app-region, safe-area, touch).
+ */
 
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@200;300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
 
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
+/* =====================================================
+   Design Tokens — exactly from Electron styles.css
+   ===================================================== */
+:root {
+    --bg-primary: #0a0a0a;
+    --stroke-color: #ffffff;
+    --accent-color: #666666;
+    --text-primary: #ffffff;
+    --text-secondary: #888888;
+    --control-bg: rgba(255, 255, 255, 0.05);
+    --control-border: rgba(255, 255, 255, 0.1);
+    --control-hover: rgba(255, 255, 255, 0.1);
+    --control-active: rgba(255, 255, 255, 0.2);
+    --stroke-width: 2.5px;
+    --stroke-linecap: round;
+    --transition-fast: 150ms ease;
+    --transition-normal: 300ms ease;
+    --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-:root {
-    --bg: #0a0a0f;
-    --surface: #141419;
-    --surface-2: #1c1c24;
-    --border: rgba(255, 255, 255, 0.08);
-    --text: #f0f0f5;
-    --text-dim: #8a8a9a;
-    --accent: #ffffff;
-    --user-bubble: #2a2a35;
-    --assistant-bubble: #18181f;
-    --listening-glow: rgba(255, 80, 80, 0.6);
-    --thinking-glow: rgba(100, 180, 255, 0.4);
-    --success-glow: rgba(80, 255, 140, 0.4);
-    --safe-bottom: env(safe-area-inset-bottom, 0px);
+[data-theme="light"] {
+    --bg-primary: #ffffff;
+    --stroke-color: #0a0a0a;
+    --accent-color: #999999;
+    --text-primary: #0a0a0a;
+    --text-secondary: #666666;
+    --control-bg: rgba(0, 0, 0, 0.03);
+    --control-border: rgba(0, 0, 0, 0.1);
+    --control-hover: rgba(0, 0, 0, 0.05);
+    --control-active: rgba(0, 0, 0, 0.1);
+}
+
+/* =====================================================
+   Reset & Base
+   ===================================================== */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
 }
 
 html,
 body {
+    width: 100%;
     height: 100%;
+    height: 100dvh;
     overflow: hidden;
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Outfit', -apple-system, system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    user-select: none;
+    overscroll-behavior: none;
 }
 
-#app {
+body {
+    font-family: var(--font-primary);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    transition: background-color var(--transition-normal), color var(--transition-normal);
     display: flex;
-    flex-direction: column;
-    height: 100%;
-    max-height: 100dvh;
-}
-
-/* ── Face Area ─────────────────────────── */
-
-.face-area {
-    flex-shrink: 0;
-    display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 28px 20px 12px;
+}
+
+/* =====================================================
+   App Container
+   ===================================================== */
+#app {
+    width: 100%;
+    height: 100%;
     position: relative;
+    background: var(--bg-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.face-container {
-    width: 120px;
-    height: 140px;
+/* =====================================================
+   Face Container — EXACT from Electron styles.css
+   ===================================================== */
+#face-container {
     position: relative;
-    cursor: pointer;
-    transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.face-container:active {
-    transform: scale(0.95);
-}
-
-.face-container.listening {
-    animation: pulse-listen 1.6s ease-in-out infinite;
-}
-
-.face-container.listening::before {
-    content: '';
-    position: absolute;
-    inset: -16px;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--listening-glow) 0%, transparent 70%);
-    animation: glow-pulse 1.6s ease-in-out infinite;
-    z-index: -1;
-}
-
-.face-container.thinking::before {
-    content: '';
-    position: absolute;
-    inset: -16px;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--thinking-glow) 0%, transparent 70%);
-    animation: glow-pulse 2s ease-in-out infinite;
-    z-index: -1;
-}
-
-@keyframes pulse-listen {
-
-    0%,
-    100% {
-        transform: scale(1);
-    }
-
-    50% {
-        transform: scale(1.04);
-    }
-}
-
-@keyframes glow-pulse {
-
-    0%,
-    100% {
-        opacity: 0.4;
-        transform: scale(0.9);
-    }
-
-    50% {
-        opacity: 1;
-        transform: scale(1.1);
-    }
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+    perspective: 1200px;
+    touch-action: none;
 }
 
 #face-svg {
     width: 100%;
     height: 100%;
+    max-width: 300px;
+    max-height: 400px;
+    transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-#face-svg .face-stroke {
-    stroke: var(--accent);
-    stroke-width: 4;
-    stroke-linecap: round;
+/* =====================================================
+   Face Strokes — EXACT from Electron
+   ===================================================== */
+.face-stroke {
     fill: none;
+    stroke: var(--stroke-color);
+    stroke-width: var(--stroke-width);
+    stroke-linecap: var(--stroke-linecap);
+    stroke-linejoin: round;
+    transition: stroke var(--transition-normal);
 }
 
-/* Status Label */
-.face-status {
-    margin-top: 8px;
-    font-size: 11px;
-    font-weight: 300;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    transition: all 0.3s ease;
-    min-height: 16px;
+/* =====================================================
+   Listening glow on face (long-press)
+   ===================================================== */
+#face-container.listening #face-svg {
+    filter: drop-shadow(0 0 20px rgba(255, 255, 255, 0.25));
 }
 
-.face-status.listening {
-    color: #ff5050;
+#face-container.thinking #face-svg {
+    filter: drop-shadow(0 0 12px rgba(255, 255, 255, 0.12));
 }
 
-.face-status.thinking {
-    color: #64b4ff;
+#face-container.executing #face-svg {
+    filter: drop-shadow(0 0 16px rgba(99, 102, 241, 0.4));
 }
 
-.face-status.executing {
-    color: #50ff8c;
-}
-
-/* ── Connection Bar ───────────────────── */
-
-.connection-bar {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 6px 14px;
-    margin: 0 20px 8px;
-    border-radius: 20px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    font-size: 11px;
-    color: var(--text-dim);
-    letter-spacing: 0.05em;
-}
-
-.connection-dot {
-    width: 6px;
-    height: 6px;
+/* Long-press ripple on the face */
+#face-container.press-active::after {
+    content: '';
+    position: absolute;
+    inset: 0;
     border-radius: 50%;
-    background: #ff4444;
-    transition: background 0.3s ease;
+    border: 1.5px solid rgba(255, 255, 255, 0.25);
+    animation: press-ripple 0.6s ease-out forwards;
+    pointer-events: none;
 }
 
-.connection-dot.connected {
-    background: #44ff88;
-    box-shadow: 0 0 8px rgba(68, 255, 136, 0.4);
-}
-
-/* ── Chat Area ─────────────────────────── */
-
-.chat-area {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    border-top: 1px solid var(--border);
-}
-
-.messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 16px 16px 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    scroll-behavior: smooth;
-    -webkit-overflow-scrolling: touch;
-}
-
-.messages::-webkit-scrollbar {
-    display: none;
-}
-
-.message {
-    max-width: 82%;
-    padding: 10px 14px;
-    border-radius: 18px;
-    font-size: 14px;
-    line-height: 1.45;
-    word-wrap: break-word;
-    animation: msg-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes msg-in {
+@keyframes press-ripple {
     from {
-        opacity: 0;
-        transform: translateY(8px) scale(0.97);
+        transform: scale(0.6);
+        opacity: 1;
     }
 
     to {
+        transform: scale(1.4);
+        opacity: 0;
+    }
+}
+
+/* =====================================================
+   Intent Carousel / Thinking label — EXACT
+   ===================================================== */
+#intent-carousel {
+    position: absolute;
+    top: 18%;
+    left: 0;
+    right: 0;
+    width: 100%;
+    padding: 12px 20px;
+    z-index: 500;
+    transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 0;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translateY(10px);
+}
+
+#intent-carousel:not(.hidden) {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+#intent-carousel.hidden {
+    opacity: 0;
+    transform: translateY(10px);
+    display: none;
+}
+
+#thinking-label {
+    font-size: 18px;
+    color: rgba(255, 255, 255, 0.95);
+    font-weight: 300;
+    letter-spacing: 0.5px;
+}
+
+/* =====================================================
+   Transcript Container — EXACT from Electron
+   ===================================================== */
+#transcript-container {
+    position: absolute;
+    top: 60%;
+    left: 50%;
+    transform: translateX(-50%) translateY(10px);
+    width: 80%;
+    max-width: 420px;
+    padding: 24px 32px;
+    background: rgba(10, 10, 15, 0.4);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border-radius: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 40px 80px rgba(0, 0, 0, 0.5);
+    z-index: 100;
+    transition: opacity 1.2s cubic-bezier(0.16, 1, 0.3, 1), transform 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+    opacity: 0;
+    pointer-events: none;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 80px;
+}
+
+#transcript-container:not(.hidden) {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
+
+#transcript-container.hidden {
+    display: none;
+}
+
+#transcript-text {
+    margin: 0;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 17px;
+    line-height: 1.6;
+    text-align: center;
+    font-weight: 300;
+    letter-spacing: -0.2px;
+}
+
+.word-fade {
+    display: inline-block;
+    opacity: 0;
+    filter: blur(8px);
+    transform: translateY(5px) scale(0.95);
+    animation: elegant-word-in 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes elegant-word-in {
+    to {
         opacity: 1;
+        filter: blur(0);
         transform: translateY(0) scale(1);
     }
 }
 
+/* =====================================================
+   "Hablar" button — EXACT replica of .transfer-btn-top
+   ===================================================== */
+.transfer-btn-top {
+    position: fixed;
+    top: max(40px, env(safe-area-inset-top) + 12px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 32px;
+    background: rgba(20, 20, 20, 0.8);
+    border: 1px solid var(--control-border);
+    border-radius: 30px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    cursor: pointer;
+    z-index: 1000;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    opacity: 1;
+    /* always visible on phone (no hover) */
+    pointer-events: auto;
+    touch-action: manipulation;
+}
+
+.transfer-btn-top:active {
+    transform: translateX(-50%) scale(0.97);
+}
+
+.transfer-btn-top.active-conversation {
+    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: 0 0 15px rgba(255, 255, 255, 0.1), 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.transfer-btn-top.recording {
+    border-color: rgba(255, 80, 80, 0.6);
+    background: rgba(255, 40, 40, 0.12);
+    box-shadow: 0 0 20px rgba(255, 60, 60, 0.2);
+    animation: btn-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes btn-pulse {
+
+    0%,
+    100% {
+        box-shadow: 0 0 20px rgba(255, 60, 60, 0.2);
+    }
+
+    50% {
+        box-shadow: 0 0 36px rgba(255, 60, 60, 0.35);
+    }
+}
+
+.transfer-text {
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: -0.2px;
+    color: var(--text-primary);
+    opacity: 0.9;
+    font-family: var(--font-primary);
+}
+
+/* =====================================================
+   Chat Toggle Button — EXACT replica of .chat-toggle-btn
+   ===================================================== */
+.chat-toggle-btn {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top) + 4px);
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--control-bg);
+    border: 1px solid var(--control-border);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    cursor: pointer;
+    z-index: 1001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    color: var(--text-primary);
+    opacity: 1;
+    /* always visible on phone */
+    pointer-events: auto;
+    touch-action: manipulation;
+}
+
+.chat-toggle-btn:active {
+    transform: scale(0.92);
+    background: var(--control-hover);
+}
+
+/* =====================================================
+   Menu Toggle — EXACT replica of .menu-toggle
+   ===================================================== */
+.menu-toggle {
+    position: fixed;
+    bottom: max(24px, env(safe-area-inset-bottom) + 12px);
+    right: 24px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--control-bg);
+    border: 1px solid var(--control-border);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    cursor: pointer;
+    z-index: 1001;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all var(--transition-fast);
+    opacity: 1;
+    pointer-events: auto;
+    touch-action: manipulation;
+}
+
+.menu-toggle:active {
+    transform: scale(0.95);
+    background: var(--control-hover);
+}
+
+.menu-icon {
+    font-size: 16px;
+    color: var(--text-primary);
+    transition: transform var(--transition-normal);
+}
+
+.menu-toggle.active .menu-icon {
+    transform: rotate(90deg);
+}
+
+/* =====================================================
+   Controls Panel — EXACT replica of #controls-panel
+   ===================================================== */
+#controls-panel {
+    position: fixed;
+    bottom: max(74px, env(safe-area-inset-bottom) + 62px);
+    right: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 20px;
+    background: var(--control-bg);
+    border: 1px solid var(--control-border);
+    border-radius: 16px;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    min-width: 180px;
+    z-index: 1000;
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#controls-panel.collapsed {
+    transform: translateY(20px);
+    opacity: 0;
+    pointer-events: none;
+}
+
+#controls-panel h3 {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-secondary);
+    margin-bottom: -4px;
+}
+
+/* Status row */
+.status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.status-indicator {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-color);
+    flex-shrink: 0;
+}
+
+.status-indicator.active {
+    background: #4ade80;
+    box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+}
+
+/* =====================================================
+   Chat Overlay Modal (slide up from bottom)
+   ===================================================== */
+#chat-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: flex-end;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    animation: fade-in 0.2s ease;
+}
+
+#chat-overlay.hidden {
+    display: none;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.chat-modal {
+    width: 100%;
+    max-height: 75dvh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-primary);
+    border: 1px solid var(--control-border);
+    border-bottom: none;
+    border-radius: 24px 24px 0 0;
+    overflow: hidden;
+    animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+@keyframes slide-up {
+    from {
+        transform: translateY(100%);
+    }
+
+    to {
+        transform: translateY(0);
+    }
+}
+
+.chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px 12px;
+    border-bottom: 1px solid var(--control-border);
+}
+
+.chat-title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+    color: var(--text-primary);
+}
+
+.chat-close-btn {
+    background: var(--control-bg);
+    border: 1px solid var(--control-border);
+    color: var(--text-secondary);
+    font-size: 20px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    touch-action: manipulation;
+}
+
+.chat-close-btn:active {
+    background: var(--control-hover);
+    color: var(--text-primary);
+}
+
+/* Messages area */
+.messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 16px 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    -webkit-overflow-scrolling: touch;
+}
+
+.welcome {
+    text-align: center;
+    padding: 24px 0;
+}
+
+.welcome-hint {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 400;
+    letter-spacing: -0.1px;
+}
+
+/* Message bubbles */
+.message {
+    max-width: 85%;
+    padding: 10px 14px;
+    border-radius: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+    font-weight: 400;
+    letter-spacing: -0.1px;
+    word-break: break-word;
+}
+
 .message.user {
     align-self: flex-end;
-    background: var(--user-bubble);
-    color: var(--text);
-    border-bottom-right-radius: 6px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: var(--text-primary);
+    border-bottom-right-radius: 4px;
 }
 
 .message.assistant {
     align-self: flex-start;
-    background: var(--assistant-bubble);
-    color: var(--text);
-    border-bottom-left-radius: 6px;
-    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--control-border);
+    color: var(--text-primary);
+    border-bottom-left-radius: 4px;
 }
 
 .message.system {
     align-self: center;
     background: transparent;
-    color: var(--text-dim);
+    border: none;
+    color: var(--text-secondary);
     font-size: 12px;
     padding: 4px 0;
 }
 
-.message.action {
-    align-self: flex-start;
-    background: rgba(80, 255, 140, 0.08);
-    color: #50ff8c;
-    font-size: 12px;
-    border: 1px solid rgba(80, 255, 140, 0.15);
-    border-bottom-left-radius: 6px;
+.message-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
 }
 
 /* Typing indicator */
 .typing {
-    align-self: flex-start;
-    padding: 12px 16px;
     display: none;
-    gap: 5px;
     align-items: center;
+    gap: 5px;
+    padding: 8px 16px 0;
 }
 
 .typing.visible {
@@ -278,22 +622,22 @@ body {
 }
 
 .typing-dot {
-    width: 6px;
-    height: 6px;
+    width: 5px;
+    height: 5px;
     border-radius: 50%;
-    background: var(--text-dim);
-    animation: bounce 1.2s infinite;
+    background: var(--text-secondary);
+    animation: typing-bounce 1.4s ease-in-out infinite;
 }
 
 .typing-dot:nth-child(2) {
-    animation-delay: 0.15s;
+    animation-delay: 0.2s;
 }
 
 .typing-dot:nth-child(3) {
-    animation-delay: 0.3s;
+    animation-delay: 0.4s;
 }
 
-@keyframes bounce {
+@keyframes typing-bounce {
 
     0%,
     60%,
@@ -308,123 +652,86 @@ body {
     }
 }
 
-/* Empty state */
-.welcome {
-    flex: 1;
+/* Chat input area */
+.chat-input-area {
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    color: var(--text-dim);
-    padding: 40px 20px;
-}
-
-.welcome-icon {
-    font-size: 28px;
-    font-weight: 200;
-    color: var(--text);
-    opacity: 0.3;
-}
-
-.welcome-hint {
-    font-size: 12px;
-    text-align: center;
-    line-height: 1.5;
-    max-width: 220px;
-    letter-spacing: 0.02em;
-}
-
-/* ── Input Area ────────────────────────── */
-
-.input-area {
-    flex-shrink: 0;
-    padding: 12px 16px;
-    padding-bottom: calc(12px + var(--safe-bottom));
-    border-top: 1px solid var(--border);
-    background: var(--surface);
-    display: flex;
-    gap: 10px;
     align-items: flex-end;
+    gap: 8px;
+    padding: 10px 12px 12px;
+    border-top: 1px solid var(--control-border);
 }
 
-.input-field {
+.chat-input {
     flex: 1;
-    padding: 12px 16px;
-    border: 1px solid var(--border);
-    border-radius: 22px;
-    background: var(--bg);
-    font-size: 15px;
-    font-family: inherit;
-    color: var(--text);
-    outline: none;
+    background: var(--control-bg);
+    border: 1px solid var(--control-border);
+    border-radius: 12px;
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 14px;
+    font-weight: 400;
+    padding: 10px 14px;
     resize: none;
-    max-height: 100px;
     line-height: 1.4;
-    transition: border-color 0.2s ease;
+    max-height: 100px;
+    overflow-y: auto;
+    outline: none;
     -webkit-appearance: none;
+    appearance: none;
+    transition: border-color 0.2s;
 }
 
-.input-field:focus {
-    border-color: rgba(255, 255, 255, 0.2);
+.chat-input:focus {
+    border-color: rgba(255, 255, 255, 0.25);
 }
 
-.input-field::placeholder {
-    color: var(--text-dim);
+.chat-input::placeholder {
+    color: var(--text-secondary);
 }
 
-.send-btn {
-    width: 44px;
-    height: 44px;
+.chat-send-btn {
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
+    background: rgba(255, 255, 255, 0.9);
+    color: #0a0a0a;
     border: none;
-    background: var(--accent);
-    color: var(--bg);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    transition: all 0.15s ease;
+    transition: all 0.2s;
+    touch-action: manipulation;
 }
 
-.send-btn:active {
-    transform: scale(0.9);
+.chat-send-btn:disabled {
+    background: var(--control-bg);
+    color: var(--text-secondary);
+    cursor: default;
 }
 
-.send-btn:disabled {
-    opacity: 0.2;
+.chat-send-btn:not(:disabled):active {
+    transform: scale(0.92);
+    background: rgba(255, 255, 255, 0.7);
 }
 
-.send-btn svg {
-    width: 18px;
-    height: 18px;
+/* =====================================================
+   Utility
+   ===================================================== */
+.hidden {
+    display: none !important;
 }
 
-/* ── Voice Toggle Button ──────────────── */
+::-webkit-scrollbar {
+    width: 3px;
+}
 
-.voice-toggle {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: 1px solid var(--border);
+::-webkit-scrollbar-track {
     background: transparent;
-    color: var(--text-dim);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: all 0.2s ease;
 }
 
-.voice-toggle.active {
-    background: rgba(255, 80, 80, 0.15);
-    border-color: rgba(255, 80, 80, 0.3);
-    color: #ff5050;
-}
-
-.voice-toggle svg {
-    width: 18px;
-    height: 18px;
+::-webkit-scrollbar-thumb {
+    background: var(--control-border);
+    border-radius: 2px;
 }
