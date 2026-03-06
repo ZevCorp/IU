@@ -1795,10 +1795,13 @@ async function setupChatGPT() {
             headless: false,
             viewport: null, // Allow window resizing to control viewport
             permissions: ['microphone'], // Pre-grant microphone access
+            ignoreHTTPSErrors: true, // More resilient on enterprise/intercepted TLS networks
             args: [
                 '--disable-blink-features=AutomationControlled', // Hide automation status
                 '--start-minimized',
-                '--no-default-browser-check'
+                '--no-default-browser-check',
+                // Avoid DNS-over-HTTPS handshake issues on constrained/corporate networks
+                '--disable-features=UseDnsHttpsSvcb,UseDnsHttpsAlpn'
             ],
             ignoreDefaultArgs: ['--enable-automation'] // Hide "Chrome is being controlled by automated test software" bar
         };
@@ -1854,12 +1857,15 @@ async function setupChatGPT() {
             });
         });
         // Attempt navigation — fail silently if offline (app still starts)
+        let navigationReady = false;
         try {
             await chatPage.goto('https://chatgpt.com', { timeout: 8000, waitUntil: 'domcontentloaded' });
+            navigationReady = true;
         } catch (navErr) {
             const isNetworkErr = navErr.message.includes('ERR_INTERNET_DISCONNECTED') ||
                 navErr.message.includes('ERR_NAME_NOT_RESOLVED') ||
                 navErr.message.includes('ERR_CONNECTION_REFUSED') ||
+                navErr.message.includes('ERR_TIMED_OUT') ||
                 navErr.message.includes('net::') ||
                 navErr.message.includes('timeout');
             if (isNetworkErr) {
@@ -1893,8 +1899,13 @@ async function setupChatGPT() {
             });
         }
 
-        // Wait for page to be ready, then inject system prompt
-        await injectSystemPromptOnStartup();
+        // Only inject prompt when ChatGPT page is actually reachable.
+        // This avoids 30s startup stalls in offline/captive/intercepted networks.
+        if (navigationReady) {
+            await injectSystemPromptOnStartup();
+        } else {
+            console.log('⏭️ [ChatGPT] Skipping prompt injection until network is available.');
+        }
 
     } catch (error) {
         console.error('❌ Failed to setup ChatGPT:', error);
@@ -1919,6 +1930,12 @@ async function injectSystemPromptOnStartup() {
     if (!chatPage) return;
 
     try {
+        const currentUrl = chatPage.url() || '';
+        if (!currentUrl.includes('chatgpt.com')) {
+            console.warn('⚠️ [ChatGPT] Prompt injection skipped: page not on chatgpt.com');
+            return;
+        }
+
         // Wait for composer to be ready (max 30s for login)
         console.log('⏳ Waiting for ChatGPT to be ready...');
         await chatPage.waitForSelector('#prompt-textarea', { timeout: 30000 });
