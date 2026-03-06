@@ -330,7 +330,7 @@ ACCIONES RECOMENDADAS:
      * The agent will use GPT-4.1 to diagnose problems and search the web for solutions
      */
     async _runAxDetection(appName = null) {
-        console.log('🤖 [ScreenAgent] Running intelligent AX extraction...');
+        // console.log('🤖 [ScreenAgent] Running intelligent AX extraction...');
 
         try {
             const result = await this.axAgent.extract(appName);
@@ -787,15 +787,15 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                                 if (px < 1 && py < 1) { px = Math.round(px * this.screenWidth); py = Math.round(py * this.screenHeight); }
 
                                 await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
-                                await this._wait(600); // Slightly faster in batch
+                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                             }
                             else if (sub.action === 'type') {
                                 await this._executeTool('type_text', { text: sub.text }, true);
-                                await this._wait(300);
+                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                             }
                             else if (sub.action === 'key') {
                                 await this._executeTool('key_press', { key: sub.key }, true);
-                                await this._wait(300);
+                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                             }
                         }
                         actionSummary = `BATCH: Executed ${subActions.length} actions (${args.reasoning})`;
@@ -813,11 +813,11 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                         _functionName: fnName
                     });
 
-                    // Wait between batched actions
+                    // Wait between batched actions or sequentially
                     if (i < toolCalls.length - 1) {
-                        await this._wait(300);
+                        lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                     } else {
-                        await this._wait(300); // Reduced from 1000ms — AX extraction will retry if needed
+                        lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1500, 150);
                     }
                 }
 
@@ -1544,6 +1544,38 @@ CONTEXTO DE VENTANAS:
                 await this._wait(delay);
             }
         }
+    }
+
+    /**
+     * Espera dinámicamente a que la UI cambie mediante polling rápido.
+     */
+    async _waitForUIChange(appName, oldHash = null, timeoutMs = 2500, pollIntervalMs = 150) {
+        await this._wait(100); // Pausa mínima base para registrar el click/tecla
+        let elapsed = 100;
+
+        if (!oldHash) {
+            const initialDet = await this._runAxDetection(appName);
+            if (initialDet && initialDet.elements) {
+                oldHash = this._hashElements(initialDet.elements);
+            }
+        }
+
+        while (elapsed < timeoutMs) {
+            const detection = await this._runAxDetection(appName);
+            if (detection && detection.elements && detection.elements.length > 0) {
+                const currentHash = this._hashElements(detection.elements);
+                if (currentHash !== oldHash) {
+                    console.log(`⏱️ [ScreenAgent] Dynamic Wait: UI cambió en ${elapsed}ms`);
+                    await this._wait(150); // Pausa extra para que se asienten animaciones post-cambio
+                    return currentHash;
+                }
+            }
+            await this._wait(pollIntervalMs);
+            elapsed += pollIntervalMs;
+        }
+
+        console.log(`⏱️ [ScreenAgent] Dynamic Wait: Timeout (${timeoutMs}ms), UI no cambió o fue imperceptible.`);
+        return oldHash;
     }
 
     /**

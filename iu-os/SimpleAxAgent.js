@@ -79,17 +79,17 @@ class SimpleAxAgent {
      * Extract AX tree with simple retry logic
      */
     async extract(appName = null) {
-        console.log('🍎 [SimpleAxAgent] Starting AX extraction...');
+        // console.log('🍎 [SimpleAxAgent] Starting AX extraction...');
 
         // Try extraction with retries
         for (let attempt = 1; attempt <= 3; attempt++) {
-            console.log(`🔄 [SimpleAxAgent] Attempt ${attempt}/3`);
+            // console.log(`🔄 [SimpleAxAgent] Attempt ${attempt}/3`);
 
             const result = await this._tryExtraction(appName);
 
             // Success!
             if (result && !result.error && result.snapshot && result.snapshot.length > 0) {
-                console.log(`✅ [SimpleAxAgent] Success! Found ${result.snapshot.length} elements`);
+                // console.log(`✅ [SimpleAxAgent] Success! Found ${result.snapshot.length} elements`);
                 return result;
             }
 
@@ -200,7 +200,7 @@ class SimpleAxAgent {
         // NATIVE METHOD (preferred)
         if (this.useNative && this.nativeAddon) {
             try {
-                console.log(`🔧 [SimpleAxAgent] Using native C++ extraction...`);
+                // console.log(`🔧 [SimpleAxAgent] Using native C++ extraction...`);
                 const result = this.nativeAddon.extract(appName || '');
 
                 // Native addon returns object directly, not JSON string
