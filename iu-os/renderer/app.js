@@ -236,6 +236,7 @@ class Face {
         if (this.leftEyebrow) this.leftEyebrow.style.stroke = color;
         if (this.rightEyebrow) this.rightEyebrow.style.stroke = color;
         if (this.mouth) this.mouth.style.stroke = color;
+        document.documentElement.style.setProperty('--face-color', color);
     }
 
     render() {
@@ -387,6 +388,7 @@ class Face {
         if (this.leftEyeLine) this.leftEyeLine.style.stroke = color;
         if (this.rightEyeLine) this.rightEyeLine.style.stroke = color;
         if (this.mouth) this.mouth.style.stroke = color;
+        document.documentElement.style.setProperty('--face-color', color);
 
         // Also try to help visibility if using CSS classes
         const strokes = document.querySelectorAll('.face-stroke');
@@ -426,9 +428,13 @@ function updateFaceColorBasedOnContext(isBgDark = lastBgDark) {
 
 function setTheme(theme, shouldBroadcast = true) {
     document.documentElement.setAttribute('data-theme', theme);
+    const themeLabel = document.getElementById('theme-label');
+    const themeIcon = document.getElementById('theme-icon');
+    if (themeLabel) themeLabel.textContent = theme === 'dark' ? 'Dark' : 'Light';
+    if (themeIcon) themeIcon.textContent = theme === 'dark' ? '◐' : '◑';
 
     document.querySelectorAll('.theme-btn').forEach(btn => {
-        if (btn.id !== 'btn-glass') {
+        if (btn.id !== 'btn-glass' && btn.id !== 'btn-theme-toggle') {
             btn.classList.toggle('active', btn.id === `btn-${theme}`);
         }
     });
@@ -461,7 +467,7 @@ let relaxTimeout = null; // Buffer for attention jitter
 
 // Navigation State
 let currentView = 'face'; // face | brain | settings
-const VIEWS = ['face', 'brain', 'settings'];
+const VIEWS = ['face', 'settings'];
 let neuralGraph = null;
 let navHudTimeout = null;
 
@@ -1092,14 +1098,57 @@ function init() {
     // Menu toggle
     const menuToggle = document.getElementById('menu-toggle');
     const controlsPanel = document.getElementById('controls-panel');
+    const btnExperimentalToggle = document.getElementById('btn-experimental-toggle');
+    const btnExperimentalBack = document.getElementById('btn-experimental-back');
+    const controlsViews = Array.from(document.querySelectorAll('#controls-panel .controls-view'));
+
+    const updateControlsScrollHints = () => {
+        controlsViews.forEach((view) => {
+            const hasOverflow = view.scrollHeight > view.clientHeight + 1;
+            const atTop = view.scrollTop <= 1;
+            const atBottom = (view.scrollTop + view.clientHeight) >= (view.scrollHeight - 1);
+            view.classList.toggle('can-scroll-top', hasOverflow && !atTop);
+            view.classList.toggle('can-scroll-bottom', hasOverflow && !atBottom);
+        });
+    };
+
+    controlsViews.forEach((view) => {
+        view.addEventListener('scroll', updateControlsScrollHints, { passive: true });
+    });
+    window.addEventListener('resize', updateControlsScrollHints);
+
+    const setExperimentalView = (isOpen) => {
+        if (!controlsPanel) return;
+        controlsPanel.classList.toggle('experimental-open', isOpen);
+        if (btnExperimentalToggle) {
+            btnExperimentalToggle.textContent = isOpen ? 'back' : 'experimental';
+            btnExperimentalToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        }
+        requestAnimationFrame(updateControlsScrollHints);
+    };
 
     if (menuToggle && controlsPanel) {
         menuToggle.addEventListener('click', () => {
             panelCollapsed = !panelCollapsed;
             controlsPanel.classList.toggle('collapsed', panelCollapsed);
             menuToggle.classList.toggle('active', !panelCollapsed);
+            if (panelCollapsed) setExperimentalView(false);
+            if (!panelCollapsed) requestAnimationFrame(updateControlsScrollHints);
         });
     }
+
+    if (btnExperimentalToggle) {
+        btnExperimentalToggle.addEventListener('click', () => {
+            if (controlsPanel && controlsPanel.classList.contains('collapsed')) return;
+            const isOpen = controlsPanel && controlsPanel.classList.contains('experimental-open');
+            setExperimentalView(!isOpen);
+        });
+    }
+
+    if (btnExperimentalBack) {
+        btnExperimentalBack.addEventListener('click', () => setExperimentalView(false));
+    }
+    requestAnimationFrame(updateControlsScrollHints);
 
     // State buttons
     const activateState = (id, state) => {
@@ -1124,21 +1173,88 @@ function init() {
     activateState('btn-wink', 'wink');
 
     // Theme buttons
-    const btnDark = document.getElementById('btn-dark');
-    const btnLight = document.getElementById('btn-light');
+    const btnThemeToggle = document.getElementById('btn-theme-toggle');
+    const themeIcon = document.getElementById('theme-icon');
+    const themeLabel = document.getElementById('theme-label');
     const btnGlass = document.getElementById('btn-glass');
 
-    let isGlassMode = false;
+    let isGlassMode = document.body.classList.contains('glass-mode');
 
-    if (btnDark) btnDark.addEventListener('click', () => setTheme('dark'));
-    if (btnLight) btnLight.addEventListener('click', () => setTheme('light'));
+    const setSwitchButtonState = (btn, isActive) => {
+        if (!btn) return;
+        btn.classList.toggle('active', isActive);
+        btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    };
+
+    const syncThemeToggleVisual = () => {
+        const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+        if (themeLabel) themeLabel.textContent = currentTheme === 'dark' ? 'Dark' : 'Light';
+        if (themeIcon) themeIcon.textContent = currentTheme === 'dark' ? '◐' : '◑';
+        if (btnThemeToggle) btnThemeToggle.setAttribute('aria-pressed', 'true');
+    };
+
+    syncThemeToggleVisual();
+
+    if (btnThemeToggle) {
+        btnThemeToggle.addEventListener('click', () => {
+            const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+            const nextTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            setTheme(nextTheme);
+            syncThemeToggleVisual();
+        });
+    }
+
     if (btnGlass) {
+        setSwitchButtonState(btnGlass, isGlassMode);
         btnGlass.addEventListener('click', () => {
             isGlassMode = !isGlassMode;
             document.body.classList.toggle('glass-mode', isGlassMode);
-            btnGlass.classList.toggle('active', isGlassMode);
+            setSwitchButtonState(btnGlass, isGlassMode);
             updateFaceColorBasedOnContext();
             showToast(isGlassMode ? 'Modo Transparente: Activado' : 'Modo Transparente: Desactivado');
+        });
+    }
+
+    // Hand Gestures toggle
+    const btnHandGestures = document.getElementById('btn-hand-gestures');
+    if (btnHandGestures) {
+        let handGesturesEnabled = false;
+        const applyHandGesturesState = (enabled) => {
+            handGesturesEnabled = enabled;
+            setSwitchButtonState(btnHandGestures, enabled);
+        };
+
+        const syncHandGesturesState = async () => {
+            if (!window.iuOS || !window.iuOS.getHandWindowState) return;
+            try {
+                const state = await window.iuOS.getHandWindowState();
+                const active = !!(state && state.created && state.visible);
+                applyHandGesturesState(active);
+            } catch (e) {
+                console.warn('⚠️ Could not read hand gesture state:', e);
+            }
+        };
+
+        syncHandGesturesState();
+
+        btnHandGestures.addEventListener('click', async () => {
+            try {
+                if (window.iuOS && window.iuOS.toggleHandWindow) {
+                    const result = await window.iuOS.toggleHandWindow();
+                    if (result && typeof result.visible === 'boolean') {
+                        applyHandGesturesState(result.visible);
+                    }
+                    setTimeout(() => {
+                        syncHandGesturesState();
+                    }, 180);
+                    showToast(handGesturesEnabled ? 'Gestos con manos: Activados' : 'Gestos con manos: Desactivados');
+                } else {
+                    applyHandGesturesState(!handGesturesEnabled);
+                }
+            } catch (e) {
+                console.error('❌ Failed to toggle hand gestures:', e);
+                showToast('No se pudo cambiar gestos');
+            }
         });
     }
 
@@ -1203,30 +1319,90 @@ function init() {
 
     // Learning Mode button
     let isLearning = false;
+    let learningSaveInterval = null;
     const btnLearningMode = document.getElementById('btn-learning-mode');
+    const learningModeState = document.getElementById('learning-mode-state');
+
+    const setLearnProgress = (pct) => {
+        if (!btnLearningMode) return;
+        const value = Math.max(0, Math.min(100, pct));
+        btnLearningMode.style.setProperty('--learn-progress', `${value}%`);
+    };
+
+    const stopLearnProgress = () => {
+        if (learningSaveInterval) {
+            clearInterval(learningSaveInterval);
+            learningSaveInterval = null;
+        }
+    };
+
+    const startLearnSavingProgress = () => {
+        stopLearnProgress();
+        if (!btnLearningMode) return;
+        btnLearningMode.classList.add('is-saving');
+        setLearnProgress(6);
+        let progress = 6;
+        learningSaveInterval = setInterval(() => {
+            progress = Math.min(92, progress + Math.max(2, (94 - progress) * 0.12));
+            setLearnProgress(progress);
+            if (progress >= 92) stopLearnProgress();
+        }, 120);
+    };
+
+    const completeLearnSavingProgress = () => {
+        stopLearnProgress();
+        setLearnProgress(100);
+        setTimeout(() => {
+            if (!btnLearningMode) return;
+            btnLearningMode.classList.remove('is-saving');
+            setLearnProgress(0);
+        }, 220);
+    };
+
+    const setLearningUI = (state) => {
+        if (!btnLearningMode) return;
+        const isActive = state === 'on' || state === 'saving';
+        setSwitchButtonState(btnLearningMode, isActive);
+        btnLearningMode.classList.toggle('is-saving', state === 'saving');
+        if (learningModeState) {
+            learningModeState.textContent = state === 'off' ? 'Off' : (state === 'saving' ? 'Saving...' : 'On');
+            learningModeState.classList.toggle('on', state !== 'off');
+            learningModeState.classList.toggle('saving', state === 'saving');
+        }
+    };
+    setLearningUI('off');
+    setLearnProgress(0);
+
     if (btnLearningMode) {
         btnLearningMode.addEventListener('click', async () => {
-            isLearning = !isLearning;
-            if (isLearning) {
-                btnLearningMode.textContent = 'Parar Aprendizaje';
-                btnLearningMode.style.background = '#ff3b3022';
-                btnLearningMode.style.borderColor = '#ff3b30';
-                btnLearningMode.style.color = '#ff3b30';
-                console.log('🎓 [App] Starting Learning Mode...');
-                if (window.iuOS && window.iuOS.invoke) {
-                    await window.iuOS.invoke('learning-start', { name: 'Workflow ' + new Date().toLocaleTimeString() });
+            const nextLearningState = !isLearning;
+            try {
+                isLearning = nextLearningState;
+                if (isLearning) {
+                    setLearningUI('on');
+                    console.log('🎓 [App] Starting Learning Mode...');
+                    if (window.iuOS && window.iuOS.invoke) {
+                        await window.iuOS.invoke('learning-start', { name: 'Workflow ' + new Date().toLocaleTimeString() });
+                    }
+                } else {
+                    setLearningUI('saving');
+                    startLearnSavingProgress();
+                    console.log('🎓 [App] Stopping Learning Mode...');
+                    if (window.iuOS && window.iuOS.invoke) {
+                        const result = await window.iuOS.invoke('learning-stop');
+                        console.log('🎓 Learning synthesized:', result.synthesized);
+                    }
+                    completeLearnSavingProgress();
+                    setLearningUI('off');
                 }
-            } else {
-                btnLearningMode.textContent = 'Modo Aprendizaje';
-                btnLearningMode.style.background = '#ff950022';
-                btnLearningMode.style.borderColor = '#ff9500';
-                btnLearningMode.style.color = '#ff9500';
-                console.log('🎓 [App] Stopping Learning Mode...');
-                if (window.iuOS && window.iuOS.invoke) {
-                    const result = await window.iuOS.invoke('learning-stop');
-                    console.log('🎓 Learning synthesized:', result.synthesized);
-                    alert('Aprendizaje finalizado y sintetizado con éxito.');
-                }
+            } catch (e) {
+                console.error('❌ Error toggling learning mode:', e);
+                isLearning = !nextLearningState;
+                stopLearnProgress();
+                btnLearningMode.classList.remove('is-saving');
+                setLearnProgress(0);
+                setLearningUI(isLearning ? 'on' : 'off');
+                showToast('No se pudo cambiar el modo aprendizaje.');
             }
         });
     }
@@ -1251,7 +1427,10 @@ function init() {
 
         return `
           <div style="border:1px solid rgba(255,255,255,0.12); border-radius:10px; padding:10px 12px; background:rgba(255,255,255,0.02);">
-            <div style="font-size:15px; font-weight:600; color:#f2f5f7;">${wf.workflowName || 'Aprendizaje'}</div>
+            <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+              <div style="font-size:15px; font-weight:600; color:#f2f5f7; min-width:0;">${wf.workflowName || 'Aprendizaje'}</div>
+              <button class="state-btn delete-learning-btn" data-file="${wf.file}" style="padding:4px 8px; font-size:11px; color:#ff8f8f; border-color:rgba(255,143,143,0.45);">Eliminar</button>
+            </div>
             <div style="font-size:12px; color:#9fb0c1; margin-top:3px;">${wf.summary || 'Sin resumen'}</div>
             <div style="font-size:11px; color:#7f8b96; margin-top:6px;">Apps: ${(wf.apps || []).join(', ') || 'N/A'} · Pasos: ${steps.length}</div>
             <div style="margin-top:8px; display:flex; flex-direction:column; gap:4px;">${topSteps}</div>
@@ -1279,6 +1458,34 @@ function init() {
     if (btnViewLearnings) {
         btnViewLearnings.addEventListener('click', openLearningsModal);
     }
+    if (learningsList) {
+        learningsList.addEventListener('click', async (e) => {
+            const target = e.target;
+            if (!(target instanceof HTMLElement)) return;
+            const deleteBtn = target.closest('.delete-learning-btn');
+            if (!deleteBtn) return;
+            const file = deleteBtn.getAttribute('data-file');
+            if (!file || !window.iuOS || !window.iuOS.invoke) return;
+            try {
+                deleteBtn.setAttribute('disabled', 'true');
+                deleteBtn.textContent = '...';
+                const result = await window.iuOS.invoke('learning-delete-workflow', { file });
+                if (result && result.success) {
+                    showToast('Aprendizaje eliminado.');
+                    await openLearningsModal();
+                } else {
+                    showToast('No se pudo eliminar aprendizaje.');
+                    deleteBtn.textContent = 'Eliminar';
+                    deleteBtn.removeAttribute('disabled');
+                }
+            } catch (err) {
+                console.error('❌ Error deleting learning:', err);
+                showToast('Error eliminando aprendizaje.');
+                deleteBtn.textContent = 'Eliminar';
+                deleteBtn.removeAttribute('disabled');
+            }
+        });
+    }
     if (btnCloseLearnings) {
         btnCloseLearnings.addEventListener('click', closeLearningsModal);
     }
@@ -1287,6 +1494,9 @@ function init() {
             if (e.target === learningsModal) closeLearningsModal();
         });
     }
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeLearningsModal();
+    });
 
     // Mirar juntos button — toggle persistent mode
     let mirarJuntosActive = false;
@@ -1294,8 +1504,7 @@ function init() {
     if (mirarJuntosBtn) {
         mirarJuntosBtn.addEventListener('click', () => {
             mirarJuntosActive = !mirarJuntosActive;
-            mirarJuntosBtn.style.background = mirarJuntosActive ? '#00f5ff44' : '#00f5ff22';
-            mirarJuntosBtn.style.borderColor = '#00f5ff';
+            mirarJuntosBtn.classList.toggle('active', mirarJuntosActive);
             mirarJuntosBtn.textContent = mirarJuntosActive ? 'Mirar juntos ●' : 'Mirar juntos';
             console.log(`👁️ [App] Mirar juntos: ${mirarJuntosActive ? 'ON' : 'OFF'}`);
             if (window.iuOS && window.iuOS.toggleMirarJuntos) {
@@ -1333,7 +1542,6 @@ function init() {
 
         const labels = {
             face: 'Ü Home',
-            brain: 'Neural Graph',
             settings: 'Settings'
         };
 
@@ -1387,7 +1595,7 @@ function init() {
     // Initialize View
     document.body.className = 'view-face';
 
-    // Trackpad / Wheel Navigation (Cool & Fluid)
+    // Trackpad / Wheel Navigation (Horizontal only)
     let wheelTimeout;
     window.addEventListener('wheel', (e) => {
         // Horizontal: Intents / Transfer
@@ -1405,24 +1613,6 @@ function init() {
             if (!wheelTimeout) {
                 performTransfer();
                 wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 1200);
-            }
-        }
-        // Vertical: Switch Views (Cool Navigation)
-        else if (Math.abs(e.deltaY) > 60 && Math.abs(e.deltaX) < 30) {
-            if (!wheelTimeout) {
-                const currentIndex = VIEWS.indexOf(currentView);
-                let nextIndex = currentIndex;
-
-                if (e.deltaY > 0 && currentIndex < VIEWS.length - 1) {
-                    nextIndex++; // Scroll Down
-                } else if (e.deltaY < 0 && currentIndex > 0) {
-                    nextIndex--; // Scroll Up
-                }
-
-                if (nextIndex !== currentIndex) {
-                    switchView(VIEWS[nextIndex]);
-                    wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 800);
-                }
             }
         }
     });
@@ -1467,7 +1657,7 @@ function setupManualDrag() {
 
     const shouldSkipDrag = (target) => {
         if (!(target instanceof Element)) return false;
-        return !!target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel');
+        return !!target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #learnings-modal');
     };
 
     const endDrag = () => {
@@ -1492,7 +1682,7 @@ function setupManualDrag() {
     window.addEventListener('mousemove', (e) => {
         if (!isDragging) {
             // Determine if mouse is over an interactive element or the face
-            const isInteractive = !!e.target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #face-container, .boot-btn');
+            const isInteractive = !!e.target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #face-container, .boot-btn, #learnings-modal');
             if (window.iuOS && window.iuOS.setClickThrough) {
                 // Ignore general mouse clicks (pass through to OS) EXCEPT when hovering our active elements
                 window.iuOS.setClickThrough(!isInteractive);
@@ -1519,7 +1709,7 @@ function setupManualDrag() {
  * Setup Window Resizing via Pinch Gesture
  */
 function setupWindowModes() {
-    const MODES_CYCLE = ['small', 'medium', 'large', 'full'];
+    const MODES_CYCLE = ['small', 'medium', 'large'];
     let lastScaleChange = 0;
     const PINCH_THRESHOLD = 8;
     let modeDebounce = false;
@@ -1690,7 +1880,9 @@ function performTransfer() {
     }
 }
 
-function showToast(message, duration = 3000) {
+let toastHideTimer = null;
+
+function showToast(message, duration = 3000, variant = 'default') {
     let toast = document.getElementById('toast-message');
     if (!toast) {
         toast = document.createElement('div');
@@ -1699,10 +1891,13 @@ function showToast(message, duration = 3000) {
     }
 
     toast.textContent = message;
+    toast.classList.toggle('toast-subtle', variant === 'subtle');
     toast.classList.add('visible');
 
-    setTimeout(() => {
+    if (toastHideTimer) clearTimeout(toastHideTimer);
+    toastHideTimer = setTimeout(() => {
         toast.classList.remove('visible');
+        toastHideTimer = null;
     }, duration);
 }
 
@@ -1791,13 +1986,16 @@ function updateConversationUI(state) {
         const container = document.getElementById('transcript-container');
         const textElement = document.getElementById('transcript-text');
         if (container) container.classList.add('hidden');
-        if (textElement) textElement.innerHTML = '';
-        displayedWords = [];
+        clearTranscriptTextAfterFade(textElement);
+        if (transcriptHideTimer) {
+            clearTimeout(transcriptHideTimer);
+            transcriptHideTimer = null;
+        }
     }
 }
 
 function setActiveButton(activeId) {
-    document.querySelectorAll('.state-btn').forEach(btn => {
+    document.querySelectorAll('.state-btn[data-state-button="true"]').forEach(btn => {
         btn.classList.toggle('active', btn.id === activeId);
     });
 }
@@ -1821,6 +2019,12 @@ function updateConnectionStatus(connected, devices) {
     }
 }
 
+// Conversation Text state
+let displayedWords = [];
+let transcriptSourceWords = [];
+let transcriptHideTimer = null;
+let transcriptClearTimer = null;
+
 // Start
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
@@ -1829,7 +2033,78 @@ if (document.readyState === 'loading') {
 }
 
 // Conversation Text Listener
-let displayedWords = [];
+
+function getTranscriptVisibleWordBudget() {
+    const mode = document.body.classList.contains('mode-medium') ? 'medium' : 'regular';
+    const width = window.innerWidth || 300;
+    if (mode === 'medium') {
+        if (width <= 220) return 10;
+        if (width <= 260) return 14;
+        return 18;
+    }
+    if (width <= 280) return 18;
+    if (width <= 360) return 24;
+    return 32;
+}
+
+function renderTranscriptWindow(words, textElement, trailingSpace = false) {
+    const budget = getTranscriptVisibleWordBudget();
+    const visibleWords = words.slice(-budget);
+
+    while (textElement.children.length > visibleWords.length) {
+        textElement.removeChild(textElement.lastChild);
+    }
+
+    visibleWords.forEach((word, index) => {
+        let span = textElement.children[index];
+        const isLastVisible = index === visibleWords.length - 1;
+        const isPotentiallyIncomplete = !trailingSpace && isLastVisible;
+        if (!span) {
+            span = document.createElement('span');
+            span.className = isPotentiallyIncomplete ? '' : 'word-fade';
+            textElement.appendChild(span);
+        }
+
+        const prevWord = displayedWords[index];
+        if (prevWord !== word) {
+            const grewByChunk = !!prevWord && word.startsWith(prevWord);
+            const shouldAnimate = !isPotentiallyIncomplete && !grewByChunk;
+            if (shouldAnimate) {
+                span.classList.remove('word-fade');
+                void span.offsetWidth;
+                span.classList.add('word-fade');
+            }
+            span.textContent = word;
+        }
+
+        if (isPotentiallyIncomplete) {
+            span.classList.remove('word-fade');
+        } else if (!span.classList.contains('word-fade')) {
+            span.classList.add('word-fade');
+        }
+    });
+
+    displayedWords = visibleWords;
+}
+
+function clearTranscriptTextAfterFade(textElement) {
+    if (transcriptClearTimer) {
+        clearTimeout(transcriptClearTimer);
+    }
+    transcriptClearTimer = setTimeout(() => {
+        if (!textElement) return;
+        textElement.innerHTML = '';
+        displayedWords = [];
+        transcriptSourceWords = [];
+        transcriptClearTimer = null;
+    }, 540);
+}
+
+window.addEventListener('resize', () => {
+    const textElement = document.getElementById('transcript-text');
+    if (!textElement || transcriptSourceWords.length === 0) return;
+    renderTranscriptWindow(transcriptSourceWords, textElement, false);
+});
 
 if (window.iuOS && window.iuOS.onConversationText) {
     window.iuOS.onConversationText((text) => {
@@ -1837,47 +2112,30 @@ if (window.iuOS && window.iuOS.onConversationText) {
         const textElement = document.getElementById('transcript-text');
 
         if (container && textElement) {
-            const words = text.split(/\s+/).filter(w => w.length > 0);
-
-            // 1. If the message is completely new or cleared, reset
-            if (words.length < displayedWords.length) {
-                textElement.innerHTML = '';
-                displayedWords = [];
+            if (transcriptClearTimer) {
+                clearTimeout(transcriptClearTimer);
+                transcriptClearTimer = null;
             }
+            const words = (text || '').split(/\s+/).filter(w => w.length > 0);
+            const trailingSpace = /\s$/.test(text || '');
+            if (words.length < transcriptSourceWords.length) {
+                transcriptSourceWords = [];
+                displayedWords = [];
+                textElement.innerHTML = '';
+            }
+            transcriptSourceWords = words;
 
             container.classList.remove('hidden');
+            renderTranscriptWindow(words, textElement, trailingSpace);
 
-            words.forEach((word, index) => {
-                let span = textElement.children[index];
-
-                // 2. If it's a truly new index, create a new span
-                if (!span) {
-                    span = document.createElement('span');
-                    span.className = 'word-fade';
-                    // Delay animation for a more natural streaming look
-                    span.style.animationDelay = `${Math.min((index - displayedWords.length) * 50, 300)}ms`;
-                    textElement.appendChild(span);
-                }
-
-                // 3. Update text content only if it has changed
-                if (displayedWords[index] !== word) {
-                    // If it's a semantic change (not just completion), re-trigger animation
-                    if (displayedWords[index] && !word.startsWith(displayedWords[index])) {
-                        span.classList.remove('word-fade');
-                        void span.offsetWidth; // force reflow
-                        span.classList.add('word-fade');
-                    }
-
-                    span.textContent = word;
-                    displayedWords[index] = word;
-                }
-            });
-
-            // 4. Cleanup any lingering extra words
-            while (textElement.children.length > words.length) {
-                textElement.removeChild(textElement.lastChild);
-                displayedWords.pop();
+            if (transcriptHideTimer) {
+                clearTimeout(transcriptHideTimer);
             }
+            transcriptHideTimer = setTimeout(() => {
+                container.classList.add('hidden');
+                clearTranscriptTextAfterFade(textElement);
+                transcriptHideTimer = null;
+            }, 3200);
         }
     });
 }
@@ -2404,14 +2662,11 @@ if (window.iuOS && window.iuOS.onLearningStatus) {
     window.iuOS.onLearningStatus((data) => {
         console.log('[App] Learning status:', data);
         if (data.active) {
-            showCompactPopup(`🎓 Aprendiendo: ${data.name || 'Workflow'}`);
             if (face) face.transitionTo('thinking', 600);
             document.body.classList.add('learning-mode');
         } else {
-            showCompactPopup('🎓 Aprendizaje completado');
             if (face) face.transitionTo('smile', 800);
             document.body.classList.remove('learning-mode');
-            setTimeout(hideCompactPopup, 3000);
         }
     });
 }
@@ -2834,6 +3089,3 @@ if (window.iuOS && window.iuOS.onGestureWakeSound) {
 //     }
 //     // Timeout disabled.
 // }, 1000);
-
-
-

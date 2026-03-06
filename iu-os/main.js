@@ -456,6 +456,9 @@ function getWindowBounds(mode) {
 
 function applyWindowMode(mode, animate = true) {
     if (!mainWindow) return;
+    if (mode === WINDOW_MODES.FULLSCREEN) {
+        mode = WINDOW_MODES.LARGE;
+    }
 
     currentWindowMode = mode;
     saveSettings();
@@ -1043,7 +1046,6 @@ Si no estás seguro cuál aplicar, pregunta una sola aclaración corta antes de 
 // 🎓 Learning Mode IPCs
 ipcMain.handle('learning-start', async (event, { name }) => {
     LearningAgent.startLearning(name);
-    pinChatWindowForLearning();
     if (mainWindow) {
         mainWindow.webContents.send('learning-status', { active: true, name });
     }
@@ -1052,7 +1054,6 @@ ipcMain.handle('learning-start', async (event, { name }) => {
 
 ipcMain.handle('learning-stop', async () => {
     const synthesized = await LearningAgent.stopLearning();
-    unpinChatWindowAfterLearning();
     if (mainWindow) {
         mainWindow.webContents.send('learning-status', { active: false });
     }
@@ -1066,6 +1067,10 @@ ipcMain.handle('learning-list-workflows', async () => {
     } catch (e) {
         return { success: false, error: e.message, workflows: [] };
     }
+});
+
+ipcMain.handle('learning-delete-workflow', async (event, { file }) => {
+    return LearningAgent.deleteWorkflow(file);
 });
 
 // 🎓 Global Mouse Monitoring for Learning Mode
@@ -1161,17 +1166,34 @@ ipcMain.handle('toggle-chat-window', () => {
 });
 
 ipcMain.handle('toggle-hand-window', () => {
+    let visible = false;
     if (handWindow && !handWindow.isDestroyed()) {
         if (handWindow.isVisible()) {
             handWindow.hide();
+            if (handMeshWindow && !handMeshWindow.isDestroyed()) {
+                handMeshWindow.hide();
+            }
+            visible = false;
         } else {
             handWindow.show();
             handWindow.focus();
+            if (!handMeshWindow || handMeshWindow.isDestroyed()) {
+                createHandMeshWindow();
+            } else {
+                handMeshWindow.show();
+            }
+            visible = true;
         }
     } else {
         createHandWindow();
+        if (!handMeshWindow || handMeshWindow.isDestroyed()) {
+            createHandMeshWindow();
+        } else {
+            handMeshWindow.show();
+        }
+        visible = true;
     }
-    return { success: true };
+    return { success: true, visible };
 });
 
 ipcMain.handle('get-hand-window-state', () => {
@@ -1424,8 +1446,6 @@ app.whenReady().then(async () => {
     await requestCameraAccess();
 
     createWindow();
-    createHandWindow();
-    createHandMeshWindow();
 
     // Launch Native Glass Window (Persistent, Hidden)
     nativeGlass.start();
@@ -2181,12 +2201,13 @@ function startSmartConversationMonitoring() {
 
     // --- Stability tracking (Problema 2: One prompt per full turn) ---
     // The assistant streams in chunks arriving BEFORE user text is available.
-    // Strategy: poll every 200ms, count consecutive polls where assistant text
+    // Strategy: poll fast for transcript streaming, count consecutive polls where assistant text
     // does NOT change. When stable for STABLE_POLLS_REQUIRED consecutive polls
     // AND we have new content → the response stream ended → fire ONE Brain call.
     let lastSeenAssistantText = '';
     let assistantStableCount = 0;
-    const STABLE_POLLS_REQUIRED = 3; // 3 × 200ms = 600ms of no change = stream ended
+    const POLL_MS = 80;
+    const STABLE_POLLS_REQUIRED = 8; // 8 × 80ms = 640ms of no change = stream ended
 
     conversationMonitorInterval = setInterval(async () => {
         if (!chatPage || chatPage.isClosed()) return;
@@ -2269,12 +2290,15 @@ function startSmartConversationMonitoring() {
 
                     // UI feedback as stream progresses (good UX — shows live text)
                     const lastClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
-                    if (cleanAsst !== lastClean && cleanAsst.length > lastClean.length) {
+                    if (cleanAsst !== lastClean) {
                         if (chatWindow && !chatWindow.isDestroyed()) {
                             chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                         }
                         if (narrationWindow && !narrationWindow.isDestroyed()) {
                             narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
+                        }
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('conversation-text', state.assistant.text);
                         }
                     }
                 }
@@ -2301,6 +2325,9 @@ function startSmartConversationMonitoring() {
                     }
                     if (narrationWindow && !narrationWindow.isDestroyed()) {
                         narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
+                    }
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('conversation-text', state.assistant.text);
                     }
 
                     // JSON task extraction (unchanged)
@@ -2367,7 +2394,7 @@ function startSmartConversationMonitoring() {
         } catch (e) {
             console.error('❌ [Smart Monitor] Polling error:', e);
         }
-    }, 200); // 200ms poll
+    }, POLL_MS); // fast UI stream + stable turn boundary for planner
 }
 
 function stopSmartConversationMonitoring() {
@@ -3101,4 +3128,3 @@ ipcMain.on('phone-bridge-room', (event, { roomId }) => {
         connectPhoneBridge();
     }
 });
-

@@ -729,6 +729,30 @@ Devuelve SOLO JSON válido con este formato:
         }
     }
 
+    deleteWorkflow(fileName) {
+        try {
+            if (!fileName || typeof fileName !== 'string') {
+                return { success: false, error: 'Invalid file name' };
+            }
+            const targetPath = path.join(this.historyDir, fileName);
+            const resolvedTarget = path.resolve(targetPath);
+            const resolvedRoot = path.resolve(this.historyDir);
+
+            if (!resolvedTarget.startsWith(resolvedRoot + path.sep)) {
+                return { success: false, error: 'Invalid workflow path' };
+            }
+            if (!fs.existsSync(resolvedTarget)) {
+                return { success: false, error: 'Workflow not found' };
+            }
+
+            fs.unlinkSync(resolvedTarget);
+            return { success: true };
+        } catch (e) {
+            console.error('❌ [LearningAgent] deleteWorkflow failed:', e.message);
+            return { success: false, error: e.message };
+        }
+    }
+
     findRelevantWorkflows(userText, max = 3) {
         const query = this.tokenize(userText);
         if (query.length === 0) return [];
