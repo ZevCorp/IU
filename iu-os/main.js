@@ -1086,8 +1086,12 @@ const commandHoldOverride = {
     recordingStarted: false,
     awaitingClarification: false,
     clarificationPrompt: '',
+    interruptedFlowContext: null,
     hasNativeModifierSupport: null
 };
+
+let activeScreenFlow = null;
+let activeScreenFlowSeq = 0;
 
 function setCommandHoldStickyFeedback(isListening, message = '') {
     try {
@@ -1120,6 +1124,37 @@ async function waitForScreenAgentIdle(timeoutMs = 2000) {
     while (screenAgent.isRunning && (Date.now() - start) < timeoutMs) {
         await new Promise(resolve => setTimeout(resolve, 50));
     }
+}
+
+async function startManagedScreenAction(goal, app, stepsHint, options = {}) {
+    if (!screenAgent) return { success: false, error: 'Screen Agent not ready' };
+
+    const flow = {
+        id: ++activeScreenFlowSeq,
+        goal,
+        app,
+        stepsHint,
+        source: options.source || 'unknown',
+        startedAt: Date.now()
+    };
+    activeScreenFlow = flow;
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('action-started', { goal, app });
+    }
+
+    const result = await screenAgent.executeAction(goal, app, stepsHint);
+
+    if (activeScreenFlow && activeScreenFlow.id === flow.id) {
+        if (result && result.aborted) {
+            activeScreenFlow = { ...flow, interruptedAt: Date.now() };
+        } else {
+            activeScreenFlow = null;
+            commandHoldOverride.interruptedFlowContext = null;
+        }
+    }
+
+    return result;
 }
 
 async function startCommandHoldRecording() {
@@ -1214,6 +1249,7 @@ async function stopCommandHoldRecording() {
 }
 
 async function transcribeCommandHoldAudioWithDeepgram(audioDataUrl, mimeType = 'audio/webm') {
+    let buffer = null;
     try {
         const deepgramApiKey = process.env.DEEPGRAM_API_KEY || process.env.DEEPGRAM_KEY || '';
         if (!deepgramApiKey) {
@@ -1222,29 +1258,89 @@ async function transcribeCommandHoldAudioWithDeepgram(audioDataUrl, mimeType = '
         }
 
         const base64Data = String(audioDataUrl || '').replace(/^data:audio\/[^;]+[^,]*,/, '');
-        const buffer = Buffer.from(base64Data, 'base64');
+        buffer = Buffer.from(base64Data, 'base64');
         if (buffer.length < 1200) return '';
 
-        const response = await fetch('https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&detect_language=true&punctuate=true', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Token ${deepgramApiKey}`,
-                'Content-Type': mimeType || 'audio/webm'
-            },
-            body: buffer
-        });
+        const url = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&detect_language=true&punctuate=true';
+        const maxAttempts = 3;
+        let lastHttpStatus = null;
 
-        if (!response.ok) {
-            const errorText = await response.text().catch(() => '');
-            console.warn(`⚠️ [CommandHold] Deepgram error ${response.status}: ${errorText.substring(0, 160)}`);
-            return '';
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 12000);
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Token ${deepgramApiKey}`,
+                        'Content-Type': mimeType || 'audio/webm'
+                    },
+                    body: buffer,
+                    signal: controller.signal
+                });
+                clearTimeout(timeout);
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const transcript = payload?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+                    return String(transcript || '').trim();
+                }
+
+                lastHttpStatus = response.status;
+                const errorText = await response.text().catch(() => '');
+                console.warn(`⚠️ [CommandHold] Deepgram error ${response.status} (attempt ${attempt}/${maxAttempts}): ${errorText.substring(0, 160)}`);
+
+                const retryableHttp = response.status === 429 || response.status >= 500;
+                if (!retryableHttp || attempt === maxAttempts) break;
+            } catch (e) {
+                clearTimeout(timeout);
+                const retryableNetwork = ['ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(e?.code || e?.cause?.code || '');
+                console.warn(`⚠️ [CommandHold] Deepgram network error (attempt ${attempt}/${maxAttempts}): ${e?.message || 'unknown'}`);
+                if (!retryableNetwork || attempt === maxAttempts) throw e;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 350 * attempt));
         }
 
-        const payload = await response.json();
-        const transcript = payload?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
-        return String(transcript || '').trim();
+        if (lastHttpStatus) {
+            console.warn(`⚠️ [CommandHold] Falling back after Deepgram HTTP ${lastHttpStatus}.`);
+        }
+        return await transcribeCommandHoldAudioFallback(buffer, mimeType);
     } catch (e) {
-        console.error('❌ [CommandHold] Deepgram transcription failed:', e.message);
+        const cause = e && e.cause ? e.cause : null;
+        console.error('❌ [CommandHold] Deepgram transcription failed:', {
+            message: e?.message,
+            name: e?.name,
+            code: e?.code || cause?.code || null,
+            errno: e?.errno || cause?.errno || null,
+            syscall: cause?.syscall || null,
+            hostname: cause?.hostname || null
+        });
+        if (buffer && buffer.length > 1200) {
+            return await transcribeCommandHoldAudioFallback(buffer, mimeType);
+        }
+        return '';
+    }
+}
+
+async function transcribeCommandHoldAudioFallback(buffer, mimeType = 'audio/webm') {
+    try {
+        const ext = String(mimeType || '').includes('mp4') ? 'mp4' : 'webm';
+        const tempFile = path.join(app.getPath('temp'), `cmd_hold_${Date.now()}.${ext}`);
+        fs.writeFileSync(tempFile, buffer);
+        const transcription = await ModelSwitch.transcription({
+            filePath: tempFile,
+            buffer,
+            mimeType: mimeType || 'audio/webm'
+        });
+        try { fs.unlinkSync(tempFile); } catch (err) { /* ignore */ }
+        const text = String(transcription?.text || '').trim();
+        if (text) {
+            console.log('ℹ️ [CommandHold] Used fallback transcription provider after Deepgram failure.');
+        }
+        return text;
+    } catch (e) {
+        console.error('❌ [CommandHold] Fallback transcription failed:', e.message);
         return '';
     }
 }
@@ -1253,6 +1349,33 @@ async function executeFromCommandHoldTranscript(transcript) {
     if (!transcript || !actionPlanner || !screenAgent) return;
 
     contextManager.addMessage('user', transcript, 'command_hold_transcription');
+
+    // In-flow clarification: resume same execution context, avoid full replanning/reset.
+    if (commandHoldOverride.interruptedFlowContext) {
+        const flow = commandHoldOverride.interruptedFlowContext;
+        const continuationStepsHint = `CONTINUIDAD OBLIGATORIA:
+- NO reinicies el flujo ni vuelvas al primer paso.
+- NO hagas click en "Nuevo paciente"/"Nuevo usuario" ni limpies campos ya llenados, salvo instrucción explícita.
+- Continúa desde el estado visual actual y aplica la aclaración del usuario de forma localizada.
+
+ACLARACIÓN DEL USUARIO: "${transcript}"
+
+PASOS BASE ORIGINALES:
+${flow.stepsHint || ''}`;
+
+        commandHoldOverride.awaitingClarification = false;
+        commandHoldOverride.clarificationPrompt = '';
+
+        stickyFace.setFaceColor('#ffffff');
+        stickyFace.stopCommandAttention();
+        stickyFace.setExpression('neutral');
+        stickyFace.showMessage({ title: 'Asistente', body: 'Entendido, continúo desde aquí.' }, 2400);
+
+        await waitForScreenAgentIdle();
+        await startManagedScreenAction(flow.goal, flow.app, continuationStepsHint, { source: 'command_hold_continuation' });
+        return;
+    }
+
     const relevantContext = await contextManager.getRelevantContext(transcript);
     const plan = await actionPlanner.planFromExplicit(transcript, {
         recent: contextManager.getHistoryForAPI(10),
@@ -1294,10 +1417,7 @@ async function executeFromCommandHoldTranscript(transcript) {
     stickyFace.stopCommandAttention();
     stickyFace.setExpression('neutral');
     stickyFace.showMessage({ title: 'Asistente', body: 'Dale, lo haré.' }, 2200);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('action-started', { goal: plan.goal, app: plan.app });
-    }
-    screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+    await startManagedScreenAction(plan.goal, plan.app, plan.stepsHint, { source: 'command_hold_replan' });
 }
 
 async function onCommandHoldPressed() {
@@ -1311,6 +1431,9 @@ async function onCommandHoldPressed() {
     console.log('⌘ [CommandHold] Command pressed: listening override...');
 
     if (screenAgent.isRunning) {
+        commandHoldOverride.interruptedFlowContext = activeScreenFlow
+            ? { goal: activeScreenFlow.goal, app: activeScreenFlow.app, stepsHint: activeScreenFlow.stepsHint }
+            : null;
         screenAgent.stop({ keepWindowsHidden: true });
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('action-status', { phase: 'listening_override' });
@@ -2719,8 +2842,7 @@ function startSmartConversationMonitoring() {
                                 isActionPending = false;
                             } else if (screenAgent) {
                                 console.log('🎯 [Action] Auto-executing screen plan:', plan.goal);
-                                mainWindow.webContents.send('action-started', { goal: plan.goal, app: plan.app });
-                                screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint)
+                                startManagedScreenAction(plan.goal, plan.app, plan.stepsHint, { source: 'voice_auto' })
                                     .finally(() => { isActionPending = false; });
                             } else {
                                 isActionPending = false;
@@ -3032,6 +3154,9 @@ ipcMain.handle('stop-action', async () => {
     if (screenAgent) {
         screenAgent.stop();
     }
+    activeScreenFlow = null;
+    commandHoldOverride.interruptedFlowContext = null;
+    commandHoldOverride.awaitingClarification = false;
     return { success: true };
 });
 
@@ -3048,7 +3173,7 @@ ipcMain.handle('confirm-action', async (event, data) => {
 
     // Start execution
     // data: { goal, app, stepsHint, ... }
-    screenAgent.executeAction(data.goal, data.app, data.stepsHint);
+    startManagedScreenAction(data.goal, data.app, data.stepsHint, { source: 'confirm_action' });
 
     return { success: true };
 });
