@@ -131,6 +131,21 @@ const SOM_TOOLS = [
     {
         type: "function",
         function: {
+            name: "request_user_input",
+            description: "Use ONLY when the task cannot continue without specific data from the user (e.g., missing names, IDs, phone numbers, exact text). This pauses execution and asks the user for that missing data.",
+            parameters: {
+                type: "object",
+                properties: {
+                    question: { type: "string", description: "Short, explicit question asking only the missing info." },
+                    missing_fields: { type: "string", description: "Comma-separated list of missing fields (e.g., nombre, documento, telefono)." }
+                },
+                required: ["question", "missing_fields"]
+            }
+        }
+    },
+    {
+        type: "function",
+        function: {
             name: "scroll",
             description: "Scroll the page up or down to reveal hidden content.",
             parameters: {
@@ -249,6 +264,8 @@ class ScreenAgent {
         this.axAgent = new SimpleAxAgent();
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
+        this.currentTypeTask = null;
+        this.lastContextSnapshot = { app: '', window: '', recentActions: [] };
     }
 
     /**
@@ -409,6 +426,7 @@ ACCIONES RECOMENDADAS:
         this.isRunning = true;
         this.abortRequested = false;
         this.deferWindowRestore = false;
+        this.currentTypeTask = null;
         this.currentApp = app; // Track current app context
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
@@ -480,7 +498,8 @@ Recibirás una lista de elementos UI.
 ACCIONES DISPONIBLES (ordenadas por preferencia):
 1. perform_set_of_actions([...]): EJECUTA UNA SECUENCIA. Úsala SIEMPRE que se requiera más de un clic consecutivo o llenado de formularios.
 2. switch_app("NombreApp"): Cambia de aplicación.
-3. goal_reached("Resumen"): Terminar la tarea.
+3. request_user_input("pregunta"): Pausar y pedir datos faltantes al usuario.
+4. goal_reached("Resumen"): Terminar la tarea.
 
 REGLAS DE VELOCIDAD EXTREMA:
 - NUNCA uses select_element, type_text o key_press individuales si la acción requiere varios pasos continuos VISIBLES; júntalos en perform_set_of_actions.
@@ -497,7 +516,16 @@ Si ves los botones [5], [+], [5]... ¡Oprímelos todos en un solo llamado! No ha
 CRÍTICO — NO LLAMES goal_reached PREMATURAMENTE:
 Si en la iteración 1 ves una pantalla que "ya parece completada", NO es suficiente.
 Puede ser un estado residual de sesiones anteriores. DEBES ejecutar las acciones tú mismo antes de declarar goal_reached.
-Para tareas multi-app: NUNCA llames goal_reached hasta haber completado TODOS los pasos en TODAS las apps.`
+Para tareas multi-app: NUNCA llames goal_reached hasta haber completado TODOS los pasos en TODAS las apps.
+
+REGLA DE CONTINUIDAD:
+No reinicies ni dupliques subobjetivos ya iniciados o completados dentro del mismo flujo.
+Si el objetivo es singular ("crear un X", "enviar un mensaje"), ejecútalo una sola vez salvo instrucción explícita del usuario.
+Si faltan datos del usuario para continuar (dictado pendiente), usa request_user_input y NO uses goal_reached.
+
+PRIORIDAD DE CONTEXTO:
+Si el estado visual actual (ventana/módulo) es más avanzado que el objetivo inicial, prioriza SIEMPRE el estado visual actual y continúa desde ahí; nunca retrocedas a etapas previas.
+Si ya estás en una etapa posterior, NO pidas datos de una etapa anterior.`
                 }
             ];
 
@@ -556,6 +584,11 @@ Para tareas multi-app: NUNCA llames goal_reached hasta haber completado TODOS lo
                 }
 
                 const elements = detectionResult?.elements || [];
+                this.lastContextSnapshot = {
+                    app: detectionResult?.app || this.currentApp || '',
+                    window: detectionResult?.window || '',
+                    recentActions: actionHistory.slice(-6).map(a => a.summary)
+                };
 
                 // 3. Loop detection: check if elements haven't changed
                 const currentHash = this._hashElements(elements);
@@ -613,13 +646,17 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
 
                 // 6. Send element list to LLM (text-only, no image)
                 const appInstructions = this._getAppSpecificInstructions(this.currentApp, elements);
+                const runtimeContextHint = `\n\nContexto actual detectado:
+- App: ${detectionResult?.app || this.currentApp || 'desconocida'}
+- Ventana/Módulo: ${detectionResult?.window || 'desconocido'}
+- Etapa actual (acciones recientes): ${(this.lastContextSnapshot.recentActions || []).slice(-4).join(' | ') || 'sin acciones previas'}`;
 
                 somMessages.push({
                     role: "user",
                     content: `Iteración ${iteration}/${this.maxIterations}. Objetivo: "${goal}"
 
 Elementos UI detectados en pantalla (${elements.length} total) [Fuente: ${detectionResult.source || 'VISION'}]:
-${elementsText}${historyHint}${loopWarning}${appInstructions}
+${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHint}
 
 ¿Qué acción ejecutar?`
                 });
@@ -696,6 +733,37 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                             content: "OK",
                             _functionName: fnName
                         });
+                        break;
+                    }
+
+                    // Handle dynamic user info request (pause flow without finishing)
+                    if (fnName === 'request_user_input') {
+                        const question = String(args.question || '').trim();
+                        const missingFields = String(args.missing_fields || '').trim();
+                        const msg = question || `Necesito estos datos para continuar: ${missingFields}`;
+                        actionResult = msg;
+                        this.deferWindowRestore = true;
+                        console.log(`📝 [ScreenAgent] Awaiting user input: ${msg} [missing: ${missingFields}]`);
+                        this._notify('action-status', {
+                            phase: 'awaiting_user_input',
+                            question: msg,
+                            missing_fields: missingFields
+                        });
+                        try {
+                            stickyFace.setFaceColor('#00ff00');
+                            stickyFace.setExpression('mild_attention');
+                            stickyFace.showMessage({ title: 'Necesito datos', body: msg }, 120000);
+                        } catch (e) {
+                            // best effort only
+                        }
+
+                        somMessages.push({
+                            role: "tool",
+                            tool_call_id: toolCall.id,
+                            content: `WAITING_USER_INPUT: ${msg}`,
+                            _functionName: fnName
+                        });
+                        iteration = this.maxIterations; // exit outer loop quickly
                         break;
                     }
 
@@ -834,7 +902,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                 }
             }
 
-            if (this.abortRequested) {
+            if (this.deferWindowRestore && !goalReached && actionResult) {
+                this._notify('action-status', { phase: 'awaiting_user_input', question: actionResult });
+            } else if (this.abortRequested) {
                 console.log('🛑 [ScreenAgent] Action loop interrupted by user');
                 this._notify('action-status', { phase: 'stopped' });
             } else if (!goalReached) {
@@ -842,7 +912,13 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                 this._notify('action-status', { phase: 'incomplete', iterations: iteration });
             }
 
-            return { success: goalReached && !this.abortRequested, iterations: iteration, summary: actionResult, aborted: this.abortRequested };
+            return {
+                success: goalReached && !this.abortRequested,
+                iterations: iteration,
+                summary: actionResult,
+                aborted: this.abortRequested,
+                awaitingUserInput: !!(this.deferWindowRestore && !goalReached && actionResult)
+            };
 
 
         } catch (e) {
@@ -1470,7 +1546,7 @@ CONTEXTO DE VENTANAS:
             } else if (fnName === 'type_text') {
                 if (this.abortRequested) return;
                 console.log(`⌨️ [ScreenAgent] Typing "${args.text.substring(0, 40)}${args.text.length > 40 ? '...' : ''}" into "${args.label}"`);
-                await keyboard.type(args.text);
+                await this._typeTextInterruptible(keyboard, args.text, args.label);
 
             } else if (fnName === 'key_press') {
                 if (this.abortRequested) return;
@@ -1502,6 +1578,48 @@ CONTEXTO DE VENTANAS:
         } catch (e) {
             console.error('❌ [ScreenAgent] Execute tool failed:', e.message);
         }
+    }
+
+    async _typeTextInterruptible(keyboard, text, label = '') {
+        const fullText = String(text || '');
+        this.currentTypeTask = { text: fullText, typedChars: 0, label: label || '' };
+        try {
+            for (let i = 0; i < fullText.length; i++) {
+                if (this.abortRequested) break;
+                await keyboard.type(fullText[i]);
+                this.currentTypeTask.typedChars = i + 1;
+            }
+        } finally {
+            if (!this.abortRequested) {
+                this.currentTypeTask = null;
+            }
+        }
+    }
+
+    getInterruptionSnapshot() {
+        const snapshot = {
+            pendingTypeText: '',
+            pendingTypeLabel: ''
+        };
+
+        if (!this.currentTypeTask) return snapshot;
+        const text = String(this.currentTypeTask.text || '');
+        const typed = Number(this.currentTypeTask.typedChars || 0);
+        if (typed < text.length) {
+            snapshot.pendingTypeText = text.slice(typed);
+            snapshot.pendingTypeLabel = String(this.currentTypeTask.label || '');
+        }
+        return snapshot;
+    }
+
+    getRuntimeContextSnapshot() {
+        return {
+            app: this.lastContextSnapshot?.app || this.currentApp || '',
+            window: this.lastContextSnapshot?.window || '',
+            recentActions: Array.isArray(this.lastContextSnapshot?.recentActions)
+                ? this.lastContextSnapshot.recentActions.slice(-6)
+                : []
+        };
     }
 
     /**

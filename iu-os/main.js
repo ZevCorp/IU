@@ -1146,7 +1146,9 @@ async function startManagedScreenAction(goal, app, stepsHint, options = {}) {
     const result = await screenAgent.executeAction(goal, app, stepsHint);
 
     if (activeScreenFlow && activeScreenFlow.id === flow.id) {
-        if (result && result.aborted) {
+        if (result && result.awaitingUserInput) {
+            activeScreenFlow = { ...flow, awaitingUserInput: true, waitPrompt: result.summary || '' };
+        } else if (result && result.aborted) {
             activeScreenFlow = { ...flow, interruptedAt: Date.now() };
         } else {
             activeScreenFlow = null;
@@ -1353,12 +1355,36 @@ async function executeFromCommandHoldTranscript(transcript) {
     // In-flow clarification: resume same execution context, avoid full replanning/reset.
     if (commandHoldOverride.interruptedFlowContext) {
         const flow = commandHoldOverride.interruptedFlowContext;
+        const runtimeNow = (typeof screenAgent.getRuntimeContextSnapshot === 'function')
+            ? screenAgent.getRuntimeContextSnapshot()
+            : { app: '', window: '', recentActions: [] };
+        const runtime = {
+            app: runtimeNow?.app || flow.runtimeContext?.app || '',
+            window: runtimeNow?.window || flow.runtimeContext?.window || '',
+            recentActions: (runtimeNow?.recentActions && runtimeNow.recentActions.length > 0)
+                ? runtimeNow.recentActions
+                : (flow.runtimeContext?.recentActions || [])
+        };
+        const pendingTypeHint = flow.pendingTypeText
+            ? `\nREANUDACIÓN DE ESCRITURA:
+- Fuiste interrumpido mientras escribías en "${flow.pendingTypeLabel || 'campo actual'}".
+- Primero completa exactamente este texto pendiente antes de aplicar la aclaración:
+"${flow.pendingTypeText}"`
+            : '';
+        const runtimeContextHint = `\nCONTEXTO ACTUAL PRIORITARIO:
+- App detectada: "${runtime.app || flow.app || ''}"
+- Ventana/Módulo detectado: "${runtime.window || ''}"
+- Acciones recientes ya ejecutadas: ${(runtime.recentActions || []).slice(-6).join(' | ') || 'ninguna'}`;
         const continuationStepsHint = `CONTINUIDAD OBLIGATORIA:
 - NO reinicies el flujo ni vuelvas al primer paso.
-- NO hagas click en "Nuevo paciente"/"Nuevo usuario" ni limpies campos ya llenados, salvo instrucción explícita.
+- NO repitas subobjetivos ya completados o claramente iniciados, salvo instrucción explícita.
+- NO limpies o sobrescribas datos ya válidos sin que el usuario lo pida.
 - Continúa desde el estado visual actual y aplica la aclaración del usuario de forma localizada.
+- Si el estado visual actual está en una etapa posterior, NO pidas datos de etapas anteriores.
 
 ACLARACIÓN DEL USUARIO: "${transcript}"
+${pendingTypeHint}
+${runtimeContextHint}
 
 PASOS BASE ORIGINALES:
 ${flow.stepsHint || ''}`;
@@ -1422,7 +1448,12 @@ ${flow.stepsHint || ''}`;
 
 async function onCommandHoldPressed() {
     if (!screenAgent) return;
-    if (!screenAgent.isRunning && !commandHoldOverride.awaitingClarification) return;
+    const automationContextActive =
+        !!screenAgent.isRunning ||
+        !!screenAgent.windowsHiddenByAutomation ||
+        !!activeScreenFlow ||
+        !!commandHoldOverride.awaitingClarification;
+    if (!automationContextActive) return;
     if (commandHoldOverride.active) return;
 
     commandHoldOverride.active = true;
@@ -1431,14 +1462,37 @@ async function onCommandHoldPressed() {
     console.log('⌘ [CommandHold] Command pressed: listening override...');
 
     if (screenAgent.isRunning) {
+        const interruption = (typeof screenAgent.getInterruptionSnapshot === 'function')
+            ? screenAgent.getInterruptionSnapshot()
+            : { pendingTypeText: '', pendingTypeLabel: '' };
         commandHoldOverride.interruptedFlowContext = activeScreenFlow
-            ? { goal: activeScreenFlow.goal, app: activeScreenFlow.app, stepsHint: activeScreenFlow.stepsHint }
+            ? {
+                goal: activeScreenFlow.goal,
+                app: activeScreenFlow.app,
+                stepsHint: activeScreenFlow.stepsHint,
+                pendingTypeText: interruption.pendingTypeText || '',
+                pendingTypeLabel: interruption.pendingTypeLabel || '',
+                runtimeContext: (typeof screenAgent.getRuntimeContextSnapshot === 'function')
+                    ? screenAgent.getRuntimeContextSnapshot()
+                    : null
+            }
             : null;
         screenAgent.stop({ keepWindowsHidden: true });
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('action-status', { phase: 'listening_override' });
         }
         await waitForScreenAgentIdle();
+    } else if (activeScreenFlow) {
+        commandHoldOverride.interruptedFlowContext = {
+            goal: activeScreenFlow.goal,
+            app: activeScreenFlow.app,
+            stepsHint: activeScreenFlow.stepsHint,
+            pendingTypeText: '',
+            pendingTypeLabel: '',
+            runtimeContext: (typeof screenAgent.getRuntimeContextSnapshot === 'function')
+                ? screenAgent.getRuntimeContextSnapshot()
+                : null
+        };
     }
     setCommandHoldStickyFeedback(true, 'Escuchando...');
     setTimeout(() => {
@@ -1477,7 +1531,10 @@ async function onCommandHoldReleased() {
         if (transcript && transcript.trim().length > 0) {
             console.log(`⌘ [CommandHold] Transcript captured: "${transcript}"`);
             stickyFace.showMessage({ title: 'Te Escuché', body: transcript.trim() }, 4200);
-            await executeFromCommandHoldTranscript(transcript.trim());
+            // No await: keep Command override reusable immediately while execution continues in background.
+            executeFromCommandHoldTranscript(transcript.trim()).catch((err) => {
+                console.error('❌ [CommandHold] Continuation failed:', err?.message || err);
+            });
         } else {
             console.log('⌘ [CommandHold] No transcript captured after release.');
             commandHoldOverride.awaitingClarification = true;

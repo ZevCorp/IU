@@ -202,6 +202,28 @@
       align-items: center;
     }
 
+    .typing-status {
+      margin-left: 10px;
+      font-size: 12px;
+      letter-spacing: 0.02em;
+      color: #6f7380;
+      position: relative;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .typing-status::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -120%;
+      width: 120%;
+      height: 100%;
+      background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.65), rgba(255, 255, 255, 0));
+      animation: statusSweep 1.8s linear infinite;
+      pointer-events: none;
+    }
+
     .typing-dot {
       width: 6px;
       height: 6px;
@@ -230,6 +252,16 @@
       30% {
         transform: translateY(-4px);
         opacity: 1;
+      }
+    }
+
+    @keyframes statusSweep {
+      0% {
+        left: -120%;
+      }
+
+      100% {
+        left: 120%;
       }
     }
 
@@ -383,6 +415,7 @@
     <div class="typing-dot"></div>
     <div class="typing-dot"></div>
     <div class="typing-dot"></div>
+    <span class="typing-status" id="typing-status">Pensando...</span>
   </div>
 
   <div class="input-area">
@@ -406,6 +439,30 @@
     const sendBtn = document.getElementById('send-btn');
     const closeBtn = document.getElementById('close-btn');
     const typingEl = document.getElementById('typing');
+    const typingStatusEl = document.getElementById('typing-status');
+    let typingStatusInterval = null;
+    let typingStatusIndex = 0;
+    const typingStatuses = ['Enviando al asistente', 'Pensando', 'Trazando pasos'];
+
+    function showTypingStatus() {
+      typingEl.classList.add('visible');
+      typingStatusIndex = 0;
+      if (typingStatusEl) typingStatusEl.textContent = typingStatuses[typingStatusIndex];
+      if (typingStatusInterval) clearInterval(typingStatusInterval);
+      typingStatusInterval = setInterval(() => {
+        typingStatusIndex = (typingStatusIndex + 1) % typingStatuses.length;
+        if (typingStatusEl) typingStatusEl.textContent = typingStatuses[typingStatusIndex];
+      }, 1600);
+    }
+
+    function hideTypingStatus() {
+      typingEl.classList.remove('visible');
+      if (typingStatusInterval) {
+        clearInterval(typingStatusInterval);
+        typingStatusInterval = null;
+      }
+      if (typingStatusEl) typingStatusEl.textContent = 'Pensando...';
+    }
 
     // Auto-resize textarea
     inputEl.addEventListener('input', () => {
@@ -431,7 +488,7 @@
       sendBtn.disabled = true;
 
       // Show typing
-      typingEl.classList.add('visible');
+      showTypingStatus();
 
       // Send to main process
       if (window.uChat) {
@@ -463,7 +520,7 @@
     // Listen for responses from main process
     if (window.uChat) {
       window.uChat.onResponse((data) => {
-        typingEl.classList.remove('visible');
+        hideTypingStatus();
 
         if (data.reply) {
           addMessage(data.reply, 'assistant');
@@ -481,7 +538,7 @@
       // Unified: Voice inputs
       // Unified: Voice inputs
       window.uChat.onVoiceText((data) => {
-        typingEl.classList.remove('visible');
+        hideTypingStatus();
         if (welcomeEl) welcomeEl.style.display = 'none';
 
         const lastMsg = messagesEl.lastElementChild;
