@@ -39,10 +39,9 @@ const SOM_TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    element_id: { type: "number", description: "The #id number of the detected element to click" },
-                    reasoning: { type: "string", description: "Why clicking this element advances the goal" }
+                    element_id: { type: "number", description: "The #id number of the detected element to click" }
                 },
-                required: ["element_id", "reasoning"]
+                required: ["element_id"]
             }
         }
     },
@@ -54,11 +53,9 @@ const SOM_TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    text: { type: "string", description: "The text to type" },
-                    label: { type: "string", description: "Short description of what field you're typing into" },
-                    reasoning: { type: "string", description: "Why typing this text advances the goal" }
+                    text: { type: "string", description: "The text to type" }
                 },
-                required: ["text", "label", "reasoning"]
+                required: ["text"]
             }
         }
     },
@@ -70,11 +67,9 @@ const SOM_TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "pageup", "pagedown", "home", "end"], description: "The key to press" },
-                    label: { type: "string", description: "Short description of why pressing this key" },
-                    reasoning: { type: "string", description: "Why this key press advances the goal" }
+                    key: { type: "string", enum: ["enter", "tab", "escape", "backspace", "delete", "up", "down", "left", "right", "pageup", "pagedown", "home", "end"], description: "The key to press" }
                 },
-                required: ["key", "label", "reasoning"]
+                required: ["key"]
             }
         }
     },
@@ -94,15 +89,14 @@ const SOM_TOOLS = [
                                 action: { type: "string", enum: ["click", "type", "key"], description: "Type of action to perform" },
                                 element_id: { type: "number", description: "If action=click, the ID of the element" },
                                 text: { type: "string", description: "If action=type, the text to type" },
-                                key: { type: "string", description: "If action=key, the key to press" },
-                                reasoning: { type: "string", description: "Why this action is needed" }
+                                key: { type: "string", description: "If action=key, the key to press" }
                             },
-                            required: ["action", "reasoning"]
+                            required: ["action"]
                         }
                     },
-                    reasoning: { type: "string", description: "Reason for the entire batch" }
+                    justificacion: { type: "string", description: "Breve justificación de este plan (máx 15 palabras)" }
                 },
-                required: ["actions", "reasoning"]
+                required: ["actions", "justificacion"]
             }
         }
     },
@@ -114,10 +108,9 @@ const SOM_TOOLS = [
             parameters: {
                 type: "object",
                 properties: {
-                    app_name: { type: "string", description: "Name of the app to switch to (e.g. 'Calculator', 'Notes', 'Calendar')" },
-                    reasoning: { type: "string", description: "Why switching apps helps achieve the goal" }
+                    app_name: { type: "string", description: "Name of the app to switch to (e.g. 'Calculator', 'Notes', 'Calendar')" }
                 },
-                required: ["app_name", "reasoning"]
+                required: ["app_name"]
             }
         }
     },
@@ -144,10 +137,9 @@ const SOM_TOOLS = [
                 type: "object",
                 properties: {
                     direction: { type: "string", enum: ["up", "down"], description: "Direction to scroll" },
-                    amount: { type: "string", enum: ["small", "medium", "large"], description: "Amount of scroll" },
-                    reasoning: { type: "string", description: "Why scrolling is needed" }
+                    amount: { type: "string", enum: ["small", "medium", "large"], description: "Amount of scroll" }
                 },
-                required: ["direction", "reasoning"]
+                required: ["direction"]
             }
         }
     }
@@ -227,10 +219,9 @@ const VISUAL_TOOLS = [
                 type: "object",
                 properties: {
                     direction: { type: "string", enum: ["up", "down"] },
-                    amount: { type: "string", enum: ["small", "medium", "large"] },
-                    reasoning: { type: "string" }
+                    amount: { type: "string", enum: ["small", "medium", "large"] }
                 },
-                required: ["direction", "reasoning"]
+                required: ["direction"]
             }
         }
     }
@@ -481,14 +472,14 @@ Recibirás una lista de elementos UI.
 - Si la fuente es 'VISION' (YOLO), los elementos son aproximados.
 
 ACCIONES DISPONIBLES (ordenadas por preferencia):
-1. perform_set_of_actions([...]): EJECUTA UNA SECUENCIA. Úsalo siempre para acciones múltiples (ej: marcar dígitos, navegar menús). ES MUCHO MÁS RÁPIDO.
-2. switch_app("NombreApp"): Cambia de aplicación. Úsalo si el objetivo requiere otra app.
-3. select_element(#id): Click simple (paso a paso).
-4. type_text("texto"): Escribir.
-5. key_press("tecla"): Pulsar tecla especial (enter, escape, etc).
-6. need_visual_inspection(reason): Fallback visual.
+1. perform_set_of_actions([...]): EJECUTA UNA SECUENCIA. Úsala SIEMPRE que se requiera más de un clic consecutivo o llenado de formularios.
+2. switch_app("NombreApp"): Cambia de aplicación.
+3. goal_reached("Resumen"): Terminar la tarea.
 
-Prioriza siempre select_element (o perform_set_of_actions) sobre inspección visual.
+REGLAS DE VELOCIDAD EXTREMA:
+- NUNCA uses select_element, type_text o key_press individuales si la acción requiere varios pasos continuos VISIBLES; júntalos en perform_set_of_actions.
+- RESTRICCIÓN VISUAL DE BATCH: ¡NUNCA agrupes acciones en un Batch si la siguiente acción requiere que la pantalla cargue o cambie para existir (ej. buscar un contacto y luego hacerle clik a un resultado hipotético)! Haz la búsqueda, termina la iteración y en el PRÓXIMO turno visual (cuando exista) le haces click.
+- Mantén la "justificacion" MUY BREVE (máximo 15 palabras) para ahorrar milisegundos de inferencia. No divagues ni expliques de más.
 
 IMPORTANTE SOBRE MULTI-APP:
 Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa 'switch_app' cuando termines con la primera.
@@ -609,9 +600,10 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                 }
 
                 // 5. Format elements list for LLM
-                const elementsText = llmElements.length > 0
-                    ? llmElements.map(e => `  #${e.id} [${e.label}] (${e.type}) bbox=[${e.bbox.x.toFixed(2)},${e.bbox.y.toFixed(2)}]`).join('\n')
-                    : '  (No se detectaron elementos UI relevantes)';
+                let elementsText = '  (No se detectaron elementos UI relevantes. La pantalla puede estar en blanco, cargando, o el sistema no pudo leerla. Si esperabas ver algo, intenta usar scroll, presionar tecla escape por si hay un modal trabado, o switch_app para asegurarte que estás en la aplicación correcta.)';
+                if (llmElements.length > 0) {
+                    elementsText = llmElements.map(e => `  #${e.id} [${e.label}] (${e.type}) bbox=[${e.bbox.x.toFixed(2)},${e.bbox.y.toFixed(2)}]`).join('\n');
+                }
 
                 // 6. Send element list to LLM (text-only, no image)
                 const appInstructions = this._getAppSpecificInstructions(this.currentApp, elements);
@@ -629,14 +621,16 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                 console.log(`📤 [ScreenAgent] Sending to LLM: ${elements.length} elements, tool_choice=required`);
                 console.log(`📋 [ScreenAgent] Tools available: ${SOM_TOOLS.map(t => t.function.name).join(', ')}`);
 
+                const inferStartTime = Date.now();
                 const somResponse = await this._retryWithBackoff(() => ModelSwitch.chatCompletion({
                     messages: somMessages,
                     tools: SOM_TOOLS,
                     tool_choice: "required",
                     max_tokens: 4096  // Increased for GPT-5-mini to generate complete tool calls
                 }), 3);
+                const inferElapsed = Date.now() - inferStartTime;
 
-                console.log(`📥 [ScreenAgent] LLM Response:`, JSON.stringify({
+                console.log(`📥 [ScreenAgent] LLM Response [${inferElapsed}ms]:`, JSON.stringify({
                     hasToolCalls: !!somResponse.choices[0]?.message?.tool_calls,
                     toolCallCount: somResponse.choices[0]?.message?.tool_calls?.length || 0,
                     finishReason: somResponse.choices[0]?.finish_reason,
@@ -724,7 +718,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                                 py = Math.round(py * this.screenHeight);
                             }
 
-                            const label = `${targetElement.label || targetElement.type} #${targetElement.id}`;
+                            const label = `${targetElement.label || targetElement.type}`;
                             console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
 
                             await this._executeToolDirect('click', { px, py, label });
@@ -759,6 +753,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                     else if (fnName === 'perform_set_of_actions') {
                         const subActions = args.actions;
                         console.log(`📦 [ScreenAgent] Batch executing ${subActions.length} actions...`);
+                        const batchStartTime = Date.now();
 
                         // Refocus ONCE before batch
                         await this._ensureFocus(this.currentApp);
@@ -798,7 +793,10 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                                 lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                             }
                         }
-                        actionSummary = `BATCH: Executed ${subActions.length} actions (${args.reasoning})`;
+                        const batchElapsed = Date.now() - batchStartTime;
+                        const reasoningStr = args.justificacion ? ` (${args.justificacion})` : '';
+                        actionSummary = `BATCH: Executed ${subActions.length} actions in ${batchElapsed}ms${reasoningStr}`;
+                        console.log(`⏱️ [ScreenAgent] Batch complete in ${batchElapsed}ms${reasoningStr}`);
                     }
 
                     if (actionSummary) {
