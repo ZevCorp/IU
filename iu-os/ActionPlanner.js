@@ -79,10 +79,16 @@ class ActionPlanner {
             console.log('🧠 [Planner] Planning from EXPLICIT intent:', userText.substring(0, 60));
 
             // Format history for context (Recent RAM)
-            const historyContext = (context.recent || []).map(msg => ({
-                role: msg.role === 'user' ? 'user' : 'assistant',
-                content: msg.content
-            }));
+            const historyContext = (context.recent || [])
+                .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant'))
+                .map(msg => {
+                    const content = (msg.content === null || msg.content === undefined) ? '' : String(msg.content).trim();
+                    return {
+                        role: msg.role === 'user' ? 'user' : 'assistant',
+                        content
+                    };
+                })
+                .filter(msg => msg.content.length > 0);
 
             // Add Long-Term Memory if available
             let systemContent = `Eres U, un asistente digital silencioso.
@@ -163,7 +169,13 @@ NO converses. EJECUTA.`;
                     role: "system",
                     content: systemContent
                 },
-                ...(context.recent || []).map(msg => ({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content })),
+                ...(context.recent || [])
+                    .filter(msg => msg && (msg.role === 'user' || msg.role === 'assistant'))
+                    .map(msg => ({
+                        role: msg.role === 'user' ? 'user' : 'assistant',
+                        content: (msg.content === null || msg.content === undefined) ? '' : String(msg.content).trim()
+                    }))
+                    .filter(msg => msg.content.length > 0),
                 {
                     role: "user",
                     content: `Contexto: "${contextText}"\nSugerencia confirmada: "${confirmedSuggestion}"`

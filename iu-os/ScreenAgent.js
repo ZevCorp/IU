@@ -233,6 +233,9 @@ class ScreenAgent {
         this.mainWindow = mainWindow;
         this.chatPage = chatPage; // ChatGPT Playwright page for web searches
         this.isRunning = false;
+        this.abortRequested = false;
+        this.deferWindowRestore = false;
+        this.windowsHiddenByAutomation = false;
         this.maxIterations = 15;
         this.nutjs = null;
         this.debugDir = path.join(require('os').homedir(), 'u_debug');
@@ -404,6 +407,8 @@ ACCIONES RECOMENDADAS:
         }
 
         this.isRunning = true;
+        this.abortRequested = false;
+        this.deferWindowRestore = false;
         this.currentApp = app; // Track current app context
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
@@ -412,20 +417,21 @@ ACCIONES RECOMENDADAS:
         this._notify('action-status', { phase: 'starting', goal, app });
 
         // HIDE ALL OWN WINDOWS & SHOW STICKY FACE
-        this.hiddenWindows = [];
         try {
-            console.log('🙈 [ScreenAgent] Hiding all windows for automation mode...');
-            const allWindows = BrowserWindow.getAllWindows();
-            for (const win of allWindows) {
-                if (!win.isDestroyed() && win.isVisible()) {
-                    // Don't hide the sticky face window itself!
-                    if (stickyFace.window && win.id === stickyFace.window.id) continue;
+            if (!this.windowsHiddenByAutomation) {
+                this.hiddenWindows = [];
+                console.log('🙈 [ScreenAgent] Hiding all windows for automation mode...');
+                const allWindows = BrowserWindow.getAllWindows();
+                for (const win of allWindows) {
+                    if (!win.isDestroyed() && win.isVisible()) {
+                        // Don't hide the sticky face window itself!
+                        if (stickyFace.window && win.id === stickyFace.window.id) continue;
 
-                    // Actually, let's just make sure we don't hide it if we can identify it.
-                    // But stickyFace hasn't started yet, so create window might be called.
-                    win.hide();
-                    this.hiddenWindows.push(win);
+                        win.hide();
+                        this.hiddenWindows.push(win);
+                    }
                 }
+                this.windowsHiddenByAutomation = true;
             }
 
             stickyFace.start();
@@ -502,7 +508,7 @@ Para tareas multi-app: NUNCA llames goal_reached hasta haber completado TODOS lo
             let sameStateCount = 0;
             const LOOP_THRESHOLD = 3; // 3 clicks without progress = loop
 
-            while (iteration < this.maxIterations && !goalReached) {
+            while (iteration < this.maxIterations && !goalReached && !this.abortRequested) {
                 iteration++;
                 console.log(`🔄 [ScreenAgent] Iteration ${iteration}`);
                 this._notify('action-status', { phase: 'analyzing', iteration });
@@ -669,6 +675,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
 
                 // Iterate over all tool calls (BATCH EXECUTION)
                 for (let i = 0; i < toolCalls.length; i++) {
+                    if (this.abortRequested) break;
                     const toolCall = toolCalls[i];
                     const fnName = toolCall.function.name;
                     const args = JSON.parse(toolCall.function.arguments);
@@ -759,6 +766,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                         await this._ensureFocus(this.currentApp);
 
                         for (let j = 0; j < subActions.length; j++) {
+                            if (this.abortRequested) break;
                             const sub = subActions[j];
                             const stepStr = `Step ${j + 1}/${subActions.length}`;
 
@@ -812,6 +820,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                     });
 
                     // Wait between batched actions or sequentially
+                    if (this.abortRequested) break;
                     if (i < toolCalls.length - 1) {
                         lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                     } else {
@@ -825,12 +834,15 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
                 }
             }
 
-            if (!goalReached) {
+            if (this.abortRequested) {
+                console.log('🛑 [ScreenAgent] Action loop interrupted by user');
+                this._notify('action-status', { phase: 'stopped' });
+            } else if (!goalReached) {
                 console.warn(`⚠️ [ScreenAgent] Stopped after ${iteration} iterations without reaching goal`);
                 this._notify('action-status', { phase: 'incomplete', iterations: iteration });
             }
 
-            return { success: goalReached, iterations: iteration, summary: actionResult };
+            return { success: goalReached && !this.abortRequested, iterations: iteration, summary: actionResult, aborted: this.abortRequested };
 
 
         } catch (e) {
@@ -839,22 +851,16 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}
             return { success: false, error: e.message };
         } finally {
             this.isRunning = false;
+            this.abortRequested = false;
             this.workflowGuidance = null;
             this.workflowAnchorIndex = 0;
 
-            // RESTORE WINDOWS & HIDE STICKY FACE
+            // RESTORE WINDOWS & HIDE STICKY FACE (unless command-hold override requests hidden state)
             try {
-                stickyFace.stop();
-
-                if (this.hiddenWindows) {
-                    for (const win of this.hiddenWindows) {
-                        if (!win.isDestroyed()) win.show();
-                    }
-                }
-
-                // Ensure mainWindow is visible if it wasn't captured
-                if (this.mainWindow && !this.mainWindow.isDestroyed()) {
-                    this.mainWindow.show();
+                if (!this.deferWindowRestore) {
+                    this._restoreHiddenWindows();
+                } else {
+                    console.log('🙈 [ScreenAgent] Keeping windows hidden after stop (command-hold override)');
                 }
             } catch (e) {
                 console.error('⚠️ [ScreenAgent] Failed to restore windows:', e);
@@ -1061,6 +1067,7 @@ CONTEXTO DE VENTANAS:
      */
     async _humanLikeMove(targetX, targetY, speedFactor = 1.0) {
         try {
+            if (this.abortRequested) return;
             const { mouse, Point } = await this._getNutJS();
             const start = await mouse.getPosition();
             const startX = start.x;
@@ -1093,6 +1100,7 @@ CONTEXTO DE VENTANAS:
             const delayPerStep = duration / steps;
 
             for (let i = 1; i <= steps; i++) {
+                if (this.abortRequested) return;
                 const t = i / steps;
 
                 // Easing: EaseInOutQuad (smooth start and end)
@@ -1112,7 +1120,9 @@ CONTEXTO DE VENTANAS:
             }
 
             // Ensure final exact position
-            await mouse.setPosition(new Point(targetX, targetY));
+            if (!this.abortRequested) {
+                await mouse.setPosition(new Point(targetX, targetY));
+            }
 
         } catch (e) {
             console.warn('⚠️ [ScreenAgent] Human move failed:', e.message);
@@ -1134,7 +1144,9 @@ CONTEXTO DE VENTANAS:
      */
     async _executeToolDirect(fnName, args, skipFocus = false) {
         try {
+            if (this.abortRequested) return;
             if (!skipFocus) await this._ensureFocus(this.currentApp);
+            if (this.abortRequested) return;
 
             const { mouse, Button, Point } = await this._getNutJS();
 
@@ -1158,7 +1170,9 @@ CONTEXTO DE VENTANAS:
                 console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${args.px}, ${args.py})`);
                 // speedFactor 3.0 → duration = min(800,max(300,dist*0.6))/3.0 ≈ 100–267ms vs old 272–727ms
                 await this._humanLikeMove(args.px, args.py, 3.0);
+                if (this.abortRequested) return;
                 await this._wait(30);
+                if (this.abortRequested) return;
                 await mouse.click(Button.LEFT);
             }
         } catch (e) {
@@ -1419,7 +1433,9 @@ CONTEXTO DE VENTANAS:
      */
     async _executeTool(fnName, args, skipFocus = false) {
         try {
+            if (this.abortRequested) return;
             if (!skipFocus) await this._ensureFocus(this.currentApp);
+            if (this.abortRequested) return;
 
             const { mouse, keyboard, Button, Key, Point } = await this._getNutJS();
 
@@ -1446,14 +1462,18 @@ CONTEXTO DE VENTANAS:
 
                 console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
                 await this._humanLikeMove(px, py, 3.0);
+                if (this.abortRequested) return;
                 await this._wait(30);
+                if (this.abortRequested) return;
                 await mouse.click(Button.LEFT);
 
             } else if (fnName === 'type_text') {
+                if (this.abortRequested) return;
                 console.log(`⌨️ [ScreenAgent] Typing "${args.text.substring(0, 40)}${args.text.length > 40 ? '...' : ''}" into "${args.label}"`);
                 await keyboard.type(args.text);
 
             } else if (fnName === 'key_press') {
+                if (this.abortRequested) return;
                 const keyMap = {
                     enter: Key.Enter, tab: Key.Tab, escape: Key.Escape,
                     backspace: Key.Backspace, delete: Key.Delete,
@@ -1470,6 +1490,7 @@ CONTEXTO DE VENTANAS:
                 }
 
             } else if (fnName === 'scroll') {
+                if (this.abortRequested) return;
                 const amountMap = { small: 100, medium: 500, large: 1500 };
                 const pixels = amountMap[args.amount || 'medium'];
                 const direction = args.direction === 'up' ? mouse.scrollUp(pixels) : mouse.scrollDown(pixels);
@@ -1701,13 +1722,37 @@ CONTEXTO DE VENTANAS:
         return hash.toString();
     }
 
+    _restoreHiddenWindows() {
+        stickyFace.stop();
+        if (this.hiddenWindows) {
+            for (const win of this.hiddenWindows) {
+                if (!win.isDestroyed()) win.show();
+            }
+        }
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            this.mainWindow.show();
+        }
+        this.windowsHiddenByAutomation = false;
+        this.hiddenWindows = [];
+    }
+
     /**
      * Stop the current action loop.
      */
-    stop() {
+    stop(options = {}) {
+        const wasRunning = this.isRunning;
+        this.abortRequested = true;
+        this.deferWindowRestore = !!options.keepWindowsHidden;
         this.isRunning = false;
         console.log('🛑 [ScreenAgent] Action loop stopped by user');
         this._notify('action-status', { phase: 'stopped' });
+        if (!wasRunning && !this.deferWindowRestore && this.windowsHiddenByAutomation) {
+            try {
+                this._restoreHiddenWindows();
+            } catch (e) {
+                console.error('⚠️ [ScreenAgent] Failed to restore hidden windows on direct stop:', e);
+            }
+        }
     }
 }
 

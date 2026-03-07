@@ -85,6 +85,7 @@ let browserAgent = null; // Instanciado tras crear la mainWindow
 // Auto-updater for automatic updates from GitHub Releases
 const { autoUpdater } = require('electron-updater');
 const nativeGlass = require('./NativeGlassController'); // Native Glass Window Controller
+const stickyFace = require('./StickyFaceController');
 const contextManager = require('./ContextManager'); // Central Knowledge System
 const consolidator = require('./Consolidator'); // Nightly Memory Consolidation
 
@@ -1076,29 +1077,356 @@ ipcMain.handle('learning-delete-workflow', async (event, { file }) => {
 // 🎓 Global Mouse Monitoring for Learning Mode
 let lastMouseButtonState = 0;
 let isRecordingClick = false;
+const COMMAND_MODIFIER_FLAG = 1 << 20;
+
+const commandHoldOverride = {
+    isPressed: false,
+    active: false,
+    processingRelease: false,
+    recordingStarted: false,
+    awaitingClarification: false,
+    clarificationPrompt: '',
+    hasNativeModifierSupport: null
+};
+
+function setCommandHoldStickyFeedback(isListening, message = '') {
+    try {
+        stickyFace.start();
+        if (isListening) {
+            stickyFace.setFaceColor('#00ff00');
+            stickyFace.startCommandAttention();
+            if (message) stickyFace.showMessage({ title: 'Escuchando', body: message }, 120000);
+        } else {
+            stickyFace.stopCommandAttention();
+            stickyFace.setFaceColor('#ffffff');
+            stickyFace.setExpression('idle');
+        }
+    } catch (e) {
+        console.warn('⚠️ [CommandHold] Sticky feedback error:', e.message);
+    }
+}
+
+function getClarificationPrompt(transcript = '') {
+    const cleaned = String(transcript || '').trim();
+    if (!cleaned) {
+        return 'No te escuché bien. Mantén Command y dime exactamente qué debo hacer ahora.';
+    }
+    return `Te escuché: "${cleaned}". No me quedó clara la acción. Mantén Command y dime una instrucción concreta (app + acción).`;
+}
+
+async function waitForScreenAgentIdle(timeoutMs = 2000) {
+    if (!screenAgent) return;
+    const start = Date.now();
+    while (screenAgent.isRunning && (Date.now() - start) < timeoutMs) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+    }
+}
+
+async function startCommandHoldRecording() {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'Main window unavailable' };
+
+    try {
+        const result = await mainWindow.webContents.executeJavaScript(`
+            (async () => {
+                try {
+                    if (window.__iuCommandHoldRecorder?.recording) {
+                        return { ok: true, alreadyRecording: true, mimeType: window.__iuCommandHoldRecorder.mimeType || 'audio/webm' };
+                    }
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                    const mimeCandidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+                    let mimeType = '';
+                    for (const candidate of mimeCandidates) {
+                        if (window.MediaRecorder && MediaRecorder.isTypeSupported(candidate)) {
+                            mimeType = candidate;
+                            break;
+                        }
+                    }
+                    const options = mimeType ? { mimeType } : {};
+                    const recorder = new MediaRecorder(stream, options);
+                    const chunks = [];
+                    recorder.ondataavailable = (event) => {
+                        if (event.data && event.data.size > 0) chunks.push(event.data);
+                    };
+                    recorder.start(80);
+                    window.__iuCommandHoldRecorder = { recording: true, recorder, chunks, stream, mimeType: recorder.mimeType || mimeType || 'audio/webm' };
+                    return { ok: true, mimeType: recorder.mimeType || mimeType || 'audio/webm' };
+                } catch (error) {
+                    return { ok: false, error: String(error && error.message ? error.message : error) };
+                }
+            })();
+        `, true);
+        return result || { ok: false, error: 'Recorder start returned empty result' };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+}
+
+async function stopCommandHoldRecording() {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'Main window unavailable' };
+
+    try {
+        const result = await mainWindow.webContents.executeJavaScript(`
+            (async () => {
+                try {
+                    const state = window.__iuCommandHoldRecorder;
+                    if (!state || !state.recording || !state.recorder) {
+                        return { ok: false, error: 'No active recorder' };
+                    }
+                    return await new Promise((resolve) => {
+                        const finalize = async () => {
+                            try {
+                                const mimeType = state.mimeType || (state.recorder && state.recorder.mimeType) || 'audio/webm';
+                                const blob = new Blob(state.chunks || [], { type: mimeType });
+                                const reader = new FileReader();
+                                reader.onloadend = () => {
+                                    if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+                                    window.__iuCommandHoldRecorder = null;
+                                    resolve({ ok: true, mimeType, audioDataUrl: reader.result, size: blob.size });
+                                };
+                                reader.onerror = () => {
+                                    if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+                                    window.__iuCommandHoldRecorder = null;
+                                    resolve({ ok: false, error: 'FileReader failed' });
+                                };
+                                reader.readAsDataURL(blob);
+                            } catch (err) {
+                                if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+                                window.__iuCommandHoldRecorder = null;
+                                resolve({ ok: false, error: String(err && err.message ? err.message : err) });
+                            }
+                        };
+                        state.recorder.onstop = finalize;
+                        if (state.recorder.state === 'inactive') {
+                            finalize();
+                        } else {
+                            state.recorder.stop();
+                        }
+                    });
+                } catch (error) {
+                    return { ok: false, error: String(error && error.message ? error.message : error) };
+                }
+            })();
+        `, true);
+        return result || { ok: false, error: 'Recorder stop returned empty result' };
+    } catch (e) {
+        return { ok: false, error: e.message };
+    }
+}
+
+async function transcribeCommandHoldAudioWithDeepgram(audioDataUrl, mimeType = 'audio/webm') {
+    try {
+        const deepgramApiKey = process.env.DEEPGRAM_API_KEY || process.env.DEEPGRAM_KEY || '';
+        if (!deepgramApiKey) {
+            console.warn('⚠️ [CommandHold] DEEPGRAM_API_KEY missing. Skipping transcription.');
+            return '';
+        }
+
+        const base64Data = String(audioDataUrl || '').replace(/^data:audio\/[^;]+[^,]*,/, '');
+        const buffer = Buffer.from(base64Data, 'base64');
+        if (buffer.length < 1200) return '';
+
+        const response = await fetch('https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&detect_language=true&punctuate=true', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Token ${deepgramApiKey}`,
+                'Content-Type': mimeType || 'audio/webm'
+            },
+            body: buffer
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            console.warn(`⚠️ [CommandHold] Deepgram error ${response.status}: ${errorText.substring(0, 160)}`);
+            return '';
+        }
+
+        const payload = await response.json();
+        const transcript = payload?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+        return String(transcript || '').trim();
+    } catch (e) {
+        console.error('❌ [CommandHold] Deepgram transcription failed:', e.message);
+        return '';
+    }
+}
+
+async function executeFromCommandHoldTranscript(transcript) {
+    if (!transcript || !actionPlanner || !screenAgent) return;
+
+    contextManager.addMessage('user', transcript, 'command_hold_transcription');
+    const relevantContext = await contextManager.getRelevantContext(transcript);
+    const plan = await actionPlanner.planFromExplicit(transcript, {
+        recent: contextManager.getHistoryForAPI(10),
+        longTerm: relevantContext.longTerm
+    });
+
+    if (!plan) {
+        console.log('ℹ️ [CommandHold] No actionable intent after transcription');
+        commandHoldOverride.awaitingClarification = true;
+        commandHoldOverride.clarificationPrompt = getClarificationPrompt(transcript);
+        stickyFace.showMessage({ title: 'Necesito Aclaración', body: commandHoldOverride.clarificationPrompt }, 120000);
+        return;
+    }
+
+    commandHoldOverride.awaitingClarification = false;
+    commandHoldOverride.clarificationPrompt = '';
+
+    if (plan.type === 'schedule') {
+        if (brain) {
+            const date = new Date(Date.now() + (plan.minutes * 60 * 1000));
+            brain.scheduleTask(plan.task, date);
+        }
+        commandHoldOverride.awaitingClarification = true;
+        commandHoldOverride.clarificationPrompt = 'Recordatorio agendado. Si quieres continuar con la automatización, mantén Command y dime el siguiente paso.';
+        stickyFace.showMessage({ title: 'Listo', body: commandHoldOverride.clarificationPrompt }, 120000);
+        return;
+    }
+
+    if (plan.type === 'play_agario') {
+        if (browserAgent) browserAgent.launchAgarIO(plan.nickname);
+        commandHoldOverride.awaitingClarification = true;
+        commandHoldOverride.clarificationPrompt = 'Listo. Mantén Command para dar la siguiente orden.';
+        stickyFace.showMessage({ title: 'Listo', body: commandHoldOverride.clarificationPrompt }, 120000);
+        return;
+    }
+
+    await waitForScreenAgentIdle();
+    stickyFace.setFaceColor('#ffffff');
+    stickyFace.stopCommandAttention();
+    stickyFace.setExpression('neutral');
+    stickyFace.showMessage({ title: 'Asistente', body: 'Dale, lo haré.' }, 2200);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('action-started', { goal: plan.goal, app: plan.app });
+    }
+    screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+}
+
+async function onCommandHoldPressed() {
+    if (!screenAgent) return;
+    if (!screenAgent.isRunning && !commandHoldOverride.awaitingClarification) return;
+    if (commandHoldOverride.active) return;
+
+    commandHoldOverride.active = true;
+    commandHoldOverride.processingRelease = false;
+    commandHoldOverride.recordingStarted = false;
+    console.log('⌘ [CommandHold] Command pressed: listening override...');
+
+    if (screenAgent.isRunning) {
+        screenAgent.stop({ keepWindowsHidden: true });
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('action-status', { phase: 'listening_override' });
+        }
+        await waitForScreenAgentIdle();
+    }
+    setCommandHoldStickyFeedback(true, 'Escuchando...');
+    setTimeout(() => {
+        if (commandHoldOverride.active) setCommandHoldStickyFeedback(true, 'Escuchando...');
+    }, 300);
+
+    const started = await startCommandHoldRecording();
+    if (commandHoldOverride.active && commandHoldOverride.isPressed && started.ok) {
+        commandHoldOverride.recordingStarted = true;
+    } else if (!started.ok) {
+        console.warn('⚠️ [CommandHold] Recorder start failed:', started.error || 'unknown');
+        setCommandHoldStickyFeedback(false);
+    }
+}
+
+async function onCommandHoldReleased() {
+    if (!commandHoldOverride.active || commandHoldOverride.processingRelease) return;
+    commandHoldOverride.processingRelease = true;
+    console.log('⌘ [CommandHold] Command released: finishing capture and replanning...');
+
+    try {
+        stickyFace.stopCommandAttention();
+        stickyFace.setExpression('thinking');
+        setCommandHoldStickyFeedback(true, 'Procesando transcripción...');
+        let transcript = '';
+
+        if (commandHoldOverride.recordingStarted) {
+            const capture = await stopCommandHoldRecording();
+            if (capture.ok && capture.audioDataUrl) {
+                transcript = await transcribeCommandHoldAudioWithDeepgram(capture.audioDataUrl, capture.mimeType || 'audio/webm');
+            } else {
+                console.warn('⚠️ [CommandHold] Recorder stop failed:', capture.error || 'unknown');
+            }
+        }
+
+        if (transcript && transcript.trim().length > 0) {
+            console.log(`⌘ [CommandHold] Transcript captured: "${transcript}"`);
+            stickyFace.showMessage({ title: 'Te Escuché', body: transcript.trim() }, 4200);
+            await executeFromCommandHoldTranscript(transcript.trim());
+        } else {
+            console.log('⌘ [CommandHold] No transcript captured after release.');
+            commandHoldOverride.awaitingClarification = true;
+            commandHoldOverride.clarificationPrompt = getClarificationPrompt('');
+            stickyFace.showMessage({ title: 'Necesito Aclaración', body: commandHoldOverride.clarificationPrompt }, 120000);
+        }
+    } catch (e) {
+        console.error('❌ [CommandHold] Release handling failed:', e.message);
+    } finally {
+        if (commandHoldOverride.awaitingClarification) {
+            setCommandHoldStickyFeedback(true, '');
+            if (commandHoldOverride.clarificationPrompt) {
+                stickyFace.showMessage({ title: 'Necesito Aclaración', body: commandHoldOverride.clarificationPrompt }, 120000);
+            }
+        } else {
+            setCommandHoldStickyFeedback(false);
+        }
+        commandHoldOverride.active = false;
+        commandHoldOverride.processingRelease = false;
+        commandHoldOverride.recordingStarted = false;
+    }
+}
 
 setInterval(async () => {
-    if (LearningAgent.isLearning && screenAgent && screenAgent.axAgent && screenAgent.axAgent.nativeAddon) {
+    if (screenAgent && screenAgent.axAgent && screenAgent.axAgent.nativeAddon) {
         try {
-            const currentButtons = screenAgent.axAgent.nativeAddon.getMouseButtons();
+            const nativeAddon = screenAgent.axAgent.nativeAddon;
+            const currentButtons = nativeAddon.getMouseButtons();
 
-            // Mask 0x1 is left button (macOS)
-            const leftDown = (currentButtons & 0x1) !== 0;
-            const leftWasDown = (lastMouseButtonState & 0x1) !== 0;
+            if (LearningAgent.isLearning) {
+                // Mask 0x1 is left button (macOS)
+                const leftDown = (currentButtons & 0x1) !== 0;
+                const leftWasDown = (lastMouseButtonState & 0x1) !== 0;
 
-            if (leftDown && !leftWasDown && !isRecordingClick) {
-                isRecordingClick = true;
-                console.log('🖱️ [Learning] Click detected, recording step...');
+                if (leftDown && !leftWasDown && !isRecordingClick) {
+                    isRecordingClick = true;
+                    console.log('🖱️ [Learning] Click detected, recording step...');
 
-                // Trigger recording with short description
-                // The LearningAgent will handle hit-test and visual feedback (Green pulse)
-                LearningAgent.recordCurrentState("Click")
-                    .finally(() => {
-                        isRecordingClick = false;
-                    });
+                    // Trigger recording with short description
+                    // The LearningAgent will handle hit-test and visual feedback (Green pulse)
+                    LearningAgent.recordCurrentState("Click")
+                        .finally(() => {
+                            isRecordingClick = false;
+                        });
+                }
+
+                lastMouseButtonState = currentButtons;
             }
 
-            lastMouseButtonState = currentButtons;
+            if (typeof nativeAddon.getModifierFlags === 'function') {
+                if (commandHoldOverride.hasNativeModifierSupport !== true) {
+                    console.log('⌨️ [CommandHold] Native modifier polling enabled');
+                    commandHoldOverride.hasNativeModifierSupport = true;
+                }
+                const modifiers = nativeAddon.getModifierFlags();
+                const commandDown = (modifiers & COMMAND_MODIFIER_FLAG) !== 0;
+
+                if (commandDown && !commandHoldOverride.isPressed) {
+                    commandHoldOverride.isPressed = true;
+                    onCommandHoldPressed().catch((err) => {
+                        console.error('❌ [CommandHold] Press handling failed:', err.message);
+                    });
+                } else if (!commandDown && commandHoldOverride.isPressed) {
+                    commandHoldOverride.isPressed = false;
+                    onCommandHoldReleased().catch((err) => {
+                        console.error('❌ [CommandHold] Release handling failed:', err.message);
+                    });
+                }
+            } else if (commandHoldOverride.hasNativeModifierSupport !== false) {
+                commandHoldOverride.hasNativeModifierSupport = false;
+                console.warn('⚠️ [CommandHold] Native addon lacks getModifierFlags(). Rebuild native module to enable Command-hold override.');
+            }
         } catch (e) {
             // Silence polling errors
         }

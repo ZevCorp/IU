@@ -537,10 +537,18 @@ napi_value GetMouseButtons(napi_env env, napi_callback_info info) {
   return js_buttons;
 }
 
+// Get current keyboard modifier flags (mask)
+napi_value GetModifierFlags(napi_env env, napi_callback_info info) {
+  NSEventModifierFlags flags = [NSEvent modifierFlags];
+  napi_value js_flags;
+  napi_create_uint32(env, (uint32_t)flags, &js_flags);
+  return js_flags;
+}
+
 // Module initialization
 napi_value Init(napi_env env, napi_value exports) {
   napi_status status;
-  napi_value fn_extract, fn_buttons;
+  napi_value fn_extract, fn_buttons, fn_modifiers;
 
   status = napi_create_function(env, NULL, 0, ExtractAXTree, NULL, &fn_extract);
   if (status == napi_ok) {
@@ -551,6 +559,12 @@ napi_value Init(napi_env env, napi_value exports) {
       napi_create_function(env, NULL, 0, GetMouseButtons, NULL, &fn_buttons);
   if (status == napi_ok) {
     napi_set_named_property(env, exports, "getMouseButtons", fn_buttons);
+  }
+
+  status = napi_create_function(env, NULL, 0, GetModifierFlags, NULL,
+                                &fn_modifiers);
+  if (status == napi_ok) {
+    napi_set_named_property(env, exports, "getModifierFlags", fn_modifiers);
   }
 
   return exports;

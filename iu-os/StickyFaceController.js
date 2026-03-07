@@ -8,6 +8,7 @@ class StickyFaceController {
         this.currentExpression = 'idle';
         this.isTracking = false;
         this.offset = { x: 30, y: 30 }; // Distance from cursor
+        this.commandAttentionInterval = null;
     }
 
     start() {
@@ -83,25 +84,43 @@ class StickyFaceController {
                 #floating-message {
                     position: absolute;
                     left: 115px;
-                    top: 25px;
+                    top: 14px;
                     background: rgba(0, 0, 0, 0.75);
                     backdrop-filter: blur(15px);
                     color: white;
-                    padding: 8px 14px;
+                    padding: 10px 12px;
                     border-radius: 12px;
                     font-family: 'Outfit', sans-serif;
-                    font-size: 14px;
-                    width: 200px;
+                    font-size: 13px;
+                    width: 220px;
                     opacity: 0;
                     transform: translateX(-10px);
                     transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
                     border: 1px solid rgba(255, 255, 255, 0.15);
                     pointer-events: none;
                     box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+                    overflow: hidden;
                 }
                 #floating-message.visible {
                     opacity: 1;
                     transform: translateX(0);
+                }
+                #floating-message .sticky-title {
+                    font-size: 11px;
+                    letter-spacing: 0.04em;
+                    text-transform: uppercase;
+                    opacity: 0.75;
+                    margin-bottom: 4px;
+                    white-space: nowrap;
+                }
+                #floating-message .sticky-body {
+                    line-height: 1.3;
+                    max-height: 3.9em;
+                    overflow: hidden;
+                    display: -webkit-box;
+                    -webkit-line-clamp: 3;
+                    -webkit-box-orient: vertical;
+                    word-break: break-word;
                 }
                 #btn-chat-toggle, #btn-voice-icon, #btn-transfer-top,
                 .transfer-btn-top, #menu-toggle, .menu-toggle,
@@ -117,8 +136,33 @@ class StickyFaceController {
                 msg.id = 'floating-message';
                 document.body.appendChild(msg);
                 
-                window.showStickyMessage = (text) => {
-                    msg.textContent = text;
+                const MAX_STICKY_CHARS = 220;
+                const escapeHtml = (value) => String(value || '')
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
+                const truncate = (value) => {
+                    const txt = String(value || '').replace(/\\s+/g, ' ').trim();
+                    if (txt.length <= MAX_STICKY_CHARS) return txt;
+                    return txt.slice(0, MAX_STICKY_CHARS - 1).trimEnd() + '…';
+                };
+                window.showStickyMessage = (payload) => {
+                    let title = '';
+                    let body = '';
+                    if (payload && typeof payload === 'object') {
+                        title = payload.title || '';
+                        body = payload.body || '';
+                    } else {
+                        const text = String(payload || '');
+                        const lines = text.split('\\n').map(v => v.trim()).filter(Boolean);
+                        title = lines.length > 1 ? lines[0] : '';
+                        body = lines.length > 1 ? lines.slice(1).join(' ') : text;
+                    }
+                    body = truncate(body);
+                    msg.innerHTML = \`
+                        \${title ? '<div class="sticky-title">' + escapeHtml(title) + '</div>' : ''}
+                        <div class="sticky-body">\${escapeHtml(body)}</div>
+                    \`;
                     msg.classList.add('visible');
                 };
                 window.hideStickyMessage = () => {
@@ -170,6 +214,7 @@ class StickyFaceController {
     }
 
     setExpression(expression) {
+        this.currentExpression = expression;
         if (this.window && !this.window.isDestroyed()) {
             this.window.webContents.executeJavaScript(`if (window.setExpression) window.setExpression('${expression}')`);
         }
@@ -183,14 +228,44 @@ class StickyFaceController {
 
     showMessage(text, duration = 3000) {
         if (this.window && !this.window.isDestroyed()) {
-            const safeText = JSON.stringify(String(text || ''));
-            this.window.webContents.executeJavaScript(`window.showStickyMessage(${safeText})`);
+            const payload = (typeof text === 'object' && text !== null)
+                ? text
+                : { body: String(text || '') };
+            const safePayload = JSON.stringify(payload);
+            this.window.webContents.executeJavaScript(`window.showStickyMessage(${safePayload})`);
             if (this.messageTimeout) clearTimeout(this.messageTimeout);
-            this.messageTimeout = setTimeout(() => {
-                if (this.window && !this.window.isDestroyed()) {
-                    this.window.webContents.executeJavaScript(`window.hideStickyMessage()`);
+            if (duration > 0) {
+                this.messageTimeout = setTimeout(() => {
+                    if (this.window && !this.window.isDestroyed()) {
+                        this.window.webContents.executeJavaScript(`window.hideStickyMessage()`);
+                    }
+                }, duration);
+            }
+        }
+    }
+
+    startCommandAttention() {
+        this.stopCommandAttention();
+        this.setExpression('mild_attention');
+        let tick = 0;
+        this.commandAttentionInterval = setInterval(() => {
+            if (!this.window || this.window.isDestroyed()) return;
+            tick++;
+            const useThinking = tick % 2 === 0;
+            const preset = useThinking ? 'thinking' : 'mild_attention';
+            this.window.webContents.executeJavaScript(`
+                if (window.setExpression) window.setExpression('${preset}');
+                if (window.face && window.face.lookAt) {
+                    window.face.lookAt(${useThinking ? 0.42 : 0.58}, 0.50);
                 }
-            }, duration);
+            `).catch(() => { });
+        }, 520);
+    }
+
+    stopCommandAttention() {
+        if (this.commandAttentionInterval) {
+            clearInterval(this.commandAttentionInterval);
+            this.commandAttentionInterval = null;
         }
     }
 }
