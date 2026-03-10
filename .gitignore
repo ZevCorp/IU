@@ -9,21 +9,33 @@ coverage
 # Production
 dist
 build
+dist-ssr
 
-# Misc
-.DS_Store
+# Environment Variables
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+*.local
+
+# Logs
+logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Misc
+.DS_Store
 
 # Editor directories and files
 .idea
 .vscode
+.vscode/*
+!.vscode/extensions.json
 *.suo
 *.ntvs*
 *.njsproj
