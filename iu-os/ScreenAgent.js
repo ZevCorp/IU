@@ -268,6 +268,55 @@ class ScreenAgent {
         this.lastContextSnapshot = { app: '', window: '', recentActions: [] };
     }
 
+    _appMappings() {
+        return {
+            'Calculadora': 'Calculator',
+            'Calendario': 'Calendar',
+            'Contactos': 'Contacts',
+            'Notas': 'Notes',
+            'Música': 'Music',
+            'Fotos': 'Photos',
+            'Mapas': 'Maps',
+            'Recordatorios': 'Reminders',
+            'Mail': 'Mail',
+            'Mensajes': 'Messages',
+            'FaceTime': 'FaceTime',
+            'Safari': 'Safari',
+            'Chrome': 'Google Chrome',
+            'Buscador': 'Finder',
+            'Finder': 'Finder',
+            'Terminal': 'Terminal',
+            'MiniPRM': 'MiniPRM'
+        };
+    }
+
+    _sanitizeAppName(rawName) {
+        const raw = String(rawName || '').trim();
+        if (!raw) return '';
+
+        const mappings = this._appMappings();
+        if (mappings[raw]) return mappings[raw];
+
+        // Keep only letters/numbers/spaces and try to map fuzzy input.
+        const cleaned = raw
+            .replace(/[\u200E\u200F\u202A-\u202E]/g, '')
+            .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (mappings[cleaned]) return mappings[cleaned];
+
+        const lower = cleaned.toLowerCase();
+        for (const [key, mapped] of Object.entries(mappings)) {
+            const keyLower = key.toLowerCase();
+            if (lower === keyLower || lower.startsWith(keyLower) || lower.includes(keyLower)) {
+                return mapped;
+            }
+        }
+
+        return cleaned || raw;
+    }
+
     /**
      * Lazy-load nut-js (native module, load only when needed)
      */
@@ -427,7 +476,7 @@ ACCIONES RECOMENDADAS:
         this.abortRequested = false;
         this.deferWindowRestore = false;
         this.currentTypeTask = null;
-        this.currentApp = app; // Track current app context
+        this.currentApp = this._sanitizeAppName(app); // Track current app context
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
@@ -458,13 +507,23 @@ ACCIONES RECOMENDADAS:
         }
 
         try {
-            const relevant = LearningAgent.findRelevantWorkflows(goal, 1);
-            if (relevant.length > 0 && Array.isArray(relevant[0].anchors) && relevant[0].anchors.length > 0) {
-                this.workflowGuidance = relevant[0];
-                console.log(`🧭 [ScreenAgent] Using learned workflow guidance: ${relevant[0].workflowName} (${relevant[0].anchors.length} anchors)`);
+            const relevant = LearningAgent.findRelevantWorkflows(goal, 3);
+            const appNorm = this._normalizeText(this.currentApp);
+            const selectedWorkflow = relevant.find((wf) => {
+                const apps = Array.isArray(wf?.apps) ? wf.apps : [];
+                if (apps.length === 0) return false;
+                return apps.some((a) => {
+                    const wfApp = this._normalizeText(a);
+                    return wfApp && appNorm && (wfApp.includes(appNorm) || appNorm.includes(wfApp));
+                });
+            });
+
+            if (selectedWorkflow && Array.isArray(selectedWorkflow.anchors) && selectedWorkflow.anchors.length > 0) {
+                this.workflowGuidance = selectedWorkflow;
+                console.log(`🧭 [ScreenAgent] Using learned workflow guidance: ${selectedWorkflow.workflowName} (${selectedWorkflow.anchors.length} anchors)`);
                 this._notify('action-status', {
                     phase: 'confirming',
-                    step: `Perfecto, lo voy a hacer como me enseñaste en ${relevant[0].workflowName}.`
+                    step: `Perfecto, lo voy a hacer como me enseñaste en ${selectedWorkflow.workflowName}.`
                 });
             }
 
@@ -631,11 +690,15 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                 }
 
                 // Optimization: Use GraphFormalizer for Semantic Zoom (LLM-friendly Graph)
+                // A/B switch: disable by default while validating raw AX extraction quality.
+                const enableFormalizer = process.env.IU_AX_FORMALIZER === '1';
                 let llmElements = elements;
-                if (elements.length > 0) {
+                if (elements.length > 0 && enableFormalizer) {
                     console.log(`🧠 [ScreenAgent] Formalizing graph with ${elements.length} raw nodes...`);
                     llmElements = GraphFormalizer.optimize(elements);
                     console.log(`📉 [ScreenAgent] Graph formalized: ${elements.length} -> ${llmElements.length} meaningful nodes`);
+                } else if (elements.length > 0) {
+                    console.log(`🧪 [ScreenAgent] Graph formalizer disabled (IU_AX_FORMALIZER!=1). Using raw AX nodes: ${elements.length}`);
                 }
 
                 // 5. Format elements list for LLM
@@ -815,7 +878,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                             await this._openApp(args.app_name);
                             await this._wait(1000); // Reduced from 2000ms — app opens/focuses faster now
 
-                            this.currentApp = args.app_name; // Update context
+                            this.currentApp = this._sanitizeAppName(args.app_name); // Update context with sanitized app name
                             actionSummary = `SWITCH APP to "${args.app_name}"`;
 
                             lastElementsHash = null;
@@ -1313,28 +1376,7 @@ CONTEXTO DE VENTANAS:
     async _openApp(appName) {
         return new Promise((resolve) => {
             const { exec } = require('child_process');
-
-            // Spanish to English app name mappings for macOS
-            const appMappings = {
-                'Calculadora': 'Calculator',
-                'Calendario': 'Calendar',
-                'Contactos': 'Contacts',
-                'Notas': 'Notes',
-                'Música': 'Music',
-                'Fotos': 'Photos',
-                'Mapas': 'Maps',
-                'Recordatorios': 'Reminders',
-                'Mail': 'Mail',
-                'Mensajes': 'Messages',
-                'FaceTime': 'FaceTime',
-                'Safari': 'Safari',
-                'Chrome': 'Google Chrome',
-                'Buscador': 'Finder',
-                'Terminal': 'Terminal'
-            };
-
-            // Normalize app name
-            const normalizedApp = appMappings[appName] || appName;
+            const normalizedApp = this._sanitizeAppName(appName);
 
             // Strategy: Open first heavily, then activate specifically
             // 1. 'open -a' (Launches or brings forward usually)
@@ -1378,20 +1420,7 @@ CONTEXTO DE VENTANAS:
         return new Promise((resolve) => {
             // console.log(`📱 [ScreenAgent] Ensuring focus (Fast): "${appName}"`);
             const { exec } = require('child_process');
-
-            // Map common names if needed (reuse _openApp mappings logic if moved to shared helper, 
-            // but for now assume appName is correct or we use simple mapping)
-            const appMappings = {
-                'Calculadora': 'Calculator',
-                'Calendario': 'Calendar',
-                'Contactos': 'Contacts',
-                'Notas': 'Notes',
-                'Música': 'Music',
-                'Fotos': 'Photos',
-                'Mapas': 'Maps',
-                'Terminal': 'Terminal'
-            };
-            const normalized = appMappings[appName] || appName;
+            const normalized = this._sanitizeAppName(appName);
 
             exec(`osascript -e 'tell application "${normalized}" to activate'`, (err) => {
                 if (err) console.warn(`⚠️ Focus failed for ${normalized}: ${err.message}`);

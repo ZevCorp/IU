@@ -55,7 +55,8 @@ void TraverseElement(AXUIElementRef element, NSMutableArray *results, int depth,
       // Get label
       NSString *label = nil;
       NSArray *labelAttrs =
-          @[ @"AXTitle", @"AXValue", @"AXDescription", @"AXLabel", @"AXHelp" ];
+          @[ @"AXTitle", @"AXValue", @"AXDescription", @"AXLabel", @"AXHelp",
+             @"AXIdentifier" ];
       for (NSString *attr in labelAttrs) {
         label = GetStringAttribute(element, (__bridge CFStringRef)attr);
         if (label && label.length > 0)
@@ -226,11 +227,16 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
 
     // If targetAppName is specified, find that specific app
     if (targetAppName && targetAppName.length > 0) {
+      NSString *needle = [targetAppName lowercaseString];
       NSArray *runningApps =
           [[NSWorkspace sharedWorkspace] runningApplications];
       for (NSRunningApplication *app in runningApps) {
         NSString *appLocalizedName = [app localizedName];
-        if ([appLocalizedName isEqualToString:targetAppName]) {
+        NSString *localizedLower = [appLocalizedName lowercaseString];
+        if ([appLocalizedName isEqualToString:targetAppName] ||
+            [localizedLower isEqualToString:needle] ||
+            [localizedLower containsString:needle] ||
+            [needle containsString:localizedLower]) {
           targetApp = app;
           break;
         }
@@ -240,8 +246,13 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
       if (!targetApp) {
         for (NSRunningApplication *app in runningApps) {
           NSString *bundleId = [app bundleIdentifier];
+          NSString *bundleLower = [bundleId lowercaseString];
           if (bundleId &&
-              [bundleId.lastPathComponent isEqualToString:targetAppName]) {
+              ([bundleId isEqualToString:targetAppName] ||
+               [bundleLower isEqualToString:needle] ||
+               [bundleLower containsString:needle] ||
+               [needle containsString:bundleLower] ||
+               [bundleId.lastPathComponent isEqualToString:targetAppName])) {
             targetApp = app;
             break;
           }
@@ -275,10 +286,8 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
     // ── Window Selection Strategy ──────────────────────────────────────────
     // Priority:
     //   1. AXFocusedWindow  (reflects what the user is interacting with NOW)
-    //   2. Modal/Sheet detection: if AXWindows has >1 entry AND a smaller
-    //      window exists (sheet/modal), prefer it over the main window.
-    //   3. AXMainWindow  (fallback to main window)
-    //   4. AXWindows[0]  (last resort)
+    //   2. AXMainWindow  (fallback to main window)
+    //   3. AXWindows[0]  (last resort)
     //
     // This keeps the graph single-window (no merging) so the navigable map
     // remains clean: each (appName, windowTitle) is a distinct node/room.
@@ -322,20 +331,6 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
       }
     }
 
-    // Helper block: get CGSize of an AX window element
-    CGSize (^getWindowSize)(id) = ^CGSize(id winObj) {
-      AXUIElementRef winRef = (__bridge AXUIElementRef)winObj;
-      CFTypeRef sRef = NULL;
-      CGSize s = {0, 0};
-      if (AXUIElementCopyAttributeValue(winRef, kAXSizeAttribute, &sRef) ==
-              kAXErrorSuccess &&
-          sRef) {
-        AXValueGetValue((AXValueRef)sRef, (AXValueType)kAXValueCGSizeType, &s);
-        CFRelease(sRef);
-      }
-      return s;
-    };
-
     // Step 2: Try AXFocusedWindow
     if (AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute,
                                       &windowRef) == kAXErrorSuccess &&
@@ -344,45 +339,7 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
       CFRelease(windowRef);
     }
 
-    // Step 3: Modal/Sheet override
-    // If there are multiple windows, check whether any of them is a modal/sheet
-    // (smaller area than the focused/main window). Sheets in SwiftUI appear as
-    // additional entries and are always narrower+shorter than the parent.
-    // We prefer the smallest window that is NOT the direct same reference as
-    // the already-selected focused window, because that is the active dialog.
-    if (allWindows && allWindows.count > 1) {
-      CGSize focusedSize =
-          window ? getWindowSize((__bridge id)window) : CGSizeMake(0, 0);
-      double focusedArea = focusedSize.width * focusedSize.height;
-
-      AXUIElementRef modalCandidate = NULL;
-      double smallestArea = focusedArea > 0 ? focusedArea : DBL_MAX;
-
-      for (id winObj in allWindows) {
-        AXUIElementRef candidate = (__bridge AXUIElementRef)winObj;
-        // Skip if same reference as already-selected window
-        if (window && CFEqual(candidate, window))
-          continue;
-
-        CGSize candidateSize = getWindowSize(winObj);
-        double candidateArea = candidateSize.width * candidateSize.height;
-
-        // Must be non-trivial (at least 100x100) and SMALLER than current
-        if (candidateArea > 10000 && candidateArea < smallestArea) {
-          smallestArea = candidateArea;
-          modalCandidate = candidate;
-        }
-      }
-
-      if (modalCandidate) {
-        // Release old window ref and adopt the modal/sheet
-        if (window)
-          CFRelease(window);
-        window = (AXUIElementRef)CFRetain(modalCandidate);
-      }
-    }
-
-    // Step 4: Fallback to AXMainWindow
+    // Step 3: Fallback to AXMainWindow
     if (!window) {
       if (AXUIElementCopyAttributeValue(appElement, kAXMainWindowAttribute,
                                         &windowRef) == kAXErrorSuccess &&
@@ -392,7 +349,7 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
       }
     }
 
-    // Step 5: Fallback to first window in AXWindows
+    // Step 4: Fallback to first window in AXWindows
     if (!window && allWindows && allWindows.count > 0) {
       window = (AXUIElementRef)CFRetain((__bridge CFTypeRef)allWindows[0]);
     }
