@@ -160,6 +160,89 @@
             text-align: center;
         }
 
+        /* Steps modal */
+        .steps-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.88);
+            backdrop-filter: blur(16px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 24px;
+        }
+
+        .steps-overlay.active {
+            display: flex;
+        }
+
+        .steps-box {
+            max-width: 480px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 24px;
+            padding: 40px 36px;
+            position: relative;
+        }
+
+        .steps-close {
+            position: absolute;
+            top: 16px;
+            right: 20px;
+            background: none;
+            border: none;
+            color: var(--text-gray);
+            font-size: 1.4rem;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .steps-box h2 {
+            font-family: var(--font-hero);
+            font-weight: 300;
+            font-size: 1.5rem;
+            letter-spacing: -1px;
+            margin-bottom: 28px;
+        }
+
+        .steps-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .steps-list li {
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+            font-size: 0.92rem;
+            line-height: 1.5;
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        .step-num {
+            flex-shrink: 0;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-top: 1px;
+            color: rgba(255, 200, 80, 0.9);
+        }
+
+        .steps-list a {
+            color: rgba(255, 200, 80, 0.9);
+            text-decoration: none;
+        }
+
         @media (max-width: 768px) {
             body {
                 row-gap: 28px;
@@ -169,6 +252,10 @@
             h1 {
                 font-size: clamp(3.5rem, 16vw, 6rem);
                 letter-spacing: -3px;
+            }
+
+            .steps-box {
+                padding: 32px 24px;
             }
         }
     </style>
@@ -184,16 +271,52 @@
     </h1>
 
     <div class="actions" id="actions">
-        <!-- Populated by JS based on device selection from landing -->
+        <!-- Populated by JS -->
+    </div>
+
+    <!-- Steps modal for extension install -->
+    <div class="steps-overlay" id="steps-modal">
+        <div class="steps-box">
+            <button class="steps-close" id="steps-close">&times;</button>
+            <h2>Instalar Extensi&oacute;n de Chrome</h2>
+            <ol class="steps-list">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>El archivo <strong>iu-extension.zip</strong> ya se est&aacute; descargando.
+                        Descompr&iacute;melo en una carpeta permanente (ej.
+                        <code>Documentos/IU-Extension</code>).</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>Abre Chrome y ve a <a href="chrome://extensions/"
+                            target="_blank">chrome://extensions/</a></span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>Activa el switch <strong>"Modo desarrollador"</strong> (arriba a la derecha).</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>Clic en <strong>"Cargar descomprimida"</strong> y selecciona la carpeta donde descomprimiste
+                        el archivo.</span>
+                </li>
+                <li>
+                    <span class="step-num">5</span>
+                    <span>&#10003; Listo. La extensi&oacute;n I&amp;&Uuml; aparecer&aacute; en tu barra de Chrome y se
+                        conectar&aacute; autom&aacute;ticamente al asistente.</span>
+                </li>
+            </ol>
+        </div>
     </div>
 
     <script>
         (function () {
             var actionsEl = document.getElementById('actions');
+            var modal = document.getElementById('steps-modal');
+            var closeBtn = document.getElementById('steps-close');
 
             var devices = [];
             try { devices = JSON.parse(localStorage.getItem('iu_last_devices') || '[]'); } catch (e) { }
-
             var hasMac = devices.indexOf('MacOS') !== -1;
             var hasWin = devices.indexOf('Windows') !== -1;
             var showMac = hasMac || (!hasMac && !hasWin);
@@ -206,7 +329,6 @@
                     '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>' +
                     'Descargar para Mac</a>';
             }
-
             if (showWin) {
                 html += '<a href="#" class="btn-primary" id="btn-win">' +
                     '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.557L10.373 4.5v7.13H3V5.557zm0 12.886L10.373 19.5V12.37H3v6.073zm8.24-14.064L21 2.5v9.13H11.24V4.379zm0 9.621H21V22.5l-9.76-1.379V14z"/></svg>' +
@@ -215,11 +337,24 @@
 
             html += '<hr class="divider">' +
                 '<p class="extension-label">Extensi\u00f3n requerida para control web</p>' +
-                '<a href="https://chromewebstore.google.com" target="_blank" class="btn-extension" id="btn-extension">' +
-                '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>' +
-                'A\u00f1adir a Chrome</a>';
+                '<a href="/assets/iu-extension.zip" download class="btn-extension" id="btn-extension">' +
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>' +
+                'Descargar Extensi\u00f3n de Chrome</a>';
 
             actionsEl.innerHTML = html;
+
+            // Extension button → download + show steps
+            document.getElementById('btn-extension').addEventListener('click', function () {
+                modal.classList.add('active');
+            });
+
+            closeBtn.addEventListener('click', function () {
+                modal.classList.remove('active');
+            });
+
+            modal.addEventListener('click', function (e) {
+                if (e.target === modal) modal.classList.remove('active');
+            });
         })();
     </script>
 </body>
