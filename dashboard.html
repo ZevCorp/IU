@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard IÜ - Gestión de Leads</title>
+    <link rel="stylesheet" href="/src/dashboard.css">
+</head>
+
+<body>
+    <!-- Login Screen Overaly -->
+    <div id="login-screen" class="login-overlay">
+        <div class="login-box">
+            <div class="logo">I<span>&</span>Ü</div>
+            <h2>Acceso a Panel de Control</h2>
+            <p>Ingresa tus credenciales para continuar</p>
+            <div class="login-form">
+                <input type="text" id="username" placeholder="Usuario">
+                <input type="password" id="password" placeholder="Contraseña">
+                <button id="login-btn" class="btn-login-submit">Entrar</button>
+                <p id="login-error" class="error-msg" style="display: none;">Credenciales incorrectas</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="dashboard-container" id="dashboard-content" style="display: none;">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="logo">I<span>&</span>Ü</div>
+            <nav class="side-nav">
+                <a href="#" class="active">Leads</a>
+                <a href="#">Métricas</a>
+                <a href="#">Configuración</a>
+            </nav>
+            <div class="user-profile">
+                <div class="avatar">Admin</div>
+                <span>ZevCorp</span>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <header class="top-bar">
+                <h1>Panel de Control</h1>
+                <div class="date-range">Últimos 30 días</div>
+            </header>
+
+            <!-- Stats Grid -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3>Total Leads</h3>
+                    <div class="value" id="total-leads">0</div>
+                    <div class="trend">+12% este mes</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Dispositivo Top</h3>
+                    <div class="value" id="top-device">-</div>
+                    <div class="trend">Mayor interés</div>
+                </div>
+                <div class="stat-card">
+                    <h3>Interés Activo</h3>
+                    <div class="value">98%</div>
+                    <div class="trend">Tasa de respuesta</div>
+                </div>
+            </div>
+
+            <!-- Leads Table -->
+            <div class="data-section">
+                <div class="section-header">
+                    <h2>Registros Recientes</h2>
+                    <button class="btn-export" id="export-btn">Exportar CSV</button>
+                </div>
+                <div class="table-container">
+                    <table id="leads-table">
+                        <thead>
+                            <tr>
+                                <th>Fecha</th>
+                                <th>Email</th>
+                                <th>Dispositivos</th>
+                                <th>Necesidad</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leads-body">
+                            <!-- Data injected via TS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script type="module" src="/src/dashboard.ts"></script>
+</body>
+
+</html>

@@ -1,14 +1,203 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="EmprendeHub Colombia — El sistema operativo inteligente para emprendedores colombianos. Diagnóstico, ruta personalizada, oportunidades y mucho más." />
-    <title>EmprendeHub Colombia — Tu ecosistema emprendedor</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="I&Ü - El reverso del UI. Ü te analiza e interactúa con tus dispositivos.">
+    <title>I&Ü | Tú y Yo</title>
+    <link rel="stylesheet" href="/src/landing.css">
+</head>
+
+<body>
+    <!-- Cinematic Hero Background -->
+    <div class="hero-container">
+        <video autoplay loop muted playsinline webkit-playsinline class="hero-video" id="main-video"
+            poster="/assets/iu_hero.png" preload="auto">
+            <source src="/assets/hero_video.mp4" type="video/mp4">
+        </video>
+        <div class="hero-overlay"></div>
+    </div>
+
+    <nav>
+        <div class="logo">I<span>&</span>Ü</div>
+        <ul class="nav-links">
+            <li><a href="#lista">Registrarme</a></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        <div id="floating-u">
+            <!-- The Face (Ü) will be rendered here via JS if possible, 
+           or we can use the same SVG structure for a more direct look -->
+            <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg"
+                aria-label="Animated parametric face">
+                <g id="face-group" transform="translate(200, 250)">
+                    <!-- Eyes -->
+                    <g id="eyes-group">
+                        <g id="left-eye" class="eye-group">
+                            <path class="face-stroke" d="M -60 -20 Q -40 -40 -20 -20" stroke="white" fill="none"
+                                stroke-width="3" />
+                        </g>
+                        <g id="right-eye" class="eye-group">
+                            <path class="face-stroke" d="M 20 -20 Q 40 -40 60 -20" stroke="white" fill="none"
+                                stroke-width="3" />
+                        </g>
+                    </g>
+                    <!-- Mouth -->
+                    <g id="mouth-group">
+                        <path id="mouth" class="face-stroke" d="M -30 40 Q 0 60 30 40" stroke="white" fill="none"
+                            stroke-width="3" />
+                    </g>
+                </g>
+            </svg>
+        </div>
+
+        <div class="hero-text">
+            <div class="badge">Reinventamos la interacción humano - tecnología</div>
+            <h1>
+                <span class="alt">Un asistente que controla tus dispositivos</span>
+                Creamos IÜ
+            </h1>
+
+            <div class="scroll-indicator">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+            </div>
+        </div>
+
+        <!-- Cinematic Storytelling Sections - One Paragraph per Slide -->
+        <div id="story-container">
+
+
+            <section class="story-slide" id="theme-new-2">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Gracias a haber desarrollado la comunicación más eficiente sobre
+                        todas las especies, hemos dominado el planeta.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-3">
+                <div class="slide-visual">
+                    <div class="glow-object blue"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">¿Y si nos comunicamos igual de bien con los computadores?</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-4">
+                <div class="slide-visual">
+                    <div class="glow-object purple"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">¿Y si solo miro mis dispositivos y ellos me entienden como si fuese
+                        otro ser humano en la habitación?, y trabajan conmigo.</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-5">
+                <div class="slide-visual">
+                    <div class="glow-object purple"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">¿Y si creamos una consciencia compartida con Ü?</p>
+                </div>
+            </section>
+
+            <section class="story-slide" id="theme-new-6">
+                <div class="slide-visual">
+                    <div class="glow-object white"></div>
+                </div>
+                <div class="slide-content">
+                    <p class="reveal-text highlight">Queremos transformar la interacción Humano - Tecnología. Regístrate
+                        y pruébalo.</p>
+                </div>
+            </section>
+        </div>
+
+        <div class="waitlist-section beta-slide" id="lista">
+            <div class="badge">Acceso anticipado limitado</div>
+            <h1>
+                <span class="alt">Sé parte de nuestros</span>
+                Beta Testers
+            </h1>
+
+            <form id="waitlist-form">
+                <div class="input-container">
+                    <input type="email" name="email" placeholder="Tu correo electrónico" id="email-input" required>
+                    <button type="submit" class="btn-join" id="join-btn">Únete ahora</button>
+                </div>
+            </form>
+
+            <!-- Countdown Timer -->
+            <div class="countdown-container">
+                <div class="countdown-item">
+                    <span class="count-num" id="days">00</span>
+                    <span class="count-label">Días</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="count-num" id="hours">00</span>
+                    <span class="count-label">Horas</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="count-num" id="minutes">00</span>
+                    <span class="count-label">Min</span>
+                </div>
+                <div class="countdown-item">
+                    <span class="count-num" id="seconds">00</span>
+                    <span class="count-label">Seg</span>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Epic Modal -->
+    <div id="form-modal" class="modal-overlay">
+        <div class="modal-content">
+            <button class="modal-close" id="close-modal">&times;</button>
+            <h2>¿En qué te podría ayudar Ü?</h2>
+            <p>Cuéntanos un poco sobre cómo imaginas tu vida con Ü.</p>
+
+            <textarea id="help-text"
+                placeholder="Ej: Ayúdame a gestionar mis correos y organizar mi agenda de estudio..."
+                rows="4"></textarea>
+
+            <h3>Dispositivos en los que usarías Ü</h3>
+            <div class="device-checklist">
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="MacOS">
+                    <span class="check-box"></span> MacOS
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Windows">
+                    <span class="check-box"></span> Windows
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Iphone">
+                    <span class="check-box"></span> iPhone
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Android">
+                    <span class="check-box"></span> Android
+                </label>
+                <label class="check-item">
+                    <input type="checkbox" name="device" value="Ipad">
+                    <span class="check-box"></span> iPad
+                </label>
+            </div>
+
+            <button id="final-submit" class="btn-join">Confirmar Registro</button>
+        </div>
+    </div>
+
+    <script type="module" src="/src/landing.ts"></script>
+</body>
+
 </html>
