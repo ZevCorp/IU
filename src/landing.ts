@@ -316,6 +316,9 @@ function initWaitlist() {
                 }).then(r => r.json()).then(data => console.log('Resend Response:', data))
                     .catch(e => console.error('Resend Error:', e));
 
+                // Store last devices for /download.html to read
+                localStorage.setItem('iu_last_devices', JSON.stringify(devices));
+
                 // Success state visual
                 finalBtn.textContent = 'Procesando...';
                 finalBtn.disabled = true;
