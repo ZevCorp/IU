@@ -4,117 +4,224 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Descarga I&Ü para MacOS y Windows">
-    <title>I&Ü | Descargas</title>
+    <meta name="description" content="Descarga I&Ü — Tu asistente inteligente">
+    <title>I&Ü | Descargar</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="stylesheet" href="/src/landing.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@100;300;600;900&family=Inter:wght@300;400;600&display=swap"
+        rel="stylesheet">
     <style>
-        body {
-            background-color: #000;
-            color: #fff;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            margin: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            text-align: center;
+        :root {
+            --bg-black: #060606;
+            --accent-white: #ffffff;
+            --text-gray: #a1a1a1;
+            --font-hero: 'Outfit', sans-serif;
+            --font-body: 'Inter', sans-serif;
         }
 
-        .download-container {
-            max-width: 600px;
-            padding: 40px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            backdrop-filter: blur(10px);
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            height: 100%;
+            background-color: var(--bg-black);
+            color: var(--accent-white);
+            font-family: var(--font-body);
+        }
+
+        body {
+            display: grid;
+            grid-template-rows: auto auto auto auto;
+            place-items: center;
+            row-gap: 32px;
+            min-height: 100vh;
+            padding: 0 20px;
+            background:
+                radial-gradient(ellipse 60% 50% at 50% 60%, rgba(160, 80, 255, 0.06) 0%, transparent 70%),
+                var(--bg-black);
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 10px 24px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.05));
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 100px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(255, 200, 80, 0.95);
+            backdrop-filter: blur(20px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
         }
 
         h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            font-weight: 600;
+            font-family: var(--font-hero);
+            font-weight: 100;
+            font-size: clamp(3rem, 10vw, 7rem);
+            line-height: 0.9;
+            letter-spacing: -4px;
+            text-align: center;
         }
 
-        p {
-            color: #a0a0a0;
-            margin-bottom: 40px;
-            font-size: 1.1rem;
-            line-height: 1.5;
+        h1 .alt {
+            font-weight: 300;
+            color: rgba(255, 255, 255, 0.92);
+            display: block;
+            font-size: 0.38em;
+            letter-spacing: -1px;
+            margin-bottom: 32px;
         }
 
-        .download-buttons {
+        .actions {
             display: flex;
-            gap: 20px;
-            justify-content: center;
-            margin-bottom: 40px;
-        }
-
-        .btn {
-            display: inline-block;
-            padding: 15px 30px;
-            font-size: 1rem;
-            font-weight: 500;
-            text-decoration: none;
-            border-radius: 50px;
-            transition: all 0.3s ease;
-            cursor: pointer;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            width: 100%;
+            max-width: 500px;
         }
 
         .btn-primary {
-            background-color: #fff;
-            color: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            background: var(--accent-white);
+            color: var(--bg-black);
+            border: none;
+            padding: 18px 40px;
+            border-radius: 14px;
+            font-family: var(--font-hero);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
         }
 
         .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(255, 255, 255, 0.2);
-        }
-
-        .btn-secondary {
-            background-color: transparent;
-            color: #fff;
-            border: 1px solid rgba(255, 255, 255, 0.3);
-        }
-
-        .btn-secondary:hover {
-            background-color: rgba(255, 255, 255, 0.1);
+            background: #f0f0f0;
+            box-shadow: 0 10px 30px rgba(255, 255, 255, 0.15);
             transform: translateY(-2px);
         }
 
-        .extension-note {
-            margin-top: 30px;
-            padding-top: 30px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        .btn-extension {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: var(--accent-white);
+            padding: 18px 40px;
+            border-radius: 14px;
+            font-family: var(--font-hero);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(20px);
         }
 
-        .extension-note h3 {
-            font-size: 1.2rem;
-            margin-bottom: 10px;
-            font-weight: 500;
+        .btn-extension:hover {
+            background: rgba(255, 255, 255, 0.14);
+            border-color: rgba(255, 255, 255, 0.4);
+            transform: translateY(-2px);
+        }
+
+        .divider {
+            width: 100%;
+            border: none;
+            border-top: 1px solid rgba(255, 255, 255, 0.08);
+            margin: 4px 0;
+        }
+
+        .extension-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: var(--text-gray);
+            text-align: center;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                row-gap: 28px;
+                padding: 40px 24px 60px;
+            }
+
+            h1 {
+                font-size: clamp(3.5rem, 16vw, 6rem);
+                letter-spacing: -3px;
+            }
         }
     </style>
 </head>
 
 <body>
-    <div class="download-container">
-        <h1>Descargar Ü</h1>
-        <p>Gracias por tu inter&eacute;s. Selecciona tu sistema operativo para instalar tu Asistente Inteligente.</p>
 
-        <div class="download-buttons">
-            <a href="#" class="btn btn-primary">⬇ MacOS (Apple Silicon)</a>
-            <a href="#" class="btn btn-secondary">⬇ Windows</a>
-        </div>
+    <div class="badge">Acceso Anticipado</div>
 
-        <div class="extension-note">
-            <h3>Extensión de Chrome (Requerido para control web)</h3>
-            <p>Para que Ü pueda interactuar de manera 100% precisa con Microsoft Edge o Google Chrome, instala nuestra
-                extensión de extracción de datos nativa.</p>
-            <a href="https://github.com/tu-repo/terminar-enlace-a-la-extension" target="_blank"
-                class="btn btn-secondary">Añadir a Chrome</a>
-        </div>
+    <h1>
+        <span class="alt">Tu asistente est&aacute; listo</span>
+        Descargar &Uuml;
+    </h1>
+
+    <div class="actions" id="actions">
+        <!-- Populated by JS based on device selection from landing -->
     </div>
+
+    <script>
+        (function () {
+            var actionsEl = document.getElementById('actions');
+
+            var devices = [];
+            try { devices = JSON.parse(localStorage.getItem('iu_last_devices') || '[]'); } catch (e) { }
+
+            var hasMac = devices.indexOf('MacOS') !== -1;
+            var hasWin = devices.indexOf('Windows') !== -1;
+            var showMac = hasMac || (!hasMac && !hasWin);
+            var showWin = hasWin || (!hasMac && !hasWin);
+
+            var html = '';
+
+            if (showMac) {
+                html += '<a href="#" class="btn-primary" id="btn-mac">' +
+                    '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>' +
+                    'Descargar para Mac</a>';
+            }
+
+            if (showWin) {
+                html += '<a href="#" class="btn-primary" id="btn-win">' +
+                    '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.557L10.373 4.5v7.13H3V5.557zm0 12.886L10.373 19.5V12.37H3v6.073zm8.24-14.064L21 2.5v9.13H11.24V4.379zm0 9.621H21V22.5l-9.76-1.379V14z"/></svg>' +
+                    'Descargar para Windows</a>';
+            }
+
+            html += '<hr class="divider">' +
+                '<p class="extension-label">Extensi\u00f3n requerida para control web</p>' +
+                '<a href="https://chromewebstore.google.com" target="_blank" class="btn-extension" id="btn-extension">' +
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>' +
+                'A\u00f1adir a Chrome</a>';
+
+            actionsEl.innerHTML = html;
+        })();
+    </script>
 </body>
 
 </html>
