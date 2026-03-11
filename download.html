@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Descarga I&Ü para MacOS y Windows">
+    <title>I&Ü | Descargas</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/src/landing.css">
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            text-align: center;
+        }
+
+        .download-container {
+            max-width: 600px;
+            padding: 40px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        p {
+            color: #a0a0a0;
+            margin-bottom: 40px;
+            font-size: 1.1rem;
+            line-height: 1.5;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            margin-bottom: 40px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 15px 30px;
+            font-size: 1rem;
+            font-weight: 500;
+            text-decoration: none;
+            border-radius: 50px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background-color: #fff;
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-secondary:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            transform: translateY(-2px);
+        }
+
+        .extension-note {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .extension-note h3 {
+            font-size: 1.2rem;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="download-container">
+        <h1>Descargar Ü</h1>
+        <p>Gracias por tu inter&eacute;s. Selecciona tu sistema operativo para instalar tu Asistente Inteligente.</p>
+
+        <div class="download-buttons">
+            <a href="#" class="btn btn-primary">⬇ MacOS (Apple Silicon)</a>
+            <a href="#" class="btn btn-secondary">⬇ Windows</a>
+        </div>
+
+        <div class="extension-note">
+            <h3>Extensión de Chrome (Requerido para control web)</h3>
+            <p>Para que Ü pueda interactuar de manera 100% precisa con Microsoft Edge o Google Chrome, instala nuestra
+                extensión de extracción de datos nativa.</p>
+            <a href="https://github.com/tu-repo/terminar-enlace-a-la-extension" target="_blank"
+                class="btn btn-secondary">Añadir a Chrome</a>
+        </div>
+    </div>
+</body>
+
+</html>

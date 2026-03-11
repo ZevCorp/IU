@@ -17,6 +17,7 @@ export default defineConfig({
                 main: resolve(__dirname, 'index.html'),
                 poc: resolve(__dirname, 'poc-face.html'),
                 dashboard: resolve(__dirname, 'dashboard.html'),
+                download: resolve(__dirname, 'download.html'),
             },
         },
     },
