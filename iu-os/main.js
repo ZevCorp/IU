@@ -1990,6 +1990,11 @@ app.whenReady().then(async () => {
             mainWindow.webContents.send('browser-agent-status', data);
         }
     });
+
+    // Conectar el BrowserAgent al ScreenAgent para la capa de Ejecución (Action Loop)
+    if (screenAgent) {
+        screenAgent.setBrowserAgent(browserAgent);
+    }
     console.log('🌐 Browser Agent initialized');
 
     // ── BROWSER CONTEXT AUTO-DETECTION ──
@@ -2126,16 +2131,27 @@ async function captureScreenContext() {
         return { app: null, snapshot: [], error: 'ScreenAgent not initialized' };
     }
 
-    // Use ScreenAgent to get the current context
-    // This is the correct, non-deprecated way
     try {
-        const extraction = await screenAgent.extract();
-        return {
-            app: extraction.app,
-            window: extraction.window,
-            snapshot: extraction.tree || [],
-            error: null
-        };
+        let extraction;
+        if (browserAgent && browserAgent.browserContext.active) {
+            // Unificado: Usar BrowserAgent robusto si el navegador está activo
+            extraction = await browserAgent.extractAffordances();
+            return {
+                app: extraction.app || 'browser',
+                window: extraction.url || 'web',
+                snapshot: extraction.elements || [],
+                error: null
+            };
+        } else {
+            // Fallback a Native OS YOLO/Accessibility
+            extraction = await screenAgent.extract();
+            return {
+                app: extraction.app,
+                window: extraction.window,
+                snapshot: extraction.tree || [],
+                error: null
+            };
+        }
     } catch (e) {
         return { app: null, snapshot: [], error: e.message };
     }

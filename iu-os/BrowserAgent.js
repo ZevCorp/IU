@@ -33,68 +33,7 @@
 const net = require('net');
 const http = require('http');
 const { EventEmitter } = require('events');
-
-// ─────────────────────────────────────────────────────────────
-// CDP WebSocket helper (sin dependencias externas)
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Abre una conexión CDP WebSocket en el endpoint indicado y devuelve
- * una función `send(method, params?)` que retorna una Promise con el resultado.
- *
- * El socket se cierra automáticamente tras closeAfterMs o cuando se llame close().
- */
-function createCdpSocket(wsUrl) {
-    return new Promise((resolve, reject) => {
-        const url = new URL(wsUrl);
-        const isSecure = url.protocol === 'wss:';
-        const port = url.port || (isSecure ? 443 : 80);
-
-        // Usamos el módulo ws si está disponible, si no, raw WebSocket via net
-        let ws;
-        try {
-            const WebSocket = require('ws');
-            ws = new WebSocket(wsUrl);
-        } catch (_) {
-            return reject(new Error('El módulo ws no está instalado. Ejecuta: npm install ws'));
-        }
-
-        let msgId = 1;
-        const pending = new Map();
-
-        ws.on('open', () => {
-            const send = (method, params = {}) => {
-                return new Promise((res, rej) => {
-                    const id = msgId++;
-                    pending.set(id, { resolve: res, reject: rej });
-                    ws.send(JSON.stringify({ id, method, params }));
-                });
-            };
-            const close = () => ws.close();
-            resolve({ send, close, ws });
-        });
-
-        ws.on('message', (raw) => {
-            try {
-                const msg = JSON.parse(raw.toString());
-                if (msg.id && pending.has(msg.id)) {
-                    const { resolve: res, reject: rej } = pending.get(msg.id);
-                    pending.delete(msg.id);
-                    if (msg.error) rej(new Error(msg.error.message));
-                    else res(msg.result);
-                }
-            } catch (_) { }
-        });
-
-        ws.on('error', reject);
-        ws.on('close', () => {
-            for (const [, { reject: rej }] of pending) {
-                rej(new Error('CDP socket closed'));
-            }
-            pending.clear();
-        });
-    });
-}
+const { chromium } = require('playwright-core'); // Incorporado Playwright
 
 // ─────────────────────────────────────────────────────────────
 // CDP HTTP helpers
@@ -120,95 +59,182 @@ function fetchCdpTargets(host = '127.0.0.1', port = 9222) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Extracción de affordances DOM / ARIA desde Chrome
+// Extracción de affordances DOM / ARIA usando Playwright + CDP
+// (Al estilo OpenClaw pero con coordenadas Físicas nativas para OS)
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Extrae un snapshot de la ARIA Accessibility Tree del tab actual.
- * Devuelve un array de nodos con role, name, value, etc.
+ * Extrae el Accessibility Tree y calcula el Bounding Box de cada elemento.
+ * Luego traduce los cuadros a Coordenadas Absolutas de la Ventana física.
  */
-async function extractAriaAffordances(wsUrl, limit = 300) {
-    let cdp;
+async function extractAriaAffordances(wsUrl, limit = 400) {
+    let browser;
     try {
-        cdp = await createCdpSocket(wsUrl);
+        // Conectar Playwright a la instancia de Chrome activa del usuario
+        browser = await chromium.connectOverCDP(wsUrl);
+        const context = browser.contexts()[0];
+
+        // Asumiendo que Playwright selecciona la primera página predeterminada al conectar 
+        // a una pestaña específica de wsUrl conectamos a ella, o a page[0].
+        const page = context.pages().find(p => p.url() !== 'about:blank') || context.pages()[0];
+        if (!page) throw new Error("No hay página activa");
+
+        // 1. Obtener la distancia exacta desde el borde superior de la pantalla hasta 
+        // el área de contenido (viewport) interno del browser.
+        const viewportOffset = await page.evaluate(() => {
+            // El gap entre window.screenY y la página real (Barras de URL, bookmarks, tabs).
+            // NOTA: Chrome reporta outerHeight y innerHeight. La diferencia suele ser la UI de arriba.
+            const uiHeaderHeight = window.outerHeight - window.innerHeight;
+            return {
+                x: window.screenX + ((window.outerWidth - window.innerWidth) / 2),
+                y: window.screenY + uiHeaderHeight
+            };
+        });
+
+        // 2. Establecer sesión cruda CDP para usar el nativo Accessibility Tree (soporta Shadow DOM/iFrames)
+        const cdp = await page.context().newCDPSession(page);
         await cdp.send('Accessibility.enable').catch(() => { });
+        await cdp.send('DOM.enable').catch(() => { });
+
+        // 3. Extraer el árbol semántico entero
         const res = await cdp.send('Accessibility.getFullAXTree');
         const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
 
-        // Serializar en formato legible para el LLM
-        const affordances = nodes
-            .filter(n => n.role?.value && n.role.value !== 'none' && n.role.value !== 'generic')
-            .slice(0, limit)
-            .map((n, i) => ({
-                id: i + 1,
-                role: n.role?.value || 'unknown',
-                name: n.name?.value || '',
-                value: n.value?.value || '',
-                nodeId: n.nodeId,
-                backendDOMNodeId: n.backendDOMNodeId,
-            }));
+        // 4. Filtrar nodos interactivos listos
+        const interactives = nodes.filter(n => {
+            if (!n.role?.value || n.role.value === 'none' || n.role.value === 'generic') return false;
+            if (!n.name?.value && !n.value?.value && !['textbox', 'searchbox', 'combobox'].includes(n.role.value)) return false;
+
+            // Foco principal en roles clickeables / tecleables
+            const roles = ['button', 'link', 'textbox', 'searchbox', 'combobox', 'menuitem', 'checkbox', 'radio', 'tab'];
+            return roles.includes(n.role.value);
+        });
+
+        const affordances = [];
+        let idCounter = 1;
+
+        // 5. Para cada nodo importante, pedir sus coordenadas exactas
+        for (const n of interactives) {
+            if (!n.backendDOMNodeId) continue;
+            try {
+                // Resolver el nodo en el DOM backend para obtener un objectId temporal
+                const nodeInfo = await cdp.send('DOM.resolveNode', { backendNodeId: n.backendDOMNodeId }).catch(() => null);
+                if (nodeInfo && nodeInfo.object?.objectId) {
+
+                    // Pedir el modelo de caja geométrico (BoxModel -> TopLeft, TopRight...)
+                    const box = await cdp.send('DOM.getBoxModel', { objectId: nodeInfo.object.objectId }).catch(() => null);
+
+                    // Liberar memoria
+                    cdp.send('Runtime.releaseObject', { objectId: nodeInfo.object.objectId }).catch(() => null);
+
+                    if (box && box.model) {
+                        const quad = box.model.border;
+
+                        // Determinar bounding box (X e Y mínimo)
+                        const vx = Math.min(quad[0], quad[2], quad[4], quad[6]);
+                        const vy = Math.min(quad[1], quad[3], quad[5], quad[7]);
+                        const vw = Math.max(quad[0], quad[2], quad[4], quad[6]) - vx;
+                        const vh = Math.max(quad[1], quad[3], quad[5], quad[7]) - vy;
+
+                        if (vw > 0 && vh > 0) {
+
+                            // Traducir las coordenadas locales del viewport a Coordenadas Absolutas del Mouse en Pantalla
+                            const absX = viewportOffset.x + vx;
+                            const absY = viewportOffset.y + vy;
+
+                            affordances.push({
+                                id: idCounter++,
+                                role: n.role.value,
+                                label: n.name?.value || n.value?.value || n.role.value,
+                                type: n.role.value,
+
+                                // Coordenadas normalizadas con sistema OS absoluto
+                                bbox: { x: absX, y: absY, w: vw, h: vh },
+                                center: {
+                                    x: absX + (vw / 2),
+                                    y: absY + (vh / 2)
+                                },
+
+                                nodeId: n.nodeId,
+                                backendDOMNodeId: n.backendDOMNodeId
+                            });
+
+                            if (affordances.length >= limit) break;
+                        }
+                    }
+                }
+            } catch (e) {
+                // Ignore silent element resolution failures
+            }
+        }
 
         return affordances;
+
+    } catch (e) {
+        console.error('❌ [BrowserAgent/Playwright] Error al capturar Snapshot:', e.message);
+        return [];
     } finally {
-        cdp?.close();
+        if (browser) await browser.close();
     }
 }
 
 /**
- * Extrae el DOM de forma simplificada (lista de elementos interactivos).
- * Más liviano que ARIA, útil para páginas sin semántica accesible.
+ * Fallback a extracción DOM por JavaScript si ARIA falla o está vacío.
  */
 async function extractDomAffordances(wsUrl) {
-    let cdp;
+    let browser;
     try {
-        cdp = await createCdpSocket(wsUrl);
-        const expression = `(() => {
-            const selectors = 'a, button, input, select, textarea, [role="button"], [role="link"], [onclick], canvas';
+        browser = await chromium.connectOverCDP(wsUrl);
+        const context = browser.contexts()[0];
+        const page = context.pages().find(p => p.url() !== 'about:blank') || context.pages()[0];
+
+        const affordances = await page.evaluate(() => {
+            const uiHeaderHeight = window.outerHeight - window.innerHeight;
+            const absoluteOX = window.screenX + ((window.outerWidth - window.innerWidth) / 2);
+            const absoluteOY = window.screenY + uiHeaderHeight;
+
+            const selectors = 'a, button, input, select, textarea, [role="button"], [role="link"], canvas';
             const els = Array.from(document.querySelectorAll(selectors)).slice(0, 200);
             return els.map((el, i) => {
                 const rect = el.getBoundingClientRect();
+
+                const absX = absoluteOX + rect.x;
+                const absY = absoluteOY + rect.y;
+
                 return {
                     id: i + 1,
                     tag: el.tagName.toLowerCase(),
-                    type: el.type || el.getAttribute('role') || '',
-                    text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80),
-                    href: el.href || '',
-                    x: Math.round(rect.x),
-                    y: Math.round(rect.y),
-                    w: Math.round(rect.width),
-                    h: Math.round(rect.height),
+                    type: el.type || el.getAttribute('role') || 'generic',
+                    label: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80),
+                    bbox: { x: absX, y: absY, w: rect.width, h: rect.height },
+                    center: { x: absX + (rect.width / 2), y: absY + (rect.height / 2) }
                 };
-            }).filter(el => el.w > 0 && el.h > 0);
-        })()`;
-
-        const { result } = await cdp.send('Runtime.evaluate', {
-            expression,
-            returnByValue: true,
-            userGesture: true,
+            }).filter(el => el.bbox.w > 0 && el.bbox.h > 0);
         });
+        return affordances;
 
-        return Array.isArray(result?.value) ? result.value : [];
+    } catch (e) {
+        console.error('❌ [BrowserAgent/DOM] Fallback fallido:', e.message);
+        return [];
     } finally {
-        cdp?.close();
+        if (browser) await browser.close();
     }
 }
 
 /**
- * Ejecuta JavaScript en la tab activa via CDP.
+ * Ejecuta JavaScript en la tab activa via Playwright CDP.
  */
 async function evalInTab(wsUrl, expression) {
-    let cdp;
+    let browser;
     try {
-        cdp = await createCdpSocket(wsUrl);
-        const { result } = await cdp.send('Runtime.evaluate', {
-            expression,
-            returnByValue: true,
-            userGesture: true,
-            awaitPromise: true,
-        });
-        return result?.value;
+        browser = await chromium.connectOverCDP(wsUrl);
+        const page = browser.contexts()[0].pages()[0];
+        const result = await page.evaluate(expression);
+        return result;
+    } catch (e) {
+        return null;
     } finally {
-        cdp?.close();
+        if (browser) await browser.close();
     }
 }
 
@@ -250,7 +276,51 @@ class BrowserAgent extends EventEmitter {
         // Gain del cursor para AgarIO (mueve más rápido que la ventana Electron)
         this.AGARIO_CURSOR_GAIN = 3.5;
 
+        // Configuración de Servidor WS local para Extensión de Chrome Nativa
+        this.extensionWebSocket = null;
+        this.extensionPendingResolve = null;
+        this._initExtensionServer();
+
         console.log('🌐 [BrowserAgent] Initialized');
+    }
+
+    // ─── Servidor WebSocket para Extensión de Chrome ───────────
+    _initExtensionServer() {
+        try {
+            const WebSocket = require('ws');
+            this.wss = new WebSocket.Server({ port: 9223 });
+
+            this.wss.on('connection', (ws) => {
+                console.log('🔌 [BrowserAgent] Extensión de Chrome Conectada!');
+                this.extensionWebSocket = ws;
+
+                ws.on('message', (message) => {
+                    try {
+                        const data = JSON.parse(message);
+                        if (data.type === 'AFFORDANCES_RESULT' || data.type === 'ERROR') {
+                            if (this.extensionPendingResolve) {
+                                this.extensionPendingResolve(data);
+                                this.extensionPendingResolve = null;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Error parseando msj de extensión', e);
+                    }
+                });
+
+                ws.on('close', () => {
+                    console.log('🔌 [BrowserAgent] Extensión de Chrome Desconectada');
+                    this.extensionWebSocket = null;
+                    if (this.extensionPendingResolve) {
+                        this.extensionPendingResolve({ type: 'ERROR', error: 'Desconectado' });
+                        this.extensionPendingResolve = null;
+                    }
+                });
+            });
+            console.log('🌐 [BrowserAgent] Escuchando Extensión en puerto 9223');
+        } catch (e) {
+            console.warn('⚠️ [BrowserAgent] No se pudo iniciar WS Server para Extensión:', e.message);
+        }
     }
 
     // ─── nut-js lazy loader ────────────────────────────────────
@@ -616,7 +686,44 @@ class BrowserAgent extends EventEmitter {
             return { elements: [], url: '', app: '', source: 'NONE' };
         }
 
-        // Intentar resolver wsUrl si no lo tenemos
+        // Prioridad 1: Extensión nativa (Cero Configuración para el Usuario)
+        if (this.extensionWebSocket && this.extensionWebSocket.readyState === 1 /* WebSocket.OPEN */) {
+            console.log('🌐 [BrowserAgent] Solicitando Extracción vía Extensión de Chrome...');
+            try {
+                const response = await new Promise((resolve) => {
+                    this.extensionPendingResolve = resolve;
+                    this.extensionWebSocket.send(JSON.stringify({ type: 'GET_AFFORDANCES' }));
+                    setTimeout(() => {
+                        if (this.extensionPendingResolve) {
+                            this.extensionPendingResolve = null;
+                            resolve({ type: 'ERROR', error: 'Timeout' });
+                        }
+                    }, 5000);
+                });
+
+                if (response.type === 'AFFORDANCES_RESULT') {
+                    const data = response.data;
+                    console.log(`🌐 [BrowserAgent] Extracted ${data.elements?.length || 0} affordances from Extension (${data.url})`);
+                    return {
+                        elements: data.elements || [],
+                        url: data.url || this.browserContext.url,
+                        app: 'browser',
+                        source: 'EXTENSION_CDP'
+                    };
+                } else {
+                    // Extensión conectada pero no puede acceder a esta tab (chrome://, edge://, etc.)
+                    // No intentamos CDP 9222  — dejamos que ScreenAgent use AX nativo silenciosamente.
+                    console.log('🔕 [BrowserAgent] Extensión no puede acceder a esta página, usando AX nativo.');
+                    return { elements: [], url: this.browserContext.url, app: this.browserContext.app, source: 'EXTENSION_RESTRICTED' };
+                }
+            } catch (e) {
+                console.warn('⚠️ [BrowserAgent] Error conectando con Extensión:', e.message);
+                return { elements: [], url: this.browserContext.url, app: this.browserContext.app, source: 'EXTENSION_ERROR' };
+            }
+        }
+
+        // Prioridad 2: CDP Playwright directo (solo si NO hay extensión conectada)
+        // Requiere Chrome con --remote-debugging-port=9222 (modo dev avanzado, no user-facing)
         if (!this.browserContext.wsUrl) {
             const tab = await this.findActiveTab();
             if (tab?.webSocketDebuggerUrl) {

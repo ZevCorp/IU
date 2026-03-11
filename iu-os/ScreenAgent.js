@@ -266,6 +266,11 @@ class ScreenAgent {
         this.workflowAnchorIndex = 0;
         this.currentTypeTask = null;
         this.lastContextSnapshot = { app: '', window: '', recentActions: [] };
+        this.browserAgent = null; // Instancia global inyectada desde main.js
+    }
+
+    setBrowserAgent(agent) {
+        this.browserAgent = agent;
     }
 
     _appMappings() {
@@ -390,13 +395,31 @@ ACCIONES RECOMENDADAS:
      * The agent will use GPT-4.1 to diagnose problems and search the web for solutions
      */
     async _runAxDetection(appName = null) {
-        // console.log('🤖 [ScreenAgent] Running intelligent AX extraction...');
+        // Enrutador inteligente: BrowserAgent vs Native OS
+        const normalizedApp = this._sanitizeAppName(appName || '').toLowerCase();
+        if (this.browserAgent && this.browserAgent.browserContext.active &&
+            (normalizedApp.includes('chrome') || normalizedApp === 'browser')) {
+            console.log('🌐 [ScreenAgent] Delegando Extracción a BrowserAgent (Playwright)');
+            try {
+                const bResult = await this.browserAgent.extractAffordances();
+                if (bResult.elements && bResult.elements.length > 0) {
+                    return {
+                        elements: bResult.elements,
+                        app: bResult.app || 'browser',
+                        window: bResult.url || 'web',
+                        source: 'BROWSER_CDP'
+                    };
+                }
+            } catch (e) {
+                console.warn('⚠️ [ScreenAgent] BrowserAgent falló en extracción, intentando fallback nativo...', e.message);
+            }
+        }
 
         try {
             const result = await this.axAgent.extract(appName);
 
             if (result.error || !result.snapshot || result.snapshot.length === 0) {
-                console.warn('⚠️ [ScreenAgent] AX Agent returned error:', result.error);
+                console.warn('⚠️ [ScreenAgent] AX Agent (Native) returned error:', result.error);
                 return null;
             }
 
