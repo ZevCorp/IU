@@ -317,23 +317,13 @@ function initWaitlist() {
                     .catch(e => console.error('Resend Error:', e));
 
                 // Success state visual
-                finalBtn.textContent = '¡Bienvenido a bordo!';
+                finalBtn.textContent = 'Procesando...';
                 finalBtn.disabled = true;
-                finalBtn.style.background = '#4ade80';
-                finalBtn.style.color = '#fff';
+                finalBtn.style.opacity = '0.7';
 
                 setTimeout(() => {
-                    modal.classList.remove('active');
-
-                    // Update main UI
-                    initialBtn.textContent = '¡Todo listo!';
-                    initialBtn.disabled = true;
-                    initialBtn.style.background = '#ffffff';
-                    initialBtn.style.color = '#000000';
-
-                    emailInput.value = 'Revisa tu bandeja de entrada.';
-                    emailInput.disabled = true;
-                }, 1500);
+                    window.location.href = '/download.html';
+                }, 800);
             });
         }
     }
