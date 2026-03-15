@@ -1,5 +1,5 @@
-﻿export const brandTokens = {
-  name: "ClinikAI",
+export const brandTokens = {
+  name: "Clinick AI",
   colors: {
     background: "#FFFFFF",
     text: "#0B0F14",
@@ -40,4 +40,3 @@
 } as const;
 
 export type BrandTokens = typeof brandTokens;
-

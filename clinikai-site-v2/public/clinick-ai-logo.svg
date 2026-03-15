@@ -1,0 +1,10 @@
+<svg width="356" height="112" viewBox="0 0 356 112" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="logoTitle">
+  <title id="logoTitle">Clinick AI</title>
+  <text x="10" y="69" fill="#111111" font-family="Avenir Next, Avenir, Helvetica Neue, Arial, sans-serif" font-size="56" font-weight="300" letter-spacing="-1.6">
+    Clinick
+  </text>
+  <circle cx="281" cy="56" r="42" fill="#66D8F4"/>
+  <text x="281" y="61" fill="#FFFFFF" font-family="Avenir Next, Avenir, Helvetica Neue, Arial, sans-serif" font-size="36" font-weight="300" text-anchor="middle" dominant-baseline="middle">
+    AI
+  </text>
+</svg>

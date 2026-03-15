@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 
@@ -7,7 +7,7 @@ import { buttonStyles } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
 import { Reveal } from "@/components/ui/reveal";
 import { trackEvent } from "@/lib/analytics";
-import { WHATSAPP_URL } from "@/lib/constants";
+import { BRAND_NAME, WHATSAPP_URL } from "@/lib/constants";
 
 const fields = ["Motivo", "Antecedentes", "Examen", "Dx", "Plan", "Medicamentos"];
 
@@ -21,8 +21,9 @@ export function ProductPage() {
             Documentación clínica en tiempo real
           </h1>
           <p className="mt-4 max-w-3xl text-lg leading-relaxed text-[color:rgb(59,70,84)]">
-            ClinikAI escucha la consulta, convierte voz a texto plano y lo escribe en tu software
-            médico existente controlando la interfaz. El médico mantiene siempre el control final.
+            {BRAND_NAME} escucha la consulta, convierte voz a texto plano y lo escribe en tu
+            software médico existente controlando la interfaz. El médico mantiene siempre el
+            control final.
           </p>
         </div>
       </section>
@@ -37,7 +38,7 @@ export function ProductPage() {
                 </h2>
                 <div className="mt-6 grid gap-4 md:grid-cols-3">
                   {[
-                    { title: "Ver", desc: "ClinikAI captura la conversación clínica relevante." },
+                    { title: "Ver", desc: `${BRAND_NAME} captura la conversación clínica relevante.` },
                     {
                       title: "Editar",
                       desc: "El profesional revisa y ajusta la nota según criterio clínico.",
@@ -61,7 +62,7 @@ export function ProductPage() {
             <Reveal delay={0.06}>
               <section className="rounded-[20px] border border-[var(--color-border)] p-6">
                 <h2 className="font-display text-3xl font-bold text-[var(--color-text)]">
-                  Qué llena ClinikAI
+                  Qué llena {BRAND_NAME}
                 </h2>
                 <ul className="mt-5 grid gap-3 sm:grid-cols-2">
                   {fields.map((field) => (
@@ -83,7 +84,7 @@ export function ProductPage() {
                   macOS hoy, Windows pronto
                 </h2>
                 <p className="mt-4 text-sm leading-relaxed text-[color:rgb(59,70,84)]">
-                  ClinikAI opera hoy en macOS. El soporte para Windows está previsto en
+                  {BRAND_NAME} opera hoy en macOS. El soporte para Windows está previsto en
                   aproximadamente 2 a 3 semanas, según validación final de compatibilidad.
                 </p>
               </section>
@@ -124,8 +125,8 @@ export function ProductPage() {
                 Valida tu flujo en un piloto
               </h3>
               <p className="mt-3 text-sm leading-relaxed text-[color:rgb(59,70,84)]">
-                Revisamos pantallas, campos y validaciones para integrar ClinikAI en tu operación
-                real.
+                Revisamos pantallas, campos y validaciones para integrar {BRAND_NAME} en tu
+                operación real.
               </p>
               <Link
                 href="/contacto"
@@ -173,4 +174,3 @@ export function ProductPage() {
     </div>
   );
 }
-

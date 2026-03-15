@@ -1,7 +1,8 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 
 import { buttonStyles } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
+import { BRAND_NAME } from "@/lib/constants";
 
 const useCases = [
   {
@@ -25,7 +26,7 @@ export function UseCasesPage() {
         <div className="container-xl">
           <Chip>Casos de uso</Chip>
           <h1 className="mt-4 font-display text-4xl font-extrabold tracking-tight text-[var(--color-text)] sm:text-5xl">
-            Flujos clínicos donde ClinikAI aporta más valor
+            Flujos clínicos donde {BRAND_NAME} aporta más valor
           </h1>
         </div>
       </section>
@@ -47,4 +48,3 @@ export function UseCasesPage() {
     </div>
   );
 }
-

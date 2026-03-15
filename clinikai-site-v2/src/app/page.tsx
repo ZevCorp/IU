@@ -1,11 +1,11 @@
-﻿import type { Metadata } from "next";
+import type { Metadata } from "next";
 
 import { HomePage } from "@/components/pages/home-page";
-import { SITE_URL } from "@/lib/constants";
+import { BRAND_NAME, SITE_URL } from "@/lib/constants";
 
 export const metadata: Metadata = {
   title: "Tu nota clínica. Sin teclado.",
-  description: "ClinikAI documenta en tu sistema mientras hablas.",
+  description: `${BRAND_NAME} documenta en tu sistema mientras hablas.`,
   alternates: {
     canonical: `${SITE_URL}/`,
   },
@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 const softwareSchema = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  name: "ClinikAI",
+  name: BRAND_NAME,
   applicationCategory: "HealthApplication",
   operatingSystem: "macOS, Windows (próximamente)",
   offers: {
@@ -43,4 +43,3 @@ export default function Home() {
     </>
   );
 }
-

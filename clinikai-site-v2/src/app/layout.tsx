@@ -1,10 +1,10 @@
-﻿import type { Metadata } from "next";
+import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Inter, Manrope } from "next/font/google";
 
 import { ScrollDepthTracker } from "@/components/analytics/scroll-depth-tracker";
 import { SiteShell } from "@/components/layout/site-shell";
-import { SITE_URL } from "@/lib/constants";
+import { BRAND_NAME, SITE_URL } from "@/lib/constants";
 
 import "./globals.css";
 
@@ -25,43 +25,36 @@ const manrope = Manrope({
 export const metadata: Metadata = {
   metadataBase: new URL("https://example.com"),
   title: {
-    default: "ClinikAI | Documentación clínica en tiempo real",
-    template: "%s | ClinikAI",
+    default: `${BRAND_NAME} | Documentación clínica en tiempo real`,
+    template: `%s | ${BRAND_NAME}`,
   },
   description:
-    "ClinikAI documenta en tu sistema mientras hablas. Flujo con revisión médica y clic final de confirmación.",
-  applicationName: "ClinikAI",
-  keywords: [
-    "ClinikAI",
-    "documentación clínica",
-    "HealthTech",
-    "HIS",
-    "EMR",
-    "voz a texto médico",
-  ],
+    `${BRAND_NAME} documenta en tu sistema mientras hablas. Flujo con revisión médica y clic final de confirmación.`,
+  applicationName: BRAND_NAME,
+  keywords: [BRAND_NAME, "ClinikAI", "documentación clínica", "HealthTech", "HIS", "EMR", "voz a texto médico"],
   alternates: {
     canonical: SITE_URL,
   },
   openGraph: {
     type: "website",
     locale: "es_ES",
-    title: "ClinikAI | Tu nota clínica. Sin teclado.",
-    description: "ClinikAI documenta en tu sistema mientras hablas.",
+    title: `${BRAND_NAME} | Tu nota clínica. Sin teclado.`,
+    description: `${BRAND_NAME} documenta en tu sistema mientras hablas.`,
     url: SITE_URL,
-    siteName: "ClinikAI",
+    siteName: BRAND_NAME,
     images: [
       {
         url: "/og-clinikai.svg",
         width: 1200,
         height: 630,
-        alt: "ClinikAI",
+        alt: BRAND_NAME,
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
-    title: "ClinikAI | Tu nota clínica. Sin teclado.",
-    description: "ClinikAI documenta en tu sistema mientras hablas.",
+    title: `${BRAND_NAME} | Tu nota clínica. Sin teclado.`,
+    description: `${BRAND_NAME} documenta en tu sistema mientras hablas.`,
     images: ["/og-clinikai.svg"],
   },
 };
@@ -85,4 +78,3 @@ export default function RootLayout({
     </html>
   );
 }
-

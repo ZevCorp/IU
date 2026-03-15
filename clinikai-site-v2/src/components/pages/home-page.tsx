@@ -11,7 +11,7 @@ import { FaqAccordion, type FaqItem } from "@/components/ui/faq-accordion";
 import { Reveal } from "@/components/ui/reveal";
 import { UseCaseTabs, type UseCaseTab } from "@/components/ui/tabs";
 import { trackEvent } from "@/lib/analytics";
-import { WHATSAPP_URL } from "@/lib/constants";
+import { BRAND_NAME, WHATSAPP_URL } from "@/lib/constants";
 
 const problemCards = [
   "Tiempo perdido documentando",
@@ -43,7 +43,7 @@ const cases: UseCaseTab[] = [
     label: "Consulta general",
     title: "Consulta general con foco en velocidad clínica",
     story:
-      "Mientras el médico conversa, ClinikAI estructura la nota clínica y la escribe en el software existente sin interrumpir la atención.",
+      `Mientras el médico conversa, ${BRAND_NAME} estructura la nota clínica y la escribe en el software existente sin interrumpir la atención.`,
     fields: ["Motivo", "Antecedentes", "Examen", "Dx", "Plan", "Medicamentos"],
   },
   {
@@ -121,7 +121,7 @@ export function HomePage() {
               Tu nota clínica. Sin teclado.
             </h1>
             <p className="mt-4 max-w-xl text-lg leading-relaxed text-[color:rgb(59,70,84)]">
-              ClinikAI documenta en tu sistema mientras hablas.
+              {BRAND_NAME} documenta en tu sistema mientras hablas.
             </p>
             <div className="mt-7 flex flex-wrap items-center gap-3">
               <Link
@@ -187,7 +187,7 @@ export function HomePage() {
           <div className="mt-8 grid gap-4 md:grid-cols-3">
             {[
               "Hablas con el paciente",
-              "ClinikAI documenta en tu sistema",
+              `${BRAND_NAME} documenta en tu sistema`,
               "Revisas y confirmas",
             ].map((step, index) => (
               <Reveal key={step} delay={0.06 * index}>
@@ -414,7 +414,7 @@ function DemoModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }
           <motion.div
             role="dialog"
             aria-modal="true"
-            aria-label="Demo visual ClinikAI"
+            aria-label={`Demo visual ${BRAND_NAME}`}
             className="relative w-full max-w-3xl"
             initial={reducedMotion ? undefined : { opacity: 0, y: 24, scale: 0.98 }}
             animate={reducedMotion ? undefined : { opacity: 1, y: 0, scale: 1 }}
@@ -449,14 +449,14 @@ function ProcessDiagram() {
     <div className="mt-7 rounded-[18px] border border-[var(--color-border)] bg-white p-5 sm:p-6">
       <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="absolute left-[15%] right-[15%] top-6 hidden h-px bg-[var(--color-border)] md:block" />
-        {["Hablas con el paciente", "ClinikAI documenta en tu sistema", "Revisas y confirmas"].map(
+        {["Hablas con el paciente", `${BRAND_NAME} documenta en tu sistema`, "Revisas y confirmas"].map(
           (item) => (
             <div
               key={item}
               className="relative z-10 flex items-center gap-3 rounded-xl bg-white md:flex-col md:text-center"
             >
               <span className="grid h-12 w-12 place-items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface)] text-sm font-semibold text-[var(--color-text)]">
-                {item.startsWith("Hablas") ? "1" : item.startsWith("ClinikAI") ? "2" : "3"}
+                {item.startsWith("Hablas") ? "1" : item.startsWith(BRAND_NAME) ? "2" : "3"}
               </span>
               <p className="max-w-[180px] text-sm font-medium text-[var(--color-text)]">{item}</p>
             </div>

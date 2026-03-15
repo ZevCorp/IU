@@ -1,6 +1,7 @@
-﻿import Link from "next/link";
+import Link from "next/link";
 
-import { DEMO_EMAIL, WHATSAPP_URL } from "@/lib/constants";
+import { BrandLogo } from "@/components/layout/brand-logo";
+import { BRAND_NAME, DEMO_EMAIL, WHATSAPP_URL } from "@/lib/constants";
 
 export function SiteFooter() {
   return (
@@ -8,7 +9,7 @@ export function SiteFooter() {
       <div className="container-xl py-10">
         <div className="grid gap-8 md:grid-cols-4">
           <div className="md:col-span-2">
-            <p className="font-display text-lg font-semibold text-[var(--color-text)]">ClinikAI</p>
+            <BrandLogo size="footer" />
             <p className="mt-3 max-w-md text-sm leading-relaxed text-[color:rgb(59,70,84)]">
               Documentacion clinica asistida por voz para consultas y flujos hospitalarios,
               con control final del medico.
@@ -74,10 +75,9 @@ export function SiteFooter() {
         </div>
 
         <div className="mt-9 border-t border-[var(--color-border)] pt-4 text-xs text-[color:rgb(94,107,123)]">
-          © {new Date().getFullYear()} ClinikAI. [LOGO]
+          © {new Date().getFullYear()} {BRAND_NAME}.
         </div>
       </div>
     </footer>
   );
 }
-

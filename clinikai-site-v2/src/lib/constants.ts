@@ -1,4 +1,5 @@
-﻿export const WHATSAPP_URL = "https://wa.me/573172550953";
+export const BRAND_NAME = "Clinick AI";
+export const WHATSAPP_URL = "https://wa.me/573172550953";
 export const DEMO_EMAIL = "hola@clinikai.health";
 export const SITE_URL = "https://[DOMINIO_CLINIKAI]";
 

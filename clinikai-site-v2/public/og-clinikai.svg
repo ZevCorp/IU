@@ -3,7 +3,6 @@
   <rect x="56" y="56" width="1088" height="518" rx="36" fill="#F4F8FD" stroke="#E9EEF5"/>
   <path d="M180 326C180 272.98 222.98 230 276 230H924" stroke="#4DA3FF" stroke-width="16" stroke-linecap="round"/>
   <circle cx="936" cy="230" r="26" fill="#22D3C5"/>
-  <text x="180" y="412" fill="#0B0F14" font-family="Manrope, Arial, sans-serif" font-size="72" font-weight="800">ClinikAI</text>
+  <text x="180" y="412" fill="#0B0F14" font-family="Manrope, Arial, sans-serif" font-size="72" font-weight="800">Clinick AI</text>
   <text x="180" y="468" fill="#2C3A4A" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="500">Tu nota clínica. Sin teclado.</text>
 </svg>
-

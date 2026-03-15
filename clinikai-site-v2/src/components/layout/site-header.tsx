@@ -1,14 +1,14 @@
-﻿"use client";
+"use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 
+import { BrandLogo } from "@/components/layout/brand-logo";
 import { buttonStyles } from "@/components/ui/button";
 import { trackEvent } from "@/lib/analytics";
 import { cn } from "@/lib/cn";
-import { mainNav, WHATSAPP_URL } from "@/lib/constants";
+import { BRAND_NAME, mainNav, WHATSAPP_URL } from "@/lib/constants";
 
 export function SiteHeader() {
   const pathname = usePathname();
@@ -17,18 +17,8 @@ export function SiteHeader() {
   return (
     <header className="fixed inset-x-0 top-0 z-50 border-b border-[var(--color-border)] bg-white/90 backdrop-blur-sm">
       <div className="container-xl flex h-[var(--header-height)] items-center justify-between gap-4">
-        <Link href="/" className="inline-flex items-center gap-3" aria-label="ClinikAI inicio">
-          <Image
-            src="/Logo-clinkiAi.png"
-            alt="Logo ClinikAI"
-            width={38}
-            height={38}
-            priority
-            className="h-9 w-9 rounded-[10px] object-contain"
-          />
-          <span className="font-display text-lg font-bold tracking-tight text-[var(--color-text)]">
-            ClinikAI
-          </span>
+        <Link href="/" className="inline-flex shrink-0 items-center" aria-label={`${BRAND_NAME} inicio`}>
+          <BrandLogo priority />
         </Link>
 
         <nav className="hidden items-center gap-7 md:flex" aria-label="Principal">
