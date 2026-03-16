@@ -7,6 +7,7 @@
     --line: rgba(30, 27, 24, 0.12);
     --accent: #0f3d33;
     --accent-soft: #dde9e2;
+    --page-width: 794px;
 }
 
 * {
@@ -75,31 +76,40 @@ body {
 }
 
 .document-shell {
-    width: min(100%, 920px);
+    width: min(100%, calc(var(--page-width) + 40px));
     margin: 0 auto;
     padding: 48px 20px 80px;
 }
 
 .cover-page,
 .apa-paper {
+    width: min(100%, var(--page-width));
     background: rgba(255, 252, 247, 0.94);
     border: 1px solid var(--line);
     box-shadow: 0 24px 80px rgba(41, 34, 24, 0.08);
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .cover-page {
-    min-height: calc(100vh - 160px);
+    min-height: 1123px;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    justify-content: space-evenly;
     align-items: center;
     text-align: center;
-    padding: 84px 56px 96px;
+    padding: 96px 86px;
     margin-bottom: 28px;
 }
 
 .cover-block {
     width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 10px;
 }
 
 .cover-title-block {
@@ -118,6 +128,8 @@ body {
 .cover-line {
     margin: 0;
     font-size: 1.08rem;
+    line-height: 1.9;
+    text-align: center;
 }
 
 .apa-paper {
@@ -203,7 +215,8 @@ p {
     .cover-page {
         min-height: 100vh;
         margin: 0;
-        padding: 84px 56px 96px;
+        width: 100%;
+        padding: 96px 86px;
         page-break-after: always;
     }
 
