@@ -15,6 +15,7 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 main: resolve(__dirname, 'index.html'),
+                marketing: resolve(__dirname, 'marketing-pmv.html'),
                 poc: resolve(__dirname, 'poc-face.html'),
                 dashboard: resolve(__dirname, 'dashboard.html'),
                 download: resolve(__dirname, 'download.html'),
