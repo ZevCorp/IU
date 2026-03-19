@@ -2113,6 +2113,14 @@ app.on('window-all-closed', () => {
     }
 });
 
+app.on('before-quit', () => {
+    if (screenAgent && typeof screenAgent.shutdown === 'function') {
+        screenAgent.shutdown().catch((e) => {
+            console.warn('⚠️ [Main] ScreenAgent shutdown error:', e.message);
+        });
+    }
+});
+
 // ============================================
 // Screen Context Capture (macOS Accessibility)
 // ============================================

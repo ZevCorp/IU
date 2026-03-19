@@ -14,7 +14,7 @@
         "obfuscate": "node scripts/obfuscate.js",
         "restore": "node scripts/restore.js",
         "publish": "electron-builder --win portable --publish always",
-        "install": "node-gyp rebuild"
+        "install": "node scripts/postinstall.js"
     },
     "repository": {
         "type": "git",
@@ -46,6 +46,10 @@
             {
                 "from": "build/Release",
                 "to": "build/Release"
+            },
+            {
+                "from": "windows/windows-companion.ps1",
+                "to": "windows/windows-companion.ps1"
             }
         ],
         "asar": true,

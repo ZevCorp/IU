@@ -20,6 +20,7 @@ const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
 const WhatsAppContext = require('./WhatsAppContext');
 const LearningAgent = require('./LearningAgent');
+const WindowsCompanionClient = require('./WindowsCompanionClient');
 const stickyFace = require('./StickyFaceController'); // Sticky Face Controller for Automation Mode
 // const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window - REMOVING FOR ISOLATION
 
@@ -244,6 +245,7 @@ const VISUAL_TOOLS = [
 
 class ScreenAgent {
     constructor(openai, mainWindow, chatPage = null) {
+        this.isWindows = process.platform === 'win32';
         this.openai = openai; // kept for backward compat, actual calls go through ModelSwitch
         this.mainWindow = mainWindow;
         this.chatPage = chatPage; // ChatGPT Playwright page for web searches
@@ -256,16 +258,63 @@ class ScreenAgent {
         this.debugDir = path.join(require('os').homedir(), 'u_debug');
         this.screenWidth = 0;
         this.screenHeight = 0;
+        this.screenOriginX = 0;
+        this.screenOriginY = 0;
+        this.windowsCompanion = null;
         // this.currentBubblePos = null; // Track bubble position for "drag & drop" focus strategy - REMOVED
 
-        // Use simple deterministic agent (fast and reliable)
-        // For complex future scenarios, see AxExtractionAgent.js.future
-        const SimpleAxAgent = require('./SimpleAxAgent');
-        this.axAgent = new SimpleAxAgent();
+        if (this.isWindows) {
+            this.windowsCompanion = new WindowsCompanionClient();
+            this.axAgent = {
+                extract: async (appName = null) => this.windowsCompanion.extract(appName)
+            };
+
+            // Warm up companion asynchronously to reduce first-action latency.
+            this.windowsCompanion.start().catch((e) => {
+                console.warn(`⚠️ [ScreenAgent] Windows companion startup failed: ${e.message}`);
+            });
+        } else {
+            // Use simple deterministic agent (fast and reliable)
+            // For complex future scenarios, see AxExtractionAgent.js.future
+            const SimpleAxAgent = require('./SimpleAxAgent');
+            this.axAgent = new SimpleAxAgent();
+        }
+
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
         this.currentTypeTask = null;
+        this.lastSelectedElement = null;
         this.lastContextSnapshot = { app: '', window: '', recentActions: [] };
+    }
+
+    _updateScreenMetrics() {
+        const displays = screen.getAllDisplays();
+        if (!Array.isArray(displays) || displays.length === 0) {
+            const primaryDisplay = screen.getPrimaryDisplay();
+            this.screenOriginX = 0;
+            this.screenOriginY = 0;
+            this.screenWidth = primaryDisplay.size.width;
+            this.screenHeight = primaryDisplay.size.height;
+            return;
+        }
+
+        let minX = Number.POSITIVE_INFINITY;
+        let minY = Number.POSITIVE_INFINITY;
+        let maxX = Number.NEGATIVE_INFINITY;
+        let maxY = Number.NEGATIVE_INFINITY;
+
+        for (const display of displays) {
+            const b = display.bounds || { x: 0, y: 0, width: 0, height: 0 };
+            minX = Math.min(minX, Number(b.x || 0));
+            minY = Math.min(minY, Number(b.y || 0));
+            maxX = Math.max(maxX, Number(b.x || 0) + Number(b.width || 0));
+            maxY = Math.max(maxY, Number(b.y || 0) + Number(b.height || 0));
+        }
+
+        this.screenOriginX = Number.isFinite(minX) ? minX : 0;
+        this.screenOriginY = Number.isFinite(minY) ? minY : 0;
+        this.screenWidth = Math.max(1, Math.round((Number.isFinite(maxX) ? maxX : 0) - this.screenOriginX));
+        this.screenHeight = Math.max(1, Math.round((Number.isFinite(maxY) ? maxY : 0) - this.screenOriginY));
     }
 
     _appMappings() {
@@ -285,7 +334,12 @@ class ScreenAgent {
             'Chrome': 'Google Chrome',
             'Buscador': 'Finder',
             'Finder': 'Finder',
-            'Terminal': 'Terminal',
+            'Terminal': this.isWindows ? 'wt.exe' : 'Terminal',
+            'Bloc de notas': 'notepad.exe',
+            'Notepad': 'notepad.exe',
+            'Explorador': this.isWindows ? 'explorer.exe' : 'Finder',
+            'Explorer': this.isWindows ? 'explorer.exe' : 'Finder',
+            'Calculator': 'Calculator',
             'MiniPRM': 'MiniPRM'
         };
     }
@@ -400,24 +454,45 @@ ACCIONES RECOMENDADAS:
                 return null;
             }
 
-            // Normalize elements to match expected format
-            const elements = result.snapshot.map(e => ({
-                id: e.id,
-                type: e.type,
-                label: e.label || e.type,
-                confidence: 1.0,
-                bbox: e.bbox, // already normalized by ax-reader.js
-                center: {
-                    x: e.bbox.x + e.bbox.w / 2,
-                    y: e.bbox.y + e.bbox.h / 2
-                }
-            }));
+            // Normalize and filter elements to keep actionable, stable nodes.
+            const normalized = result.snapshot.map((e) => {
+                const bbox = e && e.bbox ? {
+                    x: Number(e.bbox.x || 0),
+                    y: Number(e.bbox.y || 0),
+                    w: Number(e.bbox.w || 0),
+                    h: Number(e.bbox.h || 0)
+                } : null;
+
+                const centerX = (e && e.center && typeof e.center.x === 'number')
+                    ? Number(e.center.x)
+                    : (bbox ? Number(bbox.x + (bbox.w / 2)) : 0);
+                const centerY = (e && e.center && typeof e.center.y === 'number')
+                    ? Number(e.center.y)
+                    : (bbox ? Number(bbox.y + (bbox.h / 2)) : 0);
+
+                return {
+                    id: e.id,
+                    type: e.type,
+                    label: e.label || e.type,
+                    confidence: 1.0,
+                    bbox,
+                    center: { x: centerX, y: centerY },
+                    actions: Array.isArray(e.actions) ? e.actions : [],
+                    interactive: !!e.interactive,
+                    nativeRef: e.nativeRef || null,
+                    state: e.state || null
+                };
+            });
+
+            const elements = normalized
+                .filter((el) => this._isUsableDetectionElement(el))
+                .sort((a, b) => this._elementPriorityScore(b) - this._elementPriorityScore(a));
 
             return {
                 elements,
                 app: result.app,
                 window: result.window,
-                source: 'AX_ACCESSIBILITY'
+                source: this.isWindows ? 'UIA_WINDOWS' : 'AX_ACCESSIBILITY'
             };
 
         } catch (e) {
@@ -477,6 +552,7 @@ ACCIONES RECOMENDADAS:
         this.deferWindowRestore = false;
         this.currentTypeTask = null;
         this.currentApp = this._sanitizeAppName(app); // Track current app context
+        this.lastSelectedElement = null;
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
@@ -536,10 +612,8 @@ ACCIONES RECOMENDADAS:
             const actionHistory = [];
 
 
-            // Store screen dimensions for denormalization
-            const primaryDisplay = screen.getPrimaryDisplay();
-            this.screenWidth = primaryDisplay.size.width;
-            this.screenHeight = primaryDisplay.size.height;
+            // Store virtual screen dimensions for denormalization (multi-monitor safe).
+            this._updateScreenMetrics();
 
             const somMessages = [
                 {
@@ -704,7 +778,16 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                 // 5. Format elements list for LLM
                 let elementsText = '  (No se detectaron elementos UI relevantes. La pantalla puede estar en blanco, cargando, o el sistema no pudo leerla. Si esperabas ver algo, intenta usar scroll, presionar tecla escape por si hay un modal trabado, o switch_app para asegurarte que estás en la aplicación correcta.)';
                 if (llmElements.length > 0) {
-                    elementsText = llmElements.map(e => `  #${e.id} [${e.label}] (${e.type}) bbox=[${e.bbox.x.toFixed(2)},${e.bbox.y.toFixed(2)}]`).join('\n');
+                    elementsText = llmElements.map((e) => {
+                        const actions = Array.isArray(e.actions)
+                            ? e.actions.filter((a) => String(a).toLowerCase() !== 'focus').slice(0, 5)
+                            : [];
+                        const actionText = actions.length > 0 ? actions.join('|') : 'none';
+                        const stateText = e.state
+                            ? `${e.state.enabled === false ? 'disabled' : 'enabled'}${e.state.focused ? ',focused' : ''}`
+                            : 'unknown';
+                        return `  #${e.id} [${e.label}] (${e.type}) bbox=[${e.bbox.x.toFixed(3)},${e.bbox.y.toFixed(3)},${e.bbox.w.toFixed(3)},${e.bbox.h.toFixed(3)}] actions=${actionText} state=${stateText}`;
+                    }).join('\n');
                 }
 
                 // 6. Send element list to LLM (text-only, no image)
@@ -842,25 +925,18 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                             console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
                             actionSummary = `SELECT #${args.element_id} — NOT FOUND`;
                         } else {
-                            let px, py;
-                            if (targetElement.center) {
-                                px = targetElement.center.x;
-                                py = targetElement.center.y;
-                            } else if (targetElement.bbox) {
-                                px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
-                                py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
-                            }
-
-                            if (px < 1 && py < 1) {
-                                px = Math.round(px * this.screenWidth);
-                                py = Math.round(py * this.screenHeight);
-                            }
-
                             const label = `${targetElement.label || targetElement.type}`;
-                            console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
+                            this.lastSelectedElement = targetElement;
 
-                            await this._executeToolDirect('click', { px, py, label });
-                            actionSummary = `SELECT #${targetElement.id} [${label}]`;
+                            const semantic = await this._executeWindowsSemanticForElement(targetElement, { preferred: 'invoke' });
+                            if (semantic.success) {
+                                actionSummary = `SELECT #${targetElement.id} [${label}] via ${semantic.action}`;
+                            } else {
+                                const { px, py } = this._getElementPixelCenter(targetElement);
+                                console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
+                                await this._executeToolDirect('click', { px, py, label });
+                                actionSummary = `SELECT #${targetElement.id} [${label}]`;
+                            }
                         }
                     }
                     else if (fnName === 'type_text') {
@@ -879,6 +955,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                             await this._wait(1000); // Reduced from 2000ms — app opens/focuses faster now
 
                             this.currentApp = this._sanitizeAppName(args.app_name); // Update context with sanitized app name
+                            this.lastSelectedElement = null;
                             actionSummary = `SWITCH APP to "${args.app_name}"`;
 
                             lastElementsHash = null;
@@ -909,18 +986,12 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                                     console.warn(`⚠️ [ScreenAgent] ${stepStr}: Element #${sub.element_id} not found`);
                                     continue;
                                 }
-
-                                let px, py;
-                                if (targetElement.center) {
-                                    px = targetElement.center.x;
-                                    py = targetElement.center.y;
-                                } else if (targetElement.bbox) {
-                                    px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
-                                    py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
+                                this.lastSelectedElement = targetElement;
+                                const semantic = await this._executeWindowsSemanticForElement(targetElement, { preferred: 'invoke' });
+                                if (!semantic.success) {
+                                    const { px, py } = this._getElementPixelCenter(targetElement);
+                                    await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
                                 }
-                                if (px < 1 && py < 1) { px = Math.round(px * this.screenWidth); py = Math.round(py * this.screenHeight); }
-
-                                await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
                                 lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                             }
                             else if (sub.action === 'type') {
@@ -1080,10 +1151,9 @@ CONTEXTO DE VENTANAS:
 
         let summary = '';
         if (fnName === 'click') {
-            const px = Math.round(args.x * this.screenWidth);
-            const py = Math.round(args.y * this.screenHeight);
-            summary = `CLICK "${args.label}" at (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`;
-            await this._saveDebugScreenshot(base64, { x: px, y: py, label: args.label }, iteration);
+            const clickPoint = this._normalizedToPixel(Number(args.x), Number(args.y));
+            summary = `CLICK "${args.label}" at (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${clickPoint.px}, ${clickPoint.py})`;
+            await this._saveDebugScreenshot(base64, { x: clickPoint.px, y: clickPoint.py, label: args.label }, iteration);
         } else if (fnName === 'type_text') {
             summary = `TYPE "${args.text}" en "${args.label}"`;
         } else if (fnName === 'key_press') {
@@ -1290,6 +1360,7 @@ CONTEXTO DE VENTANAS:
             const { mouse, Button, Point } = await this._getNutJS();
 
             if (fnName === 'click') {
+                const clickPoint = this._clampPixelPoint(Number(args.px), Number(args.py));
                 // --- LIQUID BUBBLE LOGIC REMOVED ---
                 /*
                 // Before clicking, drag the bubble near the target
@@ -1306,9 +1377,9 @@ CONTEXTO DE VENTANAS:
                 */
                 // --- LIQUID BUBBLE LOGIC END ---
 
-                console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${args.px}, ${args.py})`);
+                console.log(`🖱️ [ScreenAgent] Deterministic click "${args.label}" at pixel (${clickPoint.px}, ${clickPoint.py})`);
                 // speedFactor 3.0 → duration = min(800,max(300,dist*0.6))/3.0 ≈ 100–267ms vs old 272–727ms
-                await this._humanLikeMove(args.px, args.py, 3.0);
+                await this._humanLikeMove(clickPoint.px, clickPoint.py, 3.0);
                 if (this.abortRequested) return;
                 await this._wait(30);
                 if (this.abortRequested) return;
@@ -1374,9 +1445,21 @@ CONTEXTO DE VENTANAS:
      * Open an application by name (macOS)
      */
     async _openApp(appName) {
+        const normalizedApp = this._sanitizeAppName(appName);
+        if (this.isWindows && this.windowsCompanion) {
+            try {
+                await this.windowsCompanion.openApp(normalizedApp);
+                await this._wait(300);
+                await this.windowsCompanion.focusApp(normalizedApp);
+                await this._wait(250);
+                return;
+            } catch (e) {
+                console.warn(`⚠️ [ScreenAgent] Windows open/focus failed for "${normalizedApp}": ${e.message}`);
+            }
+        }
+
         return new Promise((resolve) => {
             const { exec } = require('child_process');
-            const normalizedApp = this._sanitizeAppName(appName);
 
             // Strategy: Open first heavily, then activate specifically
             // 1. 'open -a' (Launches or brings forward usually)
@@ -1417,6 +1500,16 @@ CONTEXTO DE VENTANAS:
      */
     async _ensureFocus(appName) {
         if (!appName) return;
+        if (this.isWindows && this.windowsCompanion) {
+            try {
+                await this.windowsCompanion.focusApp(this._sanitizeAppName(appName));
+                await this._wait(100);
+                return;
+            } catch (e) {
+                console.warn(`⚠️ [ScreenAgent] Windows focus failed for ${appName}: ${e.message}`);
+            }
+        }
+
         return new Promise((resolve) => {
             // console.log(`📱 [ScreenAgent] Ensuring focus (Fast): "${appName}"`);
             const { exec } = require('child_process');
@@ -1542,12 +1635,27 @@ CONTEXTO DE VENTANAS:
             if (!skipFocus) await this._ensureFocus(this.currentApp);
             if (this.abortRequested) return;
 
-            const { mouse, keyboard, Button, Key, Point } = await this._getNutJS();
+            if (fnName === 'type_text' && this.isWindows) {
+                const viaSemanticValue = await this._tryWindowsSetValue(args.text);
+                if (viaSemanticValue) {
+                    console.log(`⌨️ [ScreenAgent] setValue() aplicado por UIA`);
+                    return;
+                }
+            }
+
+            if (fnName === 'scroll' && this.isWindows) {
+                const viaSemanticScroll = await this._tryWindowsScroll(args.direction, args.amount);
+                if (viaSemanticScroll) {
+                    console.log(`📜 [ScreenAgent] scroll() aplicado por UIA`);
+                    return;
+                }
+            }
+
+            const { mouse, keyboard, Button, Key } = await this._getNutJS();
 
             if (fnName === 'click') {
                 // Denormalize from 0-1 to pixel coordinates
-                const px = Math.round(args.x * this.screenWidth);
-                const py = Math.round(args.y * this.screenHeight);
+                const clickPoint = this._normalizedToPixel(Number(args.x), Number(args.y));
 
                 // --- LIQUID BUBBLE LOGIC REMOVED ---
                 /*
@@ -1565,8 +1673,8 @@ CONTEXTO DE VENTANAS:
                 */
                 // --- LIQUID BUBBLE LOGIC END ---
 
-                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${px}, ${py})`);
-                await this._humanLikeMove(px, py, 3.0);
+                console.log(`🖱️ [ScreenAgent] Clicking "${args.label}" at normalized (${args.x.toFixed(3)}, ${args.y.toFixed(3)}) → pixel (${clickPoint.px}, ${clickPoint.py})`);
+                await this._humanLikeMove(clickPoint.px, clickPoint.py, 3.0);
                 if (this.abortRequested) return;
                 await this._wait(30);
                 if (this.abortRequested) return;
@@ -1607,6 +1715,187 @@ CONTEXTO DE VENTANAS:
         } catch (e) {
             console.error('❌ [ScreenAgent] Execute tool failed:', e.message);
         }
+    }
+
+    _isInteractiveElement(element) {
+        if (!element) return false;
+        if (element.interactive) return true;
+        const actions = Array.isArray(element.actions) ? element.actions : [];
+        const semanticActions = actions.filter((a) => String(a).toLowerCase() !== 'focus');
+        if (semanticActions.length > 0) return true;
+        const type = String(element.type || '').toLowerCase();
+        return /(button|edit|menuitem|checkbox|radiobutton|tabitem|combobox|listitem|hyperlink)/.test(type);
+    }
+
+    _isUsableDetectionElement(element) {
+        if (!element || !element.bbox) return false;
+        const { x, y, w, h } = element.bbox;
+        if (![x, y, w, h].every((n) => Number.isFinite(n))) return false;
+        if (w <= 0 || h <= 0) return false;
+        if (x < -0.001 || y < -0.001 || x > 1.001 || y > 1.001) return false;
+        if (w > 1.001 || h > 1.001) return false;
+
+        if (element.state && element.state.offscreen) return false;
+
+        const area = w * h;
+        if (area < 0.00002) return false;
+        const interactive = this._isInteractiveElement(element);
+        if (!interactive && area > 0.9) return false;
+
+        if (!interactive) {
+            const type = String(element.type || '').toLowerCase();
+            const label = this._normalizeText(element.label || '');
+            if (type === 'pane' && (label === '' || label === 'pane')) return false;
+            if (type === 'window' && area > 0.7) return false;
+        }
+        return true;
+    }
+
+    _elementPriorityScore(element) {
+        if (!element || !element.bbox) return 0;
+        const actions = Array.isArray(element.actions)
+            ? element.actions.map((a) => String(a).toLowerCase())
+            : [];
+        const semanticCount = actions.filter((a) => a !== 'focus').length;
+        const area = Number(element.bbox.w || 0) * Number(element.bbox.h || 0);
+        const interactiveBonus = this._isInteractiveElement(element) ? 10 : 0;
+        const enabledBonus = element.state && element.state.enabled === false ? -6 : 0;
+        return interactiveBonus + (semanticCount * 2) + enabledBonus - Math.min(4, area * 4);
+    }
+
+    _clampPixelPoint(px, py) {
+        const minX = Number(this.screenOriginX || 0);
+        const minY = Number(this.screenOriginY || 0);
+        const maxX = minX + Math.max(1, Number(this.screenWidth || 1)) - 1;
+        const maxY = minY + Math.max(1, Number(this.screenHeight || 1)) - 1;
+
+        const safeX = Number.isFinite(px) ? px : minX;
+        const safeY = Number.isFinite(py) ? py : minY;
+
+        return {
+            px: Math.round(Math.max(minX, Math.min(maxX, safeX))),
+            py: Math.round(Math.max(minY, Math.min(maxY, safeY)))
+        };
+    }
+
+    _normalizedToPixel(x, y) {
+        const px = Number(this.screenOriginX || 0) + (Number(x || 0) * Number(this.screenWidth || 1));
+        const py = Number(this.screenOriginY || 0) + (Number(y || 0) * Number(this.screenHeight || 1));
+        return this._clampPixelPoint(px, py);
+    }
+
+    _getElementPixelCenter(targetElement) {
+        if (!targetElement) {
+            return this._clampPixelPoint(this.screenOriginX, this.screenOriginY);
+        }
+
+        let rawX = NaN;
+        let rawY = NaN;
+
+        if (targetElement.center && Number.isFinite(targetElement.center.x) && Number.isFinite(targetElement.center.y)) {
+            rawX = Number(targetElement.center.x);
+            rawY = Number(targetElement.center.y);
+            const normalizedCenter = rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1;
+            if (normalizedCenter) {
+                return this._normalizedToPixel(rawX, rawY);
+            }
+            return this._clampPixelPoint(rawX, rawY);
+        }
+
+        if (targetElement.bbox) {
+            const cx = Number(targetElement.bbox.x || 0) + (Number(targetElement.bbox.w || 0) / 2);
+            const cy = Number(targetElement.bbox.y || 0) + (Number(targetElement.bbox.h || 0) / 2);
+            return this._normalizedToPixel(cx, cy);
+        }
+
+        return this._clampPixelPoint(this.screenOriginX, this.screenOriginY);
+    }
+
+    async _executeWindowsSemanticForElement(element, options = {}) {
+        if (!this.isWindows || !this.windowsCompanion || !element || !element.nativeRef) {
+            return { success: false, error: 'NOT_AVAILABLE' };
+        }
+
+        const preferred = String(options.preferred || 'invoke');
+        const available = Array.isArray(element.actions)
+            ? element.actions.map((a) => String(a).toLowerCase())
+            : [];
+
+        const candidates = [];
+        const pushCandidate = (name) => {
+            const key = String(name || '').toLowerCase();
+            if (!key) return;
+            if (candidates.includes(key)) return;
+            if (available.length === 0 || available.includes(key) || key === 'invoke' || key === 'focus' || key === 'click') {
+                candidates.push(key);
+            }
+        };
+
+        pushCandidate(preferred);
+        if (preferred.toLowerCase() === 'invoke') {
+            pushCandidate('invoke');
+            pushCandidate('select');
+            pushCandidate('toggle');
+            pushCandidate('expand');
+            pushCandidate('click');
+            pushCandidate('focus');
+        } else if (preferred.toLowerCase() === 'setvalue') {
+            pushCandidate('setvalue');
+            pushCandidate('focus');
+        } else if (preferred.toLowerCase() === 'scroll') {
+            pushCandidate('scroll');
+            pushCandidate('focus');
+        } else if (preferred.toLowerCase() === 'click') {
+            pushCandidate('click');
+            pushCandidate('focus');
+        }
+
+        let lastError = null;
+        for (const action of candidates) {
+            try {
+                const payload = {
+                    appName: this.currentApp,
+                    element: element.nativeRef,
+                    action
+                };
+
+                if (action === 'setvalue') {
+                    payload.value = String(options.value || '');
+                }
+                if (action === 'scroll') {
+                    payload.direction = options.direction || 'down';
+                    payload.amount = options.amount || 'medium';
+                }
+
+                const result = await this.windowsCompanion.performAction(payload);
+                if (result && result.success) {
+                    return { success: true, action: result.action || action };
+                }
+            } catch (e) {
+                lastError = e.message;
+            }
+        }
+
+        return { success: false, error: lastError || 'SEMANTIC_ACTION_FAILED' };
+    }
+
+    async _tryWindowsSetValue(text) {
+        if (!this.isWindows || !this.lastSelectedElement) return false;
+        const result = await this._executeWindowsSemanticForElement(this.lastSelectedElement, {
+            preferred: 'setValue',
+            value: String(text || '')
+        });
+        return !!result.success;
+    }
+
+    async _tryWindowsScroll(direction = 'down', amount = 'medium') {
+        if (!this.isWindows || !this.lastSelectedElement) return false;
+        const result = await this._executeWindowsSemanticForElement(this.lastSelectedElement, {
+            preferred: 'scroll',
+            direction: direction || 'down',
+            amount: amount || 'medium'
+        });
+        return !!result.success;
     }
 
     async _typeTextInterruptible(keyboard, text, label = '') {
@@ -1853,9 +2142,20 @@ CONTEXTO DE VENTANAS:
     _hashElements(elements) {
         if (!elements || elements.length === 0) return 'empty';
 
-        // Create a simple hash from element properties
+        // Build a stable signature based on runtime reference + coarse geometry + state.
         const signature = elements
-            .map(e => `${e.id}:${e.label}:${e.type}`)
+            .map((e) => {
+                const runtime = String(e?.nativeRef?.runtimeId || '');
+                const label = this._normalizeText(e?.label || '').slice(0, 40);
+                const type = String(e?.type || '').toLowerCase();
+                const bbox = e?.bbox
+                    ? `${Number(e.bbox.x || 0).toFixed(3)},${Number(e.bbox.y || 0).toFixed(3)},${Number(e.bbox.w || 0).toFixed(3)},${Number(e.bbox.h || 0).toFixed(3)}`
+                    : '0,0,0,0';
+                const state = e?.state
+                    ? `${e.state.enabled === false ? 0 : 1}${e.state.offscreen ? 1 : 0}${e.state.focused ? 1 : 0}`
+                    : '100';
+                return `${runtime}|${type}|${label}|${bbox}|${state}`;
+            })
             .sort()
             .join('|');
 
@@ -1899,6 +2199,12 @@ CONTEXTO DE VENTANAS:
             } catch (e) {
                 console.error('⚠️ [ScreenAgent] Failed to restore hidden windows on direct stop:', e);
             }
+        }
+    }
+
+    async shutdown() {
+        if (this.windowsCompanion) {
+            await this.windowsCompanion.stop();
         }
     }
 }
