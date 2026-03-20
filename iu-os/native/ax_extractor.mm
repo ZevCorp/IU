@@ -233,10 +233,15 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
       for (NSRunningApplication *app in runningApps) {
         NSString *appLocalizedName = [app localizedName];
         NSString *localizedLower = [appLocalizedName lowercaseString];
-        if ([appLocalizedName isEqualToString:targetAppName] ||
-            [localizedLower isEqualToString:needle] ||
-            [localizedLower containsString:needle] ||
-            [needle containsString:localizedLower]) {
+        BOOL localizedMatches = NO;
+        if (appLocalizedName && localizedLower) {
+          localizedMatches =
+              [appLocalizedName isEqualToString:targetAppName] ||
+              [localizedLower isEqualToString:needle] ||
+              [localizedLower containsString:needle] ||
+              [needle containsString:localizedLower];
+        }
+        if (localizedMatches) {
           targetApp = app;
           break;
         }
@@ -247,12 +252,16 @@ napi_value ExtractAXTree(napi_env env, napi_callback_info info) {
         for (NSRunningApplication *app in runningApps) {
           NSString *bundleId = [app bundleIdentifier];
           NSString *bundleLower = [bundleId lowercaseString];
-          if (bundleId &&
-              ([bundleId isEqualToString:targetAppName] ||
-               [bundleLower isEqualToString:needle] ||
-               [bundleLower containsString:needle] ||
-               [needle containsString:bundleLower] ||
-               [bundleId.lastPathComponent isEqualToString:targetAppName])) {
+          BOOL bundleMatches = NO;
+          if (bundleId && bundleLower) {
+            bundleMatches =
+                [bundleId isEqualToString:targetAppName] ||
+                [bundleLower isEqualToString:needle] ||
+                [bundleLower containsString:needle] ||
+                [needle containsString:bundleLower] ||
+                [bundleId.lastPathComponent isEqualToString:targetAppName];
+          }
+          if (bundleMatches) {
             targetApp = app;
             break;
           }

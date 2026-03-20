@@ -1,3 +1,5 @@
+import QRCode from 'qrcode';
+
 /* =====================================================
    I&Ü LANDING PAGE - Logic
    ===================================================== */
@@ -25,6 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initWaitlist();
     initReadingMode();
     initVideoAutoplay();
+    initShareQR();
 
     window.dispatchEvent(new Event('scroll'));
     console.log('🌟 I&Ü Landing Page Ready');
@@ -71,6 +74,64 @@ function initVideoAutoplay() {
 
     // Also re-try on any scroll/touch (helps after iOS low-power mode)
     document.addEventListener('touchstart', tryPlay, { once: true, passive: true });
+}
+
+function initShareQR() {
+    const openBtn = document.getElementById('open-qr-btn') as HTMLButtonElement | null;
+    const closeBtn = document.getElementById('close-qr-btn') as HTMLButtonElement | null;
+    const modal = document.getElementById('qr-modal') as HTMLElement | null;
+    const canvas = document.getElementById('share-qr-canvas') as HTMLCanvasElement | null;
+    const caption = document.getElementById('qr-share-url') as HTMLElement | null;
+
+    if (!openBtn || !closeBtn || !modal || !canvas) return;
+
+    const shareUrl = window.location.href;
+    if (caption) {
+        caption.textContent = shareUrl;
+    }
+
+    const renderQR = async () => {
+        try {
+            await QRCode.toCanvas(canvas, shareUrl, {
+                width: 260,
+                margin: 1,
+                color: {
+                    dark: '#050505',
+                    light: '#ffffff'
+                }
+            });
+        } catch (error) {
+            console.error('QR render failed:', error);
+        }
+    };
+
+    const openModal = async () => {
+        modal.classList.add('active');
+        modal.setAttribute('aria-hidden', 'false');
+        await renderQR();
+    };
+
+    const closeModal = () => {
+        modal.classList.remove('active');
+        modal.setAttribute('aria-hidden', 'true');
+    };
+
+    openBtn.addEventListener('click', () => {
+        void openModal();
+    });
+
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+            closeModal();
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && modal.classList.contains('active')) {
+            closeModal();
+        }
+    });
 }
 
 

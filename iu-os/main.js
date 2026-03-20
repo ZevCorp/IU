@@ -7,12 +7,14 @@ const { app, BrowserWindow, screen, ipcMain, systemPreferences, desktopCapturer,
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
+const { resolveInceptionConfig } = require('./InceptionEnv');
+const InceptionBootstrapper = require('./InceptionBootstrapper');
 
 // Load .env from multiple locations (dev and production)
 const envPaths = [
+    path.join(app.getPath('userData'), '.env'),             // User data folder
     path.join(__dirname, '.env'),                           // Dev: project root
     path.join(process.resourcesPath || '', '.env'),         // Packaged: resources
-    path.join(app.getPath('userData'), '.env'),             // User data folder
     path.join(path.dirname(process.execPath), '.env'),      // Same folder as exe
 ];
 
@@ -68,18 +70,35 @@ if (process.env.ANTHROPIC_API_KEY) {
     console.log('⚠️ ANTHROPIC_API_KEY not set. Anthropic provider disabled.');
 }
 
-console.log(`🔀 [ModelSwitch] Provider: ${ModelSwitch.PROVIDER}, Model: ${ModelSwitch.MODELS[ModelSwitch.PROVIDER]?.vision || ModelSwitch.MODELS[ModelSwitch.PROVIDER]?.chat}`);
+const inceptionConfig = resolveInceptionConfig(process.env);
+if (inceptionConfig.activeKey) {
+    ModelSwitch.initInception(inceptionConfig.activeKey, {
+        source: inceptionConfig.hasPersonalKey ? 'personal-env' : 'bootstrap-env',
+        baseURL: inceptionConfig.baseUrl
+    });
+} else {
+    console.log('⚠️ INCEPTION_API_KEY / IU_BOOTSTRAP_INCEPTION_API_KEY not set. Inception provider disabled.');
+}
+
+const providerSummary = ModelSwitch.getProviderSummary();
+console.log(`🔀 [ModelSwitch] Chat: ${providerSummary.chatProvider} (${providerSummary.models[providerSummary.chatProvider]?.chat || 'n/a'}) | Vision: ${providerSummary.visionProvider} (${providerSummary.models[providerSummary.visionProvider]?.vision || 'n/a'})`);
 
 // Action System: Planner + Screen Agent + Brain
 const ActionPlanner = require('./ActionPlanner');
 const ScreenAgent = require('./ScreenAgent');
 const Brain = require('./Brain');
+const ExecutionSessionManager = require('./ExecutionSessionManager');
 // Browser Agent: control transversal de páginas web via CDP
 const BrowserAgent = require('./BrowserAgent');
+const { startBrowserCoreService, createBrowserCoreClient, toClientOptions } = require('./browser-core/dist');
 let actionPlanner = null;
 let screenAgent = null;
 let brain = null;
 let browserAgent = null; // Instanciado tras crear la mainWindow
+let browserCoreService = null;
+let browserCoreClient = null;
+const executionSessions = new ExecutionSessionManager();
+let inceptionBootstrapper = null;
 
 
 // Auto-updater for automatic updates from GitHub Releases
@@ -92,6 +111,11 @@ const consolidator = require('./Consolidator'); // Nightly Memory Consolidation
 // Configure auto-updater
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
+
+function isMissingUpdateConfigError(err) {
+    const msg = String(err?.message || err || '');
+    return msg.includes('app-update.yml') && msg.includes('ENOENT');
+}
 
 // Fix for OpenAI File/Blob upload in Node environments without globals
 if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefined') {
@@ -230,7 +254,9 @@ const WINDOW_MODES = {
 };
 
 const SETTINGS_PATH = path.join(app.getPath('userData'), 'user_settings.json');
-let currentWindowMode = WINDOW_MODES.BOOTLOADER;
+const USER_ENV_PATH = path.join(app.getPath('userData'), '.env');
+const INCEPTION_ONBOARDING_STATE_PATH = path.join(app.getPath('userData'), 'inception_onboarding.json');
+let currentWindowMode = WINDOW_MODES.SMALL;
 
 // Hand mesh style: 'v2' (único estilo activo)
 let handMeshStyle = 'v2';
@@ -415,6 +441,7 @@ async function requestCameraAccess() {
 function getWindowBounds(mode) {
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width, height } = primaryDisplay.workAreaSize;
+    const { x: areaX, y: areaY } = primaryDisplay.workArea;
 
     let w, h, x, y;
 
@@ -428,8 +455,8 @@ function getWindowBounds(mode) {
         case WINDOW_MODES.SMALL:
             w = 250; // Trimmer size for a smaller invisible bounding box
             h = 250;
-            x = Math.round((width - w) / 2);
-            y = Math.round((height - h) / 2);
+            x = areaX + 20;
+            y = areaY + 20;
             break;
         case WINDOW_MODES.MEDIUM:
             w = 260;
@@ -554,7 +581,13 @@ function createWindow() {
     }
     mainWindow.setAlwaysOnTop(true, 'screen-saver', 1);
 
-    mainWindow.loadFile('renderer/index.html');
+    const startupQuery = {};
+    if (currentWindowMode === WINDOW_MODES.SMALL) {
+        startupQuery.mode = 'small';
+    } else if (currentWindowMode === WINDOW_MODES.BOOTLOADER) {
+        startupQuery.mode = 'bootloader';
+    }
+    mainWindow.loadFile('renderer/index.html', { query: startupQuery });
 
     mainWindow.once('ready-to-show', () => {
         console.log(`🚀 [Startup] Main window ready. Mode: ${currentWindowMode}`);
@@ -869,8 +902,8 @@ ipcMain.on('close-narration-space', () => {
 // Synthesize Narration via LLM
 ipcMain.handle('synthesize-narration', async (event, { timeline }) => {
     console.log(`🌌 [Narration] Synthesizing narrative from ${timeline.length} events...`);
-    if (!ModelSwitch.isReady()) {
-        return { success: false, error: 'Model provider no inicializado' };
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        return { success: false, error: 'Provider de texto no inicializado' };
     }
 
     try {
@@ -929,9 +962,9 @@ ipcMain.on('chat-send-message', async (event, text) => {
         LearningAgent.addTeachingNote(text);
     }
 
-    if (!ModelSwitch.isReady()) {
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
         if (chatWindow && !chatWindow.isDestroyed()) {
-            chatWindow.webContents.send('chat-response', { error: 'Model provider no inicializado (OpenAI o Gemini)' });
+            chatWindow.webContents.send('chat-response', { error: 'Provider de texto no inicializado' });
         }
         return;
     }
@@ -1078,6 +1111,7 @@ ipcMain.handle('learning-delete-workflow', async (event, { file }) => {
 let lastMouseButtonState = 0;
 let isRecordingClick = false;
 const COMMAND_MODIFIER_FLAG = 1 << 20;
+const OPTION_MODIFIER_FLAG = 1 << 19;
 
 const commandHoldOverride = {
     isPressed: false,
@@ -1092,6 +1126,16 @@ const commandHoldOverride = {
 
 let activeScreenFlow = null;
 let activeScreenFlowSeq = 0;
+
+function syncActiveScreenFlow(sessionId) {
+    const flow = sessionId ? executionSessions.toFlow(sessionId) : null;
+    if (!flow) {
+        activeScreenFlow = null;
+        return null;
+    }
+    activeScreenFlow = { ...flow, localSeq: ++activeScreenFlowSeq };
+    return activeScreenFlow;
+}
 
 function setCommandHoldStickyFeedback(isListening, message = '') {
     try {
@@ -1113,9 +1157,9 @@ function setCommandHoldStickyFeedback(isListening, message = '') {
 function getClarificationPrompt(transcript = '') {
     const cleaned = String(transcript || '').trim();
     if (!cleaned) {
-        return 'No te escuché bien. Mantén Command y dime exactamente qué debo hacer ahora.';
+        return 'No te escuché bien. Mantén Command + Option y dime exactamente qué debo hacer ahora.';
     }
-    return `Te escuché: "${cleaned}". No me quedó clara la acción. Mantén Command y dime una instrucción concreta (app + acción).`;
+    return `Te escuché: "${cleaned}". No me quedó clara la acción. Mantén Command + Option y dime una instrucción concreta (app + acción).`;
 }
 
 async function waitForScreenAgentIdle(timeoutMs = 2000) {
@@ -1129,34 +1173,67 @@ async function waitForScreenAgentIdle(timeoutMs = 2000) {
 async function startManagedScreenAction(goal, app, stepsHint, options = {}) {
     if (!screenAgent) return { success: false, error: 'Screen Agent not ready' };
 
-    const flow = {
-        id: ++activeScreenFlowSeq,
-        goal,
-        app,
-        stepsHint,
-        source: options.source || 'unknown',
-        startedAt: Date.now()
-    };
-    activeScreenFlow = flow;
+    let session = options.sessionId ? executionSessions.getSession(options.sessionId) : null;
+    if (!session) {
+        session = executionSessions.startSession({
+            goal,
+            app,
+            stepsHint,
+            source: options.source || 'unknown'
+        });
+    } else {
+        session = executionSessions.markRunning(session.id, { goal, app, stepsHint }) || session;
+    }
+    const flow = syncActiveScreenFlow(session.id);
 
     if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('action-started', { goal, app });
+        mainWindow.webContents.send('action-started', { goal, app, sessionId: session.id });
     }
 
-    const result = await screenAgent.executeAction(goal, app, stepsHint);
+    const result = await screenAgent.executeAction(goal, app, stepsHint, { sessionId: session.id });
 
-    if (activeScreenFlow && activeScreenFlow.id === flow.id) {
+    if (activeScreenFlow && flow && activeScreenFlow.id === flow.id) {
         if (result && result.awaitingUserInput) {
-            activeScreenFlow = { ...flow, awaitingUserInput: true, waitPrompt: result.summary || '' };
+            executionSessions.markWaitingUser(session.id, {
+                waitPrompt: result.summary || '',
+                summary: result.summary || '',
+                runtimeContext: result.runtimeContext,
+                executionState: result.executionState,
+                interruption: result.interruption,
+                result
+            });
+            syncActiveScreenFlow(session.id);
         } else if (result && result.aborted) {
-            activeScreenFlow = { ...flow, interruptedAt: Date.now() };
-        } else {
+            executionSessions.markInterrupted(session.id, {
+                summary: result.summary || '',
+                runtimeContext: result.runtimeContext,
+                executionState: result.executionState,
+                interruption: result.interruption,
+                result
+            });
+            syncActiveScreenFlow(session.id);
+        } else if (result && result.success) {
+            executionSessions.markCompleted(session.id, {
+                summary: result.summary || '',
+                runtimeContext: result.runtimeContext,
+                executionState: result.executionState,
+                result
+            });
             activeScreenFlow = null;
             commandHoldOverride.interruptedFlowContext = null;
+            executionSessions.clearCurrentSession();
+        } else {
+            executionSessions.markFailed(session.id, {
+                summary: result?.summary || result?.error || '',
+                result
+            });
+            activeScreenFlow = null;
+            commandHoldOverride.interruptedFlowContext = null;
+            executionSessions.clearCurrentSession();
         }
     }
 
-    return result;
+    return { ...result, sessionId: session.id };
 }
 
 async function startCommandHoldRecording() {
@@ -1353,41 +1430,25 @@ async function executeFromCommandHoldTranscript(transcript) {
     contextManager.addMessage('user', transcript, 'command_hold_transcription');
 
     // In-flow clarification: resume same execution context, avoid full replanning/reset.
-    if (commandHoldOverride.interruptedFlowContext) {
-        const flow = commandHoldOverride.interruptedFlowContext;
+    const resumableSession = executionSessions.hasResumableSession()
+        ? executionSessions.getCurrentSession()
+        : null;
+    if (commandHoldOverride.interruptedFlowContext || resumableSession) {
+        const flow = commandHoldOverride.interruptedFlowContext || executionSessions.toInterruptedFlowContext(resumableSession.id);
         const runtimeNow = (typeof screenAgent.getRuntimeContextSnapshot === 'function')
             ? screenAgent.getRuntimeContextSnapshot()
             : { app: '', window: '', recentActions: [] };
         const runtime = {
-            app: runtimeNow?.app || flow.runtimeContext?.app || '',
-            window: runtimeNow?.window || flow.runtimeContext?.window || '',
+            app: runtimeNow?.app || flow?.runtimeContext?.app || '',
+            window: runtimeNow?.window || flow?.runtimeContext?.window || '',
             recentActions: (runtimeNow?.recentActions && runtimeNow.recentActions.length > 0)
                 ? runtimeNow.recentActions
-                : (flow.runtimeContext?.recentActions || [])
+                : (flow?.runtimeContext?.recentActions || [])
         };
-        const pendingTypeHint = flow.pendingTypeText
-            ? `\nREANUDACIÓN DE ESCRITURA:
-- Fuiste interrumpido mientras escribías en "${flow.pendingTypeLabel || 'campo actual'}".
-- Primero completa exactamente este texto pendiente antes de aplicar la aclaración:
-"${flow.pendingTypeText}"`
-            : '';
-        const runtimeContextHint = `\nCONTEXTO ACTUAL PRIORITARIO:
-- App detectada: "${runtime.app || flow.app || ''}"
-- Ventana/Módulo detectado: "${runtime.window || ''}"
-- Acciones recientes ya ejecutadas: ${(runtime.recentActions || []).slice(-6).join(' | ') || 'ninguna'}`;
-        const continuationStepsHint = `CONTINUIDAD OBLIGATORIA:
-- NO reinicies el flujo ni vuelvas al primer paso.
-- NO repitas subobjetivos ya completados o claramente iniciados, salvo instrucción explícita.
-- NO limpies o sobrescribas datos ya válidos sin que el usuario lo pida.
-- Continúa desde el estado visual actual y aplica la aclaración del usuario de forma localizada.
-- Si el estado visual actual está en una etapa posterior, NO pidas datos de etapas anteriores.
-
-ACLARACIÓN DEL USUARIO: "${transcript}"
-${pendingTypeHint}
-${runtimeContextHint}
-
-PASOS BASE ORIGINALES:
-${flow.stepsHint || ''}`;
+        const sessionId = resumableSession?.id || flow?.sessionId || activeScreenFlow?.id;
+        const continuation = sessionId
+            ? executionSessions.buildContinuation(sessionId, transcript, { runtimeContext: runtime })
+            : null;
 
         commandHoldOverride.awaitingClarification = false;
         commandHoldOverride.clarificationPrompt = '';
@@ -1398,7 +1459,12 @@ ${flow.stepsHint || ''}`;
         stickyFace.showMessage({ title: 'Asistente', body: 'Entendido, continúo desde aquí.' }, 2400);
 
         await waitForScreenAgentIdle();
-        await startManagedScreenAction(flow.goal, flow.app, continuationStepsHint, { source: 'command_hold_continuation' });
+        if (continuation) {
+            await startManagedScreenAction(continuation.goal, continuation.app, continuation.stepsHint, {
+                source: 'command_hold_continuation',
+                sessionId: continuation.session.id
+            });
+        }
         return;
     }
 
@@ -1425,7 +1491,7 @@ ${flow.stepsHint || ''}`;
             brain.scheduleTask(plan.task, date);
         }
         commandHoldOverride.awaitingClarification = true;
-        commandHoldOverride.clarificationPrompt = 'Recordatorio agendado. Si quieres continuar con la automatización, mantén Command y dime el siguiente paso.';
+        commandHoldOverride.clarificationPrompt = 'Recordatorio agendado. Si quieres continuar con la automatización, mantén Command + Option y dime el siguiente paso.';
         stickyFace.showMessage({ title: 'Listo', body: commandHoldOverride.clarificationPrompt }, 120000);
         return;
     }
@@ -1433,7 +1499,7 @@ ${flow.stepsHint || ''}`;
     if (plan.type === 'play_agario') {
         if (browserAgent) browserAgent.launchAgarIO(plan.nickname);
         commandHoldOverride.awaitingClarification = true;
-        commandHoldOverride.clarificationPrompt = 'Listo. Mantén Command para dar la siguiente orden.';
+        commandHoldOverride.clarificationPrompt = 'Listo. Mantén Command + Option para dar la siguiente orden.';
         stickyFace.showMessage({ title: 'Listo', body: commandHoldOverride.clarificationPrompt }, 120000);
         return;
     }
@@ -1459,40 +1525,57 @@ async function onCommandHoldPressed() {
     commandHoldOverride.active = true;
     commandHoldOverride.processingRelease = false;
     commandHoldOverride.recordingStarted = false;
-    console.log('⌘ [CommandHold] Command pressed: listening override...');
+    console.log('⌘⌥ [CommandHold] Command + Option pressed: listening override...');
 
     if (screenAgent.isRunning) {
         const interruption = (typeof screenAgent.getInterruptionSnapshot === 'function')
             ? screenAgent.getInterruptionSnapshot()
             : { pendingTypeText: '', pendingTypeLabel: '' };
-        commandHoldOverride.interruptedFlowContext = activeScreenFlow
-            ? {
-                goal: activeScreenFlow.goal,
-                app: activeScreenFlow.app,
-                stepsHint: activeScreenFlow.stepsHint,
-                pendingTypeText: interruption.pendingTypeText || '',
-                pendingTypeLabel: interruption.pendingTypeLabel || '',
-                runtimeContext: (typeof screenAgent.getRuntimeContextSnapshot === 'function')
-                    ? screenAgent.getRuntimeContextSnapshot()
-                    : null
-            }
+        const runtimeContext = (typeof screenAgent.getRuntimeContextSnapshot === 'function')
+            ? screenAgent.getRuntimeContextSnapshot()
             : null;
+        const currentSession = executionSessions.getCurrentSession();
+        if (currentSession) {
+            executionSessions.markInterrupted(currentSession.id, {
+                interruption,
+                runtimeContext,
+                executionState: screenAgent.currentExecutionState || null
+            });
+            commandHoldOverride.interruptedFlowContext = executionSessions.toInterruptedFlowContext(currentSession.id);
+            syncActiveScreenFlow(currentSession.id);
+        } else {
+            commandHoldOverride.interruptedFlowContext = activeScreenFlow
+                ? {
+                    goal: activeScreenFlow.goal,
+                    app: activeScreenFlow.app,
+                    stepsHint: activeScreenFlow.stepsHint,
+                    pendingTypeText: interruption.pendingTypeText || '',
+                    pendingTypeLabel: interruption.pendingTypeLabel || '',
+                    runtimeContext
+                }
+                : null;
+        }
         screenAgent.stop({ keepWindowsHidden: true });
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send('action-status', { phase: 'listening_override' });
         }
         await waitForScreenAgentIdle();
     } else if (activeScreenFlow) {
-        commandHoldOverride.interruptedFlowContext = {
-            goal: activeScreenFlow.goal,
-            app: activeScreenFlow.app,
-            stepsHint: activeScreenFlow.stepsHint,
-            pendingTypeText: '',
-            pendingTypeLabel: '',
-            runtimeContext: (typeof screenAgent.getRuntimeContextSnapshot === 'function')
-                ? screenAgent.getRuntimeContextSnapshot()
-                : null
-        };
+        const currentSession = executionSessions.getCurrentSession();
+        if (currentSession) {
+            commandHoldOverride.interruptedFlowContext = executionSessions.toInterruptedFlowContext(currentSession.id);
+        } else {
+            commandHoldOverride.interruptedFlowContext = {
+                goal: activeScreenFlow.goal,
+                app: activeScreenFlow.app,
+                stepsHint: activeScreenFlow.stepsHint,
+                pendingTypeText: '',
+                pendingTypeLabel: '',
+                runtimeContext: (typeof screenAgent.getRuntimeContextSnapshot === 'function')
+                    ? screenAgent.getRuntimeContextSnapshot()
+                    : null
+            };
+        }
     }
     setCommandHoldStickyFeedback(true, 'Escuchando...');
     setTimeout(() => {
@@ -1511,7 +1594,7 @@ async function onCommandHoldPressed() {
 async function onCommandHoldReleased() {
     if (!commandHoldOverride.active || commandHoldOverride.processingRelease) return;
     commandHoldOverride.processingRelease = true;
-    console.log('⌘ [CommandHold] Command released: finishing capture and replanning...');
+    console.log('⌘⌥ [CommandHold] Command + Option released: finishing capture and replanning...');
 
     try {
         stickyFace.stopCommandAttention();
@@ -1529,14 +1612,14 @@ async function onCommandHoldReleased() {
         }
 
         if (transcript && transcript.trim().length > 0) {
-            console.log(`⌘ [CommandHold] Transcript captured: "${transcript}"`);
+            console.log(`⌘⌥ [CommandHold] Transcript captured: "${transcript}"`);
             stickyFace.showMessage({ title: 'Te Escuché', body: transcript.trim() }, 4200);
             // No await: keep Command override reusable immediately while execution continues in background.
             executeFromCommandHoldTranscript(transcript.trim()).catch((err) => {
                 console.error('❌ [CommandHold] Continuation failed:', err?.message || err);
             });
         } else {
-            console.log('⌘ [CommandHold] No transcript captured after release.');
+            console.log('⌘⌥ [CommandHold] No transcript captured after release.');
             commandHoldOverride.awaitingClarification = true;
             commandHoldOverride.clarificationPrompt = getClarificationPrompt('');
             stickyFace.showMessage({ title: 'Necesito Aclaración', body: commandHoldOverride.clarificationPrompt }, 120000);
@@ -1586,18 +1669,20 @@ setInterval(async () => {
 
             if (typeof nativeAddon.getModifierFlags === 'function') {
                 if (commandHoldOverride.hasNativeModifierSupport !== true) {
-                    console.log('⌨️ [CommandHold] Native modifier polling enabled');
+                    console.log('⌨️ [CommandHold] Native modifier polling enabled (Command + Option)');
                     commandHoldOverride.hasNativeModifierSupport = true;
                 }
                 const modifiers = nativeAddon.getModifierFlags();
                 const commandDown = (modifiers & COMMAND_MODIFIER_FLAG) !== 0;
+                const optionDown = (modifiers & OPTION_MODIFIER_FLAG) !== 0;
+                const commandHoldComboDown = commandDown && optionDown;
 
-                if (commandDown && !commandHoldOverride.isPressed) {
+                if (commandHoldComboDown && !commandHoldOverride.isPressed) {
                     commandHoldOverride.isPressed = true;
                     onCommandHoldPressed().catch((err) => {
                         console.error('❌ [CommandHold] Press handling failed:', err.message);
                     });
-                } else if (!commandDown && commandHoldOverride.isPressed) {
+                } else if (!commandHoldComboDown && commandHoldOverride.isPressed) {
                     commandHoldOverride.isPressed = false;
                     onCommandHoldReleased().catch((err) => {
                         console.error('❌ [CommandHold] Release handling failed:', err.message);
@@ -1605,7 +1690,7 @@ setInterval(async () => {
                 }
             } else if (commandHoldOverride.hasNativeModifierSupport !== false) {
                 commandHoldOverride.hasNativeModifierSupport = false;
-                console.warn('⚠️ [CommandHold] Native addon lacks getModifierFlags(). Rebuild native module to enable Command-hold override.');
+                console.warn('⚠️ [CommandHold] Native addon lacks getModifierFlags(). Rebuild native module to enable Command + Option override.');
             }
         } catch (e) {
             // Silence polling errors
@@ -1895,7 +1980,10 @@ ipcMain.on('main-window-pinch-drag', (event, payload) => {
 ipcMain.handle('browser-set-context', (event, payload) => {
     if (!browserAgent) return { success: false, error: 'BrowserAgent not initialized' };
     if (payload && payload.url) {
-        browserAgent.setBrowserContext(payload.url);
+        browserAgent.setBrowserContext(payload.url, {
+            targetId: payload.targetId || '',
+            wsUrl: payload.wsUrl || payload.url
+        });
         const isAgar = browserAgent.isAgarIO;
         // Notificar al renderer el estado actual
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1935,17 +2023,90 @@ ipcMain.handle('browser-get-affordances', async (event) => {
     return await browserAgent.extractAffordances();
 });
 
+ipcMain.handle('browser-get-profiles', async () => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.listProfiles();
+});
+
+ipcMain.handle('browser-get-tabs', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.listTabs(payload?.profile || 'managed');
+});
+
+ipcMain.handle('browser-open', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    const url = payload?.url || '';
+    if (!url) return { ok: false, error: 'missing_url' };
+    return await browserAgent.openUrl(url);
+});
+
+ipcMain.handle('browser-snapshot', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.getSnapshot(payload || {});
+});
+
+ipcMain.handle('browser-act', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.act(payload?.request || payload, payload?.profile || 'managed');
+});
+
+ipcMain.handle('browser-screenshot', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.takeScreenshot(payload || {});
+});
+
+ipcMain.handle('browser-get-console', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.getConsole(payload?.profile || 'managed', payload?.targetId);
+});
+
+ipcMain.handle('browser-get-network', async (event, payload) => {
+    if (!browserAgent) return { ok: false, error: 'BrowserAgent not initialized' };
+    return await browserAgent.getNetwork(payload?.profile || 'managed', payload?.targetId);
+});
+
 /**
  * Devuelve el estado actual del BrowserAgent.
  */
-ipcMain.handle('browser-get-status', (event) => {
+ipcMain.handle('browser-get-status', async (event) => {
     if (!browserAgent) return { active: false };
-    return {
-        active: browserAgent.browserContext.active,
-        app: browserAgent.browserContext.app,
-        url: browserAgent.browserContext.url,
-        isAgarIO: browserAgent.isAgarIO,
-    };
+    return await browserAgent.getStatus();
+});
+
+ipcMain.handle('inception-onboarding-get-state', () => {
+    if (!inceptionBootstrapper) {
+        return {
+            available: false,
+            shouldPrompt: false,
+            status: 'idle',
+            lastMessage: ''
+        };
+    }
+    return inceptionBootstrapper.getState();
+});
+
+ipcMain.handle('inception-onboarding-start', async () => {
+    if (!inceptionBootstrapper) {
+        return {
+            available: false,
+            shouldPrompt: false,
+            status: 'error',
+            lastMessage: 'El onboarding de Inception todavia no esta listo.'
+        };
+    }
+    return await inceptionBootstrapper.start();
+});
+
+ipcMain.handle('inception-onboarding-dismiss', () => {
+    if (!inceptionBootstrapper) {
+        return {
+            available: false,
+            shouldPrompt: false,
+            status: 'idle',
+            lastMessage: ''
+        };
+    }
+    return inceptionBootstrapper.dismiss();
 });
 
 // App lifecycle
@@ -1969,7 +2130,7 @@ app.whenReady().then(async () => {
     }
 
     // Initialize Action System (Planner + Screen Agent + Brain)
-    if (ModelSwitch.isReady()) {
+    if (ModelSwitch.isReady({ capability: 'chat' }) && ModelSwitch.isReady({ capability: 'vision' })) {
         actionPlanner = new ActionPlanner(openai); // Pass openai (can be null if Gemini)
         screenAgent = new ScreenAgent(openai, mainWindow, chatPage);
         learningAgent = LearningAgent; // It's already an instance from the require if I exported as one
@@ -1983,7 +2144,17 @@ app.whenReady().then(async () => {
     }
 
     // Initialize Browser Agent (always, independent of LLM availability)
-    browserAgent = new BrowserAgent(mainWindow);
+    try {
+        browserCoreService = await startBrowserCoreService();
+        browserCoreClient = createBrowserCoreClient(toClientOptions(browserCoreService.config));
+        console.log(`🌐 Browser core service listening on 127.0.0.1:${browserCoreService.config.servicePort}`);
+    } catch (error) {
+        console.error('❌ Failed to start browser core service:', error.message);
+    }
+
+    browserAgent = new BrowserAgent(mainWindow, {
+        browserCoreClient
+    });
     browserAgent.on('status', (data) => {
         // Reenviar estados del BrowserAgent al renderer para feedback visual
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1997,56 +2168,53 @@ app.whenReady().then(async () => {
     }
     console.log('🌐 Browser Agent initialized');
 
+    inceptionBootstrapper = new InceptionBootstrapper({
+        browserAgent,
+        envPath: USER_ENV_PATH,
+        statePath: INCEPTION_ONBOARDING_STATE_PATH
+    });
+    inceptionBootstrapper.on('status', (data) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('inception-onboarding-status', data);
+        }
+    });
+
     // ── BROWSER CONTEXT AUTO-DETECTION ──
-    // Every 3 seconds, check if Google Chrome is the frontmost app and what URL it has.
-    // This allows seamless transition to "AgarIO mode" without explicit agent trigger.
+    // Every 3 seconds, reconcile the managed browser context through BrowserAgent.
     setInterval(async () => {
         if (!browserAgent) return;
-        const { exec } = require('child_process');
-        const script = `
-            try
-                tell application "System Events"
-                    set frontAppName to name of first application process whose frontmost is true
-                end tell
-                set chromeUrl to ""
-                if frontAppName is "Google Chrome" then
-                    tell application "Google Chrome"
-                        set chromeUrl to URL of active tab of front window
-                    end tell
-                end if
-                return frontAppName & "|" & chromeUrl
-            on error
-                return "unknown|"
-            end try
-        `;
-        exec(`osascript -e '${script}'`, (err, stdout) => {
-            if (err) return;
-            const parts = stdout.trim().split('|');
-            const app = parts[0];
-            const url = parts[1];
-
-            if (app === 'Google Chrome' && url) {
-                if (url !== browserAgent.browserContext.url) {
-                    browserAgent.setBrowserContext(url);
-                    if (browserAgent.isAgarIO && mainWindow && !mainWindow.isDestroyed()) {
-                        mainWindow.webContents.send('browser-agent-status', { phase: 'ready', message: 'Modo AgarIO activo. Usa la pinza!' });
-                    }
+        try {
+            const context = await browserAgent.syncActiveTabContext();
+            if (context?.active && context.url) {
+                if (browserAgent.isAgarIO && mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('browser-agent-status', { phase: 'ready', message: 'Modo AgarIO activo. Usa la pinza!' });
                 }
             } else if (browserAgent.browserContext.active) {
-                // User switched to a native app or closed Chrome tab
                 browserAgent.clearBrowserContext();
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('browser-context-changed', { active: false });
                 }
             }
-        });
+        } catch (_) {
+            if (browserAgent.browserContext.active) {
+                browserAgent.clearBrowserContext();
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('browser-context-changed', { active: false });
+                }
+            }
+        }
     }, 3000);
 
     // Check for updates (only in production)
     if (app.isPackaged) {
-        autoUpdater.checkForUpdates().catch(err => {
-            console.log('Auto-update check failed:', err.message);
-        });
+        const updateConfigPath = path.join(process.resourcesPath, 'app-update.yml');
+        if (fs.existsSync(updateConfigPath)) {
+            autoUpdater.checkForUpdates().catch(err => {
+                if (!isMissingUpdateConfigError(err)) {
+                    console.log('Auto-update check failed:', err.message);
+                }
+            });
+        }
     }
 
     app.on('activate', () => {
@@ -2072,6 +2240,7 @@ autoUpdater.on('update-downloaded', (info) => {
 });
 
 autoUpdater.on('error', (err) => {
+    if (isMissingUpdateConfigError(err)) return;
     console.error('❌ Auto-update error:', err.message);
 });
 
@@ -2115,6 +2284,12 @@ ipcMain.handle('consolidate-memory', async () => {
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
+    }
+});
+
+app.on('before-quit', () => {
+    if (browserCoreService) {
+        void browserCoreService.stop().catch(() => { });
     }
 });
 
@@ -2305,74 +2480,50 @@ nativeTheme.on('updated', async () => {
 // ChatGPT Conversation Handling (Playwright)
 // ============================================
 const { chromium } = require('playwright');
+const { ensureManagedChrome, getManagedChromeTargets, MANAGED_CHROME_PORT } = require('./ManagedChrome');
 
 let chatContext = null;
 let chatPage = null;
+const CHATGPT_HOME_URL = 'https://chatgpt.com/';
+
+function isChromeInternalPage(url = '') {
+    return !url || url === 'about:blank' || url.startsWith('chrome://new-tab-page') || url.startsWith('chrome://newtab');
+}
 
 async function setupChatGPT() {
     console.log('🤖 Setting up ChatGPT integration...');
     try {
-        // Launch persistent context to save login state
-        const userDataDir = path.join(app.getPath('userData'), 'playwright_chatgpt');
+        await ensureManagedChrome(CHATGPT_HOME_URL, [], { source: 'main.setupChatGPT' });
+        const browser = await chromium.connectOverCDP(`http://127.0.0.1:${MANAGED_CHROME_PORT}`);
+        const contexts = browser.contexts();
+        chatContext = contexts[0];
 
-        const launchOptions = {
-            headless: false,
-            viewport: null, // Allow window resizing to control viewport
-            permissions: ['microphone'], // Pre-grant microphone access
-            ignoreHTTPSErrors: true, // More resilient on enterprise/intercepted TLS networks
-            args: [
-                '--disable-blink-features=AutomationControlled', // Hide automation status
-                '--start-minimized',
-                '--no-default-browser-check',
-                // Avoid DNS-over-HTTPS handshake issues on constrained/corporate networks
-                '--disable-features=UseDnsHttpsSvcb,UseDnsHttpsAlpn'
-            ],
-            ignoreDefaultArgs: ['--enable-automation'] // Hide "Chrome is being controlled by automated test software" bar
-        };
-
-        // TRY SYSTEM BROWSERS (Best for distribution)
-        const channels = ['chrome', 'msedge', 'chrome-beta', 'msedge-beta'];
-        let launched = false;
-
-        for (const channel of channels) {
-            try {
-                console.log(`🌐 Attempting to launch browser channel: ${channel}...`);
-                chatContext = await chromium.launchPersistentContext(userDataDir, {
-                    ...launchOptions,
-                    channel: channel
-                });
-                console.log(`✅ Launched using system ${channel}`);
-                launched = true;
-                break;
-            } catch (e) {
-                // Not found, continue to next
-            }
+        if (!chatContext) {
+            throw new Error('No se pudo obtener el contexto de IU Chrome');
         }
 
-        if (!launched) {
-            console.warn('⚠️ No system Chrome/Edge found. Trying default Playwright Chromium...');
+        await chatContext.grantPermissions(['microphone'], { origin: 'https://chatgpt.com' }).catch(() => { });
 
-            // TRY 2: Use default Playwright Chromium (fallback)
-            try {
-                chatContext = await chromium.launchPersistentContext(userDataDir, launchOptions);
-                console.log('✅ Launched using default Playwright Chromium');
-                launched = true;
-            } catch (chromiumError) {
-                console.error('❌ CRITICAL: No browser could be launched.', chromiumError.message);
-
-                // Show a user-friendly error dialog in production
-                const { dialog } = require('electron');
-                dialog.showErrorBox(
-                    'Error de Inicialización',
-                    'U necesita un navegador basado en Chromium (Google Chrome o Microsoft Edge) para funcionar.\n\nPor favor, instala Google Chrome y vuelve a abrir la aplicación.\n\nDetalle técnico: ' + chromiumError.message
-                );
-                return;
-            }
-        }
-
-        // Use the first existing page if available, otherwise create one
+        // Reuse an existing ChatGPT tab if possible to avoid creating extra windows on every IU launch.
         const pages = chatContext.pages();
-        chatPage = pages.length > 0 ? pages[0] : await chatContext.newPage();
+        console.log('🧭 [ChatGPT] Pages available in IU Chrome before setup:', pages.map(page => page.url() || 'about:blank'));
+        chatPage = pages.find(page => (page.url() || '').includes('chatgpt.com')) || null;
+        if (!chatPage) {
+            const reusableBlankPage = pages.find(page => {
+                const url = page.url() || '';
+                return isChromeInternalPage(url);
+            }) || null;
+
+            if (reusableBlankPage) {
+                console.log('🧭 [ChatGPT] Reusing initial blank/newtab page for ChatGPT:', reusableBlankPage.url() || 'about:blank');
+                chatPage = reusableBlankPage;
+            } else {
+                console.log('🧭 [ChatGPT] No existing ChatGPT tab found. Creating a new page in IU Chrome.');
+                chatPage = await chatContext.newPage();
+            }
+        } else {
+            console.log('🧭 [ChatGPT] Reusing existing ChatGPT tab:', chatPage.url() || 'about:blank');
+        }
 
         // Stealth: explicitly remove webdriver property
         await chatPage.addInitScript(() => {
@@ -2383,7 +2534,7 @@ async function setupChatGPT() {
         // Attempt navigation — fail silently if offline (app still starts)
         let navigationReady = false;
         try {
-            await chatPage.goto('https://chatgpt.com', { timeout: 8000, waitUntil: 'domcontentloaded' });
+            await chatPage.goto(CHATGPT_HOME_URL, { timeout: 8000, waitUntil: 'domcontentloaded' });
             navigationReady = true;
         } catch (navErr) {
             const isNetworkErr = navErr.message.includes('ERR_INTERNET_DISCONNECTED') ||
@@ -2400,28 +2551,22 @@ async function setupChatGPT() {
             }
         }
 
-        console.log('🤖 ChatGPT window opened. Please login if needed.');
+        const pagesAfterNavigation = chatContext.pages();
+        console.log('🧭 [ChatGPT] Pages available in IU Chrome after setup:', pagesAfterNavigation.map(page => page.url() || 'about:blank'));
 
-        // Hide browser automatically using CDP (Cross-platform and reliable)
-        try {
-            const session = await chatContext.newCDPSession(chatPage);
-            const { windowId } = await session.send('Browser.getWindowForTarget');
-            await session.send('Browser.setWindowBounds', {
-                windowId,
-                bounds: { windowState: 'minimized' }
-            });
-            console.log('📉 Browser window minimized via CDP');
-        } catch (err) {
-            console.warn('⚠️ Could not minimize browser via CDP:', err.message);
+        const redundantPages = pagesAfterNavigation.filter(page => page !== chatPage && isChromeInternalPage(page.url() || ''));
+        for (const extraPage of redundantPages) {
+            try {
+                console.log('🧭 [ChatGPT] Closing redundant startup page:', extraPage.url() || 'about:blank');
+                await extraPage.close({ runBeforeUnload: false });
+            } catch (closeErr) {
+                console.warn('⚠️ [ChatGPT] Could not close redundant startup page:', closeErr.message);
+            }
         }
 
-        // Additional macOS fallback to hide the application process
-        if (process.platform === 'darwin') {
-            const browsers = ['Google Chrome', 'Google Chrome Beta', 'Microsoft Edge', 'Microsoft Edge Beta', 'Chromium'];
-            browsers.forEach(b => {
-                exec(`osascript -e 'try' -e 'tell application "System Events" to set visible of process "${b}" to false' -e 'end try'`, () => { });
-            });
-        }
+        await chatPage.bringToFront().catch(() => { });
+
+        console.log('🤖 ChatGPT ready inside IU Chrome. Please login if needed.');
 
         // Only inject prompt when ChatGPT page is actually reachable.
         // This avoids 30s startup stalls in offline/captive/intercepted networks.
@@ -2487,20 +2632,6 @@ async function injectSystemPromptOnStartup() {
             // Wait for response
             await chatPage.waitForTimeout(3000);
             console.log('✅ System prompt injected on startup');
-
-            // Minimize ChatGPT window to avoid screen interference
-            try {
-                const chatWindow = chatPage.context().pages()[0];
-                if (chatWindow) {
-                    await chatWindow.evaluate(() => {
-                        window.resizeTo(400, 300);
-                        window.moveTo(screen.availWidth - 400, screen.availHeight - 300);
-                    });
-                    console.log('🪟 ChatGPT window minimized to corner');
-                }
-            } catch (err) {
-                console.warn('⚠️ Could not minimize ChatGPT window:', err.message);
-            }
 
             // Start voice state monitoring
             startVoiceStateMonitoring();
@@ -3072,7 +3203,7 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
     // ⚠️ GEMINI RATE-LIMIT GUARD: Gemini Free tiene máx 5 req/min.
     // El dwell-intent consume 2 requests (transcripción + chatCompletion) por cada mirada.
     // Deshabilitarlo con Gemini evita alcanzar el límite innecesariamente.
-    if (ModelSwitch.PROVIDER === 'gemini') {
+    if (ModelSwitch.getChatProvider() === 'gemini') {
         console.log('⏭️ [Intent] Skipping intent predictions — Gemini provider active (rate-limit protection)');
         return { success: false, predictions: [] };
     }
@@ -3228,6 +3359,7 @@ ipcMain.handle('stop-action', async () => {
         screenAgent.stop();
     }
     activeScreenFlow = null;
+    executionSessions.clearCurrentSession();
     commandHoldOverride.interruptedFlowContext = null;
     commandHoldOverride.awaitingClarification = false;
     return { success: true };
@@ -3409,11 +3541,11 @@ async function handlePhoneChat(payload) {
     // Add to context
     contextManager.addMessage('user', text, 'phone_chat');
 
-    if (!ModelSwitch.isReady()) {
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
         phoneBridgeSend({
             type: 'phone_reply',
             deviceId: phoneBridgeDeviceId,
-            payload: { error: 'Model provider no inicializado' }
+            payload: { error: 'Provider de texto no inicializado' }
         });
         return;
     }

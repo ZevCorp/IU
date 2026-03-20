@@ -123,10 +123,23 @@ contextBridge.exposeInMainWorld('iuOS', {
     browserGetAffordances: () => ipcRenderer.invoke('browser-get-affordances'),
     // Estado actual del BrowserAgent
     browserGetStatus: () => ipcRenderer.invoke('browser-get-status'),
+    browserGetProfiles: () => ipcRenderer.invoke('browser-get-profiles'),
+    browserGetTabs: (payload) => ipcRenderer.invoke('browser-get-tabs', payload),
+    browserOpen: (payload) => ipcRenderer.invoke('browser-open', payload),
+    browserSnapshot: (payload) => ipcRenderer.invoke('browser-snapshot', payload),
+    browserAct: (payload) => ipcRenderer.invoke('browser-act', payload),
+    browserScreenshot: (payload) => ipcRenderer.invoke('browser-screenshot', payload),
+    browserGetConsole: (payload) => ipcRenderer.invoke('browser-get-console', payload),
+    browserGetNetwork: (payload) => ipcRenderer.invoke('browser-get-network', payload),
     // Evento: cambio de contexto del browser (activo/inactivo, app detectada)
     onBrowserContextChanged: (callback) => ipcRenderer.on('browser-context-changed', (event, data) => callback(data)),
     // Evento: estado del BrowserAgent durante el lanzamiento de AgarIO
     onBrowserAgentStatus: (callback) => ipcRenderer.on('browser-agent-status', (event, data) => callback(data)),
+    // Inception onboarding de primera ejecucion
+    getInceptionOnboardingState: () => ipcRenderer.invoke('inception-onboarding-get-state'),
+    startInceptionOnboarding: () => ipcRenderer.invoke('inception-onboarding-start'),
+    dismissInceptionOnboarding: () => ipcRenderer.invoke('inception-onboarding-dismiss'),
+    onInceptionOnboardingStatus: (callback) => ipcRenderer.on('inception-onboarding-status', (event, data) => callback(data)),
     // 🎓 Learning Mode
     invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
     onLearningStatus: (callback) => ipcRenderer.on('learning-status', (event, data) => callback(data)),

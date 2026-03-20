@@ -23,6 +23,7 @@
         <div class="logo">I<span>&</span>Ü</div>
         <ul class="nav-links">
             <li><a href="/marketing-pmv.html" class="nav-link-minimal">Estrategias de Marketing</a></li>
+            <li><button type="button" class="nav-link-minimal nav-link-button" id="open-qr-btn">QR</button></li>
             <li><a href="#lista">Registrarme</a></li>
         </ul>
     </nav>
@@ -137,6 +138,10 @@
                 </div>
             </form>
 
+            <div class="direct-downloads">
+                <a class="secondary-cta" href="/assets/IU-1.0.0-arm64.dmg" download>Instalador para Mac</a>
+            </div>
+
             <!-- Countdown Timer -->
             <div class="countdown-container">
                 <div class="countdown-item">
@@ -195,6 +200,18 @@
             </div>
 
             <button id="final-submit" class="btn-join">Descargar Ü.</button>
+        </div>
+    </div>
+
+    <div id="qr-modal" class="qr-modal-overlay" aria-hidden="true">
+        <div class="qr-modal-card">
+            <button type="button" class="qr-modal-close" id="close-qr-btn" aria-label="Cerrar QR">&times;</button>
+            <p class="qr-kicker">Compartir Ü</p>
+            <h2>Escanea el QR para abrir esta landing</h2>
+            <div class="qr-canvas-shell">
+                <canvas id="share-qr-canvas" aria-label="QR de compartir Ü"></canvas>
+            </div>
+            <p class="qr-caption" id="qr-share-url"></p>
         </div>
     </div>
 

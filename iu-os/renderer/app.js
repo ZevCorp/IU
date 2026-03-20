@@ -475,6 +475,7 @@ let navHudTimeout = null;
 let pendingReminder = null;
 let hasProposedReminder = false;
 const wakeUpSound = new Audio('assets/hey_pss_pss.mp3');
+let inceptionOnboardingState = null;
 
 
 
@@ -489,7 +490,7 @@ function init() {
     const urlParams = new URLSearchParams(window.location.search);
 
     // --- BOOTLOADER SEQUENCE ---
-    if (!urlParams.get('mode') || urlParams.get('mode') === '') {
+    if (urlParams.get('mode') === 'bootloader') {
         const overlay = document.getElementById('bootloader-overlay');
         const faceCont = document.getElementById('face-container');
         const btnLeft = document.getElementById('boot-btn-left');
@@ -560,6 +561,8 @@ function init() {
         if (overlay) overlay.classList.add('hidden');
     }
     // ---------------------------
+
+    initInceptionOnboarding();
 
     // Small mode: independent window, apply visuals immediately with no transition
     if (urlParams.get('mode') === 'small') {
@@ -1642,6 +1645,78 @@ function init() {
     setupManualDrag();
 
     console.log('✅ IÜ OS ready');
+}
+
+function renderInceptionOnboarding(state) {
+    const card = document.getElementById('inception-onboarding-card');
+    const copy = document.getElementById('inception-onboarding-copy');
+    const status = document.getElementById('inception-onboarding-status');
+    const startBtn = document.getElementById('btn-inception-start');
+    const dismissBtn = document.getElementById('btn-inception-dismiss');
+    if (!card || !copy || !status || !startBtn || !dismissBtn) return;
+
+    inceptionOnboardingState = state || inceptionOnboardingState || {};
+    const current = inceptionOnboardingState || {};
+    const shouldShow = Boolean(current.shouldPrompt || current.status === 'running' || current.status === 'waiting_user' || current.status === 'error');
+    card.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) return;
+
+    if (current.status === 'completed') {
+        card.classList.add('hidden');
+        return;
+    }
+
+    if (current.status === 'waiting_user') {
+        copy.textContent = 'IU Chrome quedo abierto en Inception. Completa el paso que falte y luego continua la configuracion.';
+        startBtn.textContent = 'Continuar configuracion';
+    } else if (current.status === 'running') {
+        copy.textContent = 'U esta usando IU Chrome para dejar lista tu API personal de Inception sin tocar el flujo normal del sistema.';
+        startBtn.textContent = 'Configurando...';
+    } else if (current.status === 'error') {
+        copy.textContent = 'Hubo un bloqueo durante el onboarding. Puedes reintentar cuando quieras.';
+        startBtn.textContent = 'Reintentar';
+    } else {
+        copy.textContent = 'U puede abrir Inception en IU Chrome y dejar lista tu API personal para usarla como provider de texto.';
+        startBtn.textContent = 'Configurar';
+    }
+
+    status.textContent = current.lastMessage || current.lastError || '';
+    startBtn.disabled = current.status === 'running';
+    dismissBtn.disabled = current.status === 'running';
+}
+
+async function initInceptionOnboarding() {
+    const startBtn = document.getElementById('btn-inception-start');
+    const dismissBtn = document.getElementById('btn-inception-dismiss');
+
+    if (startBtn && !startBtn.dataset.bound) {
+        startBtn.dataset.bound = '1';
+        startBtn.addEventListener('click', async () => {
+            if (!window.iuOS || !window.iuOS.startInceptionOnboarding) return;
+            const next = await window.iuOS.startInceptionOnboarding().catch(() => null);
+            if (next) renderInceptionOnboarding(next);
+        });
+    }
+
+    if (dismissBtn && !dismissBtn.dataset.bound) {
+        dismissBtn.dataset.bound = '1';
+        dismissBtn.addEventListener('click', async () => {
+            if (!window.iuOS || !window.iuOS.dismissInceptionOnboarding) return;
+            const next = await window.iuOS.dismissInceptionOnboarding().catch(() => null);
+            if (next) renderInceptionOnboarding(next);
+        });
+    }
+
+    if (window.iuOS && window.iuOS.onInceptionOnboardingStatus) {
+        window.iuOS.onInceptionOnboardingStatus((state) => {
+            renderInceptionOnboarding(state);
+        });
+    }
+
+    if (window.iuOS && window.iuOS.getInceptionOnboardingState) {
+        const initial = await window.iuOS.getInceptionOnboardingState().catch(() => null);
+        if (initial) renderInceptionOnboarding(initial);
+    }
 }
 
 /**

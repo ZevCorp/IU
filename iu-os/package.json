@@ -4,16 +4,23 @@
     "description": "IÜ OS - Minimalist overlay interface with neural graph visualization",
     "main": "main.js",
     "scripts": {
-        "dev": "electron .",
+        "build:browser-core": "node ../node_modules/typescript/bin/tsc -p browser-core/tsconfig.json",
+        "dev": "npm run build:browser-core && electron .",
         "build": "npm run build:win",
-        "build:win": "npm run obfuscate && electron-builder --win portable && npm run restore",
-        "build:mac": "npm run obfuscate && electron-builder --mac && npm run restore",
-        "build:dir": "electron-builder --win --dir",
-        "dist:mac": "electron-builder --mac",
-        "pack:mac": "electron-builder --mac --dir",
+        "build:win": "npm run build:browser-core && npm run obfuscate && electron-builder --win portable && npm run restore",
+        "build:mac": "npm run build:browser-core && npm run obfuscate && electron-builder --mac && npm run restore",
+        "build:dir": "npm run build:browser-core && electron-builder --win --dir",
+        "dist:mac": "npm run build:browser-core && electron-builder --mac",
+        "pack:mac": "npm run build:browser-core && electron-builder --mac --dir",
         "obfuscate": "node scripts/obfuscate.js",
         "restore": "node scripts/restore.js",
-        "publish": "electron-builder --win portable --publish always",
+        "publish": "npm run build:browser-core && electron-builder --win portable --publish always",
+        "test:browser-core": "npm run build:browser-core && node --test browser-core/test/*.test.js",
+        "test:browser-core:integration": "npm run build:browser-core && node --test browser-core/test/*.browser.spec.js",
+        "test:browser-core:all": "npm run build:browser-core && node --test browser-core/test/*.test.js browser-core/test/*.browser.spec.js",
+        "test:onboarding": "node --test test/inception-onboarding.test.js",
+        "test:browser-reactivity": "node --test test/browser-execution-state.test.js test/browser-step-reducer.test.js",
+        "test:execution-sessions": "node --test test/execution-session-manager.test.js",
         "install": "node-gyp rebuild"
     },
     "repository": {
@@ -29,6 +36,7 @@
         "files": [
             "*.js",
             "!*.config.js",
+            "browser-core/dist/**/*",
             "preload.js",
             "renderer/**/*",
             "node_modules/**/*",
@@ -46,6 +54,10 @@
             {
                 "from": "build/Release",
                 "to": "build/Release"
+            },
+            {
+                "from": "../iu-chrome-extension",
+                "to": "iu-chrome-extension"
             }
         ],
         "asar": true,

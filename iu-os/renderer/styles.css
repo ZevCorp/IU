@@ -1689,6 +1689,109 @@ body.mode-medium #transcript-text {
   pointer-events: none;
 }
 
+.inception-onboarding {
+  position: fixed;
+  top: 26px;
+  left: 26px;
+  width: min(320px, calc(100vw - 52px));
+  padding: 18px 18px 16px;
+  border-radius: 22px;
+  background: rgba(25, 25, 27, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(26px);
+  -webkit-backdrop-filter: blur(26px);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.28);
+  z-index: 85;
+  color: #f6f7fb;
+}
+
+[data-theme="light"] .inception-onboarding {
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: #121317;
+  box-shadow: 0 20px 42px rgba(0, 0, 0, 0.12);
+}
+
+.inception-onboarding.hidden {
+  display: none;
+}
+
+.inception-onboarding-eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  opacity: 0.62;
+  margin-bottom: 8px;
+}
+
+.inception-onboarding-title {
+  font-size: 22px;
+  line-height: 1.05;
+  font-weight: 620;
+  margin-bottom: 10px;
+}
+
+.inception-onboarding-copy {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.84;
+}
+
+.inception-onboarding-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.inception-primary,
+.inception-secondary {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+}
+
+.inception-primary:hover,
+.inception-secondary:hover {
+  transform: translateY(-1px);
+}
+
+.inception-primary:disabled,
+.inception-secondary:disabled {
+  cursor: default;
+  transform: none;
+  opacity: 0.6;
+}
+
+.inception-primary {
+  background: #f6f7fb;
+  color: #111216;
+}
+
+[data-theme="light"] .inception-primary {
+  background: #111216;
+  color: #f6f7fb;
+}
+
+.inception-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+}
+
+[data-theme="light"] .inception-secondary {
+  background: rgba(17, 18, 22, 0.08);
+}
+
+.inception-onboarding-status {
+  min-height: 18px;
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.72;
+}
+
 #bootloader-overlay.fade-out {
   opacity: 0;
 }

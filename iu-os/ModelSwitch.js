@@ -2,16 +2,18 @@
  * ModelSwitch.js
  * Switch fácil entre OpenAI (GPT-5-mini) y Google Gemini (2.5 Flash).
  * 
- * Para cambiar de provider, modifica PROVIDER abajo o usa env var BRAIN_PROVIDER.
+ * Para cambiar de provider, modifica BRAIN_PROVIDER o usa los overrides
+ * BRAIN_CHAT_PROVIDER / BRAIN_VISION_PROVIDER.
  * 
  * Uso:
- *   const { chatCompletion, visionCompletion, PROVIDER } = require('./ModelSwitch');
+ *   const { chatCompletion, visionCompletion, getProviderSummary } = require('./ModelSwitch');
  *   // Ambas funciones tienen la misma interfaz de entrada/salida.
  */
 
 // ============================================================
 // 🔀 SWITCH: Cambia aquí o con env vars
-//    BRAIN_PROVIDER: "openai" | "gemini" | "anthropic"
+//    BRAIN_PROVIDER: "openai" | "gemini" | "anthropic" | "inception"
+//    BRAIN_CHAT_PROVIDER / BRAIN_VISION_PROVIDER: overrides opcionales
 //    BRAIN_MODEL: "nano" | "mini" | "full" | "haiku"
 // 
 // Ejemplos en .env:
@@ -20,13 +22,16 @@
 //    BRAIN_MODEL=mini      # gpt-5-mini (balance)
 //    BRAIN_MODEL=nano      # gpt-5-nano (rápido, barato)
 // ============================================================
-const PROVIDER = process.env.BRAIN_PROVIDER || 'openai';
 const BRAIN_MODEL = process.env.BRAIN_MODEL || 'nano'; // nano | mini | full | haiku
 
 // Clients — se inicializan desde main.js
 let _openai = null;
 let _gemini = null;
 let _anthropic = null;
+let _inception = null;
+let _lastLoggedOpenAIModel = '';
+let _lastLoggedInceptionModel = '';
+let _warnedVisionFallback = false;
 
 function initOpenAI(openaiClient) {
     _openai = openaiClient;
@@ -44,6 +49,14 @@ function initAnthropic(apiKey) {
     const Anthropic = require('@anthropic-ai/sdk');
     _anthropic = new Anthropic({ apiKey });
     console.log('✅ Anthropic initialized (ModelSwitch)');
+}
+
+function initInception(apiKey, options = {}) {
+    if (!apiKey) return;
+    const OpenAI = require('openai');
+    const baseURL = options.baseURL || process.env.INCEPTION_BASE_URL || 'https://api.inceptionlabs.ai/v1';
+    _inception = new OpenAI({ apiKey, baseURL });
+    console.log(`✅ Inception initialized (ModelSwitch) via ${options.source || 'runtime'} @ ${baseURL}`);
 }
 
 // ============================================================
@@ -74,19 +87,60 @@ const MODELS = {
     anthropic: {
         chat: process.env.ANTHROPIC_MODEL || ANTHROPIC_DEFAULT_MODEL_BY_TIER[BRAIN_MODEL] || ANTHROPIC_DEFAULT_MODEL_BY_TIER.haiku,
         vision: process.env.ANTHROPIC_MODEL || ANTHROPIC_DEFAULT_MODEL_BY_TIER[BRAIN_MODEL] || ANTHROPIC_DEFAULT_MODEL_BY_TIER.haiku
+    },
+    inception: {
+        chat: process.env.INCEPTION_MODEL || 'mercury',
+        vision: null
     }
 };
+
+function getChatProvider() {
+    return process.env.BRAIN_CHAT_PROVIDER || process.env.BRAIN_PROVIDER || 'openai';
+}
+
+function getVisionProvider() {
+    const configured = process.env.BRAIN_VISION_PROVIDER || process.env.BRAIN_PROVIDER || 'openai';
+    if (configured === 'inception') {
+        if (!_warnedVisionFallback) {
+            console.warn('⚠️ [ModelSwitch] Inception no tiene ruta de vision en este runtime. Usando fallback visual disponible.');
+            _warnedVisionFallback = true;
+        }
+        if (_openai) return 'openai';
+        if (_gemini) return 'gemini';
+        if (_anthropic) return 'anthropic';
+    }
+    return configured;
+}
+
+function getProviderSummary() {
+    return {
+        chatProvider: getChatProvider(),
+        visionProvider: getVisionProvider(),
+        models: MODELS
+    };
+}
+
+function _resolveClient(provider) {
+    if (provider === 'openai') return _openai;
+    if (provider === 'gemini') return _gemini;
+    if (provider === 'anthropic') return _anthropic;
+    if (provider === 'inception') return _inception;
+    return null;
+}
 
 // ============================================================
 // chatCompletion — texto puro con function calling
 // Interfaz unificada: { messages, tools, tool_choice, max_tokens }
 // Retorna: formato OpenAI-compatible { choices: [{ message: { content, tool_calls } }] }
 // ============================================================
-async function chatCompletion({ messages, tools, tool_choice, max_tokens, model }) {
-    if (PROVIDER === 'openai') {
+async function chatCompletion({ messages, tools, tool_choice, max_tokens, model, provider }) {
+    const selectedProvider = provider || getChatProvider();
+    if (selectedProvider === 'openai') {
         return _chatOpenAI({ messages, tools, tool_choice, max_tokens, model });
-    } else if (PROVIDER === 'anthropic') {
+    } else if (selectedProvider === 'anthropic') {
         return _chatAnthropic({ messages, tools, tool_choice, max_tokens, model });
+    } else if (selectedProvider === 'inception') {
+        return _chatInception({ messages, tools, tool_choice, max_tokens, model });
     } else {
         return _chatGemini({ messages, tools, tool_choice, max_tokens, model });
     }
@@ -96,10 +150,11 @@ async function chatCompletion({ messages, tools, tool_choice, max_tokens, model 
 // visionCompletion — multimodal (imagen + texto) con function calling
 // Misma interfaz que chatCompletion, pero messages puede tener image_url
 // ============================================================
-async function visionCompletion({ messages, tools, tool_choice, max_tokens, model }) {
-    if (PROVIDER === 'openai') {
+async function visionCompletion({ messages, tools, tool_choice, max_tokens, model, provider }) {
+    const selectedProvider = provider || getVisionProvider();
+    if (selectedProvider === 'openai') {
         return _visionOpenAI({ messages, tools, tool_choice, max_tokens, model });
-    } else if (PROVIDER === 'anthropic') {
+    } else if (selectedProvider === 'anthropic') {
         return _visionAnthropic({ messages, tools, tool_choice, max_tokens, model });
     } else {
         return _visionGemini({ messages, tools, tool_choice, max_tokens, model });
@@ -121,7 +176,10 @@ async function _chatOpenAI({ messages, tools, tool_choice, max_tokens, model }) 
     if (tools && tools.length > 0) {
         options.parallel_tool_calls = false;
     }
-    console.log(`🤖 [ModelSwitch] Using OpenAI model: ${selectedModel}`);
+    if (_lastLoggedOpenAIModel !== selectedModel) {
+        console.log(`🤖 [ModelSwitch] Using OpenAI model: ${selectedModel}`);
+        _lastLoggedOpenAIModel = selectedModel;
+    }
     return _openai.chat.completions.create(options);
 }
 
@@ -137,6 +195,26 @@ async function _visionOpenAI({ messages, tools, tool_choice, max_tokens }) {
         options.parallel_tool_calls = false;
     }
     return _openai.chat.completions.create(options);
+}
+
+async function _chatInception({ messages, tools, tool_choice, max_tokens, model }) {
+    if (!_inception) throw new Error('Inception not initialized');
+    const selectedModel = model || MODELS.inception.chat;
+    const options = {
+        model: selectedModel,
+        messages,
+        tools,
+        tool_choice,
+        max_tokens: max_tokens || 1024
+    };
+    if (tools && tools.length > 0) {
+        options.parallel_tool_calls = false;
+    }
+    if (_lastLoggedInceptionModel !== selectedModel) {
+        console.log(`🤖 [ModelSwitch] Using Inception model: ${selectedModel}`);
+        _lastLoggedInceptionModel = selectedModel;
+    }
+    return _inception.chat.completions.create(options);
 }
 
 // ============================================================
@@ -320,11 +398,14 @@ async function _visionGemini({ messages, tools, tool_choice, max_tokens }) {
 // Exports
 // ============================================================
 module.exports = {
-    PROVIDER,
     MODELS,
+    getChatProvider,
+    getVisionProvider,
+    getProviderSummary,
     initOpenAI,
     initGemini,
     initAnthropic,
+    initInception,
     chatCompletion,
     visionCompletion,
     embedding,
@@ -332,22 +413,23 @@ module.exports = {
     transcription
 };
 
-function isReady() {
-    if (PROVIDER === 'openai') return !!_openai;
-    if (PROVIDER === 'gemini') return !!_gemini;
-    if (PROVIDER === 'anthropic') return !!_anthropic;
-    return false;
+function isReady(options = {}) {
+    const capability = options.capability || 'chat';
+    const provider = options.provider || (capability === 'vision' ? getVisionProvider() : getChatProvider());
+    return !!_resolveClient(provider);
 }
 
 // ============================================================
 // Transcription — audio to text
 // ============================================================
 async function transcription({ filePath, buffer, mimeType }) {
-    if (PROVIDER === 'openai') {
+    if (_openai) {
         return _transcriptionOpenAI(filePath);
-    } else {
+    }
+    if (_gemini) {
         return _transcriptionGemini({ buffer, mimeType });
     }
+    return { text: "" };
 }
 
 async function _transcriptionOpenAI(filePath) {
@@ -591,11 +673,13 @@ async function _createAnthropicWithFallback(msgOptions) {
 // Interfaz unificada: retorna number[] (el vector)
 // ============================================================
 async function embedding(text) {
-    if (PROVIDER === 'openai') {
+    if (_openai) {
         return _embeddingOpenAI(text);
-    } else {
+    }
+    if (_gemini) {
         return _embeddingGemini(text);
     }
+    return null;
 }
 
 async function _embeddingOpenAI(text) {

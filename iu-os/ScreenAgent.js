@@ -20,8 +20,16 @@ const PersistentMemory = require('./PersistentMemory');
 const GraphFormalizer = require('./GraphFormalizer');
 const WhatsAppContext = require('./WhatsAppContext');
 const LearningAgent = require('./LearningAgent');
+const { detectBrowserExecutionState } = require('./BrowserExecutionState');
+const { reduceBrowserGoalProgress, shouldSkipRedundantBrowserAction } = require('./BrowserStepReducer');
+const {
+    ensureManagedChrome,
+    focusManagedChromeInstance,
+    openManagedChromeUrl
+} = require('./ManagedChrome');
 const stickyFace = require('./StickyFaceController'); // Sticky Face Controller for Automation Mode
 // const nativeGlass = require('./NativeGlassController'); // Controller for Native Bubble Window - REMOVING FOR ISOLATION
+const VERBOSE_SCREEN_AGENT_LOGS = process.env.IU_VERBOSE_AGENT_LOGS === '1';
 
 // Path to Python venv and YOLO detection script
 const YOLO_PYTHON = path.join(__dirname, 'yolo_venv', 'bin', 'python3');
@@ -132,7 +140,7 @@ const SOM_TOOLS = [
         type: "function",
         function: {
             name: "request_user_input",
-            description: "Use ONLY when the task cannot continue without specific data from the user (e.g., missing names, IDs, phone numbers, exact text). This pauses execution and asks the user for that missing data.",
+            description: "Use when the task cannot continue safely without user input, either because data is missing OR because the next route/action is ambiguous and you would otherwise be guessing. This pauses execution and asks one short explicit question.",
             parameters: {
                 type: "object",
                 properties: {
@@ -267,10 +275,48 @@ class ScreenAgent {
         this.currentTypeTask = null;
         this.lastContextSnapshot = { app: '', window: '', recentActions: [] };
         this.browserAgent = null; // Instancia global inyectada desde main.js
+        this.currentFocusApp = '';
+        this.currentLaunchMode = 'native';
+        this.currentTargetUrl = '';
+        this.lastBrowserElement = null;
+        this.currentExecutionState = null;
+        this.lastExecutionStateKey = '';
+        this.currentBrowserGoalProgress = null;
+        this.lastAttentionSoundAt = 0;
     }
 
     setBrowserAgent(agent) {
         this.browserAgent = agent;
+    }
+
+    _playNotificationSound() {
+        const now = Date.now();
+        if (now - this.lastAttentionSoundAt < 1500) {
+            return;
+        }
+        this.lastAttentionSoundAt = now;
+
+        if (process.platform === 'darwin') {
+            execFile('afplay', ['/System/Library/Sounds/Glass.aiff'], () => { });
+            return;
+        }
+
+        try {
+            process.stdout.write('\u0007');
+        } catch (_) {
+            // best effort only
+        }
+    }
+
+    _notifyUserTurn(title, body, duration = 120000) {
+        this._playNotificationSound();
+        try {
+            stickyFace.setFaceColor('#00ff00');
+            stickyFace.setExpression('mild_attention');
+            stickyFace.showMessage({ title, body }, duration);
+        } catch (e) {
+            // best effort only
+        }
     }
 
     _appMappings() {
@@ -288,10 +334,91 @@ class ScreenAgent {
             'FaceTime': 'FaceTime',
             'Safari': 'Safari',
             'Chrome': 'Google Chrome',
+            'Google Chrome': 'Google Chrome',
+            'Navegador': 'Google Chrome',
+            'Browser': 'Google Chrome',
+            'Predeterminado': 'Google Chrome',
             'Buscador': 'Finder',
             'Finder': 'Finder',
             'Terminal': 'Terminal',
             'MiniPRM': 'MiniPRM'
+        };
+    }
+
+    _webAppMappings() {
+        return {
+            instagram: {
+                name: 'Instagram',
+                url: 'https://www.instagram.com/',
+                domains: ['instagram.com'],
+                aliases: ['instagram', 'insta']
+            },
+            whatsapp: {
+                name: 'WhatsApp',
+                url: 'https://web.whatsapp.com/',
+                domains: ['web.whatsapp.com', 'whatsapp.com'],
+                aliases: ['whatsapp', 'whatsapp web']
+            },
+            gmail: {
+                name: 'Gmail',
+                url: 'https://mail.google.com/',
+                domains: ['mail.google.com', 'gmail.com'],
+                aliases: ['gmail', 'google mail']
+            },
+            facebook: {
+                name: 'Facebook',
+                url: 'https://www.facebook.com/',
+                domains: ['facebook.com'],
+                aliases: ['facebook']
+            },
+            linkedin: {
+                name: 'LinkedIn',
+                url: 'https://www.linkedin.com/',
+                domains: ['linkedin.com'],
+                aliases: ['linkedin']
+            },
+            reddit: {
+                name: 'Reddit',
+                url: 'https://www.reddit.com/',
+                domains: ['reddit.com'],
+                aliases: ['reddit']
+            },
+            github: {
+                name: 'GitHub',
+                url: 'https://github.com/',
+                domains: ['github.com'],
+                aliases: ['github']
+            },
+            notion: {
+                name: 'Notion',
+                url: 'https://www.notion.so/',
+                domains: ['notion.so'],
+                aliases: ['notion']
+            },
+            slack: {
+                name: 'Slack',
+                url: 'https://app.slack.com/client',
+                domains: ['slack.com'],
+                aliases: ['slack']
+            },
+            spreadsheets: {
+                name: 'Google Sheets',
+                url: 'https://docs.google.com/spreadsheets/',
+                domains: ['docs.google.com', 'sheets.google.com'],
+                aliases: ['spreadsheets', 'spreadsheet', 'google sheets', 'sheets', 'hoja de calculo', 'hoja de cálculo']
+            },
+            youtube: {
+                name: 'YouTube',
+                url: 'https://www.youtube.com/',
+                domains: ['youtube.com'],
+                aliases: ['youtube']
+            },
+            x: {
+                name: 'X',
+                url: 'https://x.com/',
+                domains: ['x.com', 'twitter.com'],
+                aliases: ['x', 'twitter']
+            }
         };
     }
 
@@ -322,6 +449,242 @@ class ScreenAgent {
         return cleaned || raw;
     }
 
+    _looksLikeBrowserTarget(rawName) {
+        const normalized = this._normalizeText(rawName);
+        if (!normalized) return false;
+        return normalized === 'browser' ||
+            normalized.includes('chrome') ||
+            normalized.includes('safari') ||
+            normalized.includes('navegador') ||
+            normalized.includes('web');
+    }
+
+    _extractDirectWebTarget(appName, goal = '', stepsHint = '') {
+        const rawHaystack = `${appName || ''} ${goal || ''} ${stepsHint || ''}`.trim();
+        if (!rawHaystack) return null;
+
+        const stripTrailingUrlPunctuation = (value) => String(value || '')
+            .trim()
+            .replace(/[;:.,!?]+$/g, '')
+            .replace(/[)\]]+$/g, '');
+
+        const candidates = [];
+
+        const explicitUrlRegex = /\bhttps?:\/\/[^\s)"'<>]+/gi;
+        for (const match of rawHaystack.matchAll(explicitUrlRegex)) {
+            const value = stripTrailingUrlPunctuation(match[0] || '');
+            if (!value) continue;
+            candidates.push({
+                raw: value,
+                index: typeof match.index === 'number' ? match.index : Number.MAX_SAFE_INTEGER
+            });
+        }
+
+        const bareDomainRegex = /\b(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+\b/gi;
+        for (const match of rawHaystack.matchAll(bareDomainRegex)) {
+            const value = stripTrailingUrlPunctuation(match[0] || '');
+            if (!value) continue;
+            candidates.push({
+                raw: value,
+                index: typeof match.index === 'number' ? match.index : Number.MAX_SAFE_INTEGER
+            });
+        }
+
+        candidates.sort((left, right) => left.index - right.index);
+        const rawTarget = candidates[0]?.raw || '';
+        if (!rawTarget) return null;
+
+        const normalizedUrl = /^https?:\/\//i.test(rawTarget)
+            ? rawTarget
+            : `https://${rawTarget}`;
+
+        let hostname = rawTarget;
+        try {
+            hostname = new URL(normalizedUrl).hostname.replace(/^www\./, '');
+        } catch (_) {
+            hostname = rawTarget.replace(/^www\./i, '');
+        }
+
+        return {
+            key: hostname,
+            name: hostname,
+            url: normalizedUrl,
+            domains: [hostname],
+            aliases: [hostname]
+        };
+    }
+
+    _getWebTargetConfig(appName, goal = '', stepsHint = '') {
+        const directTarget = this._extractDirectWebTarget(appName, goal, stepsHint);
+        if (directTarget) return directTarget;
+
+        const haystack = this._normalizeText(`${appName} ${goal} ${stepsHint}`);
+        if (!haystack) return null;
+        const tokens = new Set(haystack.split(/\s+/).filter(Boolean));
+        const appNameNorm = this._normalizeText(appName);
+
+        for (const [key, config] of Object.entries(this._webAppMappings())) {
+            const aliases = [key, ...(config.aliases || [])].map(alias => this._normalizeText(alias));
+            const hasAliasMatch = aliases.some(alias => {
+                if (!alias) return false;
+                // Prevent single-letter aliases (e.g. "x") from matching random words like "explicit".
+                if (alias.length <= 2) {
+                    const shortAliasIntent = new RegExp(`\\b(?:abre|abrir|open|go to|ir a|ve a|entra a|navega a)\\s+${alias}\\b`, 'i');
+                    return (appNameNorm === alias || appNameNorm.includes(alias)) ||
+                        haystack.includes(`${alias}.com`) ||
+                        shortAliasIntent.test(haystack);
+                }
+                return haystack.includes(alias);
+            });
+            if (!hasAliasMatch) continue;
+
+            const resolved = {
+                ...config,
+                key
+            };
+
+            if (key === 'instagram') {
+                const wantsInbox = /(mensaje|mensajes|direct|dm|inbox|bandeja|responder|leer)/i.test(`${appName} ${goal} ${stepsHint}`);
+                if (wantsInbox) {
+                    resolved.url = 'https://www.instagram.com/direct/inbox/';
+                }
+            }
+
+            return resolved;
+        }
+
+        return null;
+    }
+
+    async _isInstalledMacApp(appName) {
+        const normalized = this._sanitizeAppName(appName);
+        if (!normalized) return false;
+        const escaped = normalized.replace(/"/g, '\\"');
+
+        return new Promise((resolve) => {
+            execFile('osascript', ['-e', `POSIX path of (path to application "${escaped}")`], (err) => resolve(!err));
+        });
+    }
+
+    async _resolveLaunchPlan(requestedApp, goal = '', stepsHint = '') {
+        const requested = String(requestedApp || '').trim();
+        const sanitized = this._sanitizeAppName(requested);
+        const webTarget = this._getWebTargetConfig(requested, goal, stepsHint);
+        const browserActive = !!this.browserAgent?.browserContext?.active;
+        const activeBrowserUrl = this.browserAgent?.browserContext?.url || '';
+        const wantsBrowser = this._looksLikeBrowserTarget(requested);
+
+        let installedNativeApp = false;
+        if (sanitized && !wantsBrowser) {
+            installedNativeApp = await this._isInstalledMacApp(sanitized);
+        }
+
+        if (wantsBrowser) {
+            return {
+                mode: 'browser',
+                semanticApp: webTarget?.name || 'Browser',
+                focusApp: 'Google Chrome',
+                url: webTarget?.url || activeBrowserUrl || ''
+            };
+        }
+
+        if (installedNativeApp) {
+            return {
+                mode: 'native',
+                semanticApp: sanitized,
+                focusApp: sanitized,
+                url: ''
+            };
+        }
+
+        if (webTarget) {
+            return {
+                mode: 'browser',
+                semanticApp: webTarget.name,
+                focusApp: 'Google Chrome',
+                url: webTarget.url || activeBrowserUrl || '',
+                fallbackReason: `No encontré una app instalada llamada "${sanitized || requested}". Continuaré por navegador.`
+            };
+        }
+
+        if (browserActive) {
+            return {
+                mode: 'browser',
+                semanticApp: sanitized || requested || 'Browser',
+                focusApp: 'Google Chrome',
+                url: activeBrowserUrl,
+                fallbackReason: `No encontré una app instalada llamada "${sanitized || requested}". Usaré el navegador que ya está activo.`
+            };
+        }
+
+        return {
+            mode: 'native',
+            semanticApp: sanitized || requested,
+            focusApp: sanitized || requested,
+            url: ''
+        };
+    }
+
+    async _openUrlInBrowser(url) {
+        if (!url) {
+            await ensureManagedChrome('', [], { source: 'ScreenAgent._openUrlInBrowser' });
+            await focusManagedChromeInstance().catch(() => this._ensureFocus('Google Chrome'));
+            return;
+        }
+
+        if (this.browserAgent?.openUrl) {
+            await this.browserAgent.openUrl(url);
+            return;
+        }
+
+        await openManagedChromeUrl(url, [], {
+            source: 'ScreenAgent._openUrlInBrowser',
+            caller: `target=${url}`
+        });
+        await focusManagedChromeInstance().catch(() => this._ensureFocus('Google Chrome'));
+    }
+
+    async _activateLaunchPlan(plan) {
+        if (!plan) return;
+
+        this.currentApp = plan.semanticApp || '';
+        this.currentFocusApp = plan.focusApp || plan.semanticApp || '';
+        this.currentLaunchMode = plan.mode || 'native';
+        this.currentTargetUrl = plan.url || '';
+
+        if (plan.fallbackReason) {
+            console.log(`🧭 [ScreenAgent] ${plan.fallbackReason}`);
+        }
+
+        if (plan.mode === 'browser') {
+            const currentBrowserUrl = this.browserAgent?.browserContext?.url || '';
+            const shouldReuseExistingBrowser =
+                !!this.browserAgent?.browserContext?.active &&
+                (!plan.url || this._urlsMatch(plan.url, currentBrowserUrl));
+
+            if (shouldReuseExistingBrowser) {
+                console.log(`🧭 [ScreenAgent] Reusing existing IU Chrome context instead of reopening`, {
+                    targetUrl: plan.url || '',
+                    currentBrowserUrl
+                });
+                if (this.browserAgent?.focusManagedChrome) {
+                    await this.browserAgent.focusManagedChrome();
+                } else {
+                    await this._ensureFocus('Google Chrome');
+                }
+                return;
+            }
+
+            await this._openUrlInBrowser(plan.url || '');
+            if (this.browserAgent && plan.url && !this.browserAgent.browserContext.active) {
+                this.browserAgent.setBrowserContext(plan.url);
+            }
+            return;
+        }
+
+        await this._openApp(plan.focusApp || plan.semanticApp || '');
+    }
+
     /**
      * Lazy-load nut-js (native module, load only when needed)
      */
@@ -342,8 +705,10 @@ class ScreenAgent {
     _getAppSpecificInstructions(appName, elements = []) {
         if (!appName) return '';
         const normalized = appName.toLowerCase();
+        const directUrl = `${this.currentTargetUrl || ''} ${this.browserAgent?.browserContext?.url || ''}`.toLowerCase();
+        const isInstagramDirect = normalized.includes('instagram') && directUrl.includes('/direct/');
 
-        if (normalized.includes('whatsapp') || normalized.includes('telegram') || normalized.includes('slack') || normalized.includes('messages') || normalized.includes('discord')) {
+        if (normalized.includes('whatsapp') || normalized.includes('telegram') || normalized.includes('slack') || normalized.includes('messages') || normalized.includes('discord') || isInstagramDirect) {
             let contextInstruction = `\n\n⚠️ CONTEXTO DE CHAT (${appName}):\nAntes de actuar, LEE los mensajes visibles para entender la conversación.`;
 
             // USE WHATSAPP CONTEXT PARSER
@@ -366,6 +731,85 @@ ACCIONES RECOMENDADAS:
             return contextInstruction;
         }
         return '';
+    }
+
+    _shouldUseBrowserAgent(appName = '') {
+        if (!this.browserAgent?.browserContext?.active) return false;
+
+        const requestedNorm = this._normalizeText(appName || this.currentApp || '');
+        const focusNorm = this._normalizeText(this.currentFocusApp || '');
+        const browserAppNorm = this._normalizeText(this.browserAgent.browserContext.app || '');
+        const browserUrlNorm = this._normalizeText(this.browserAgent.browserContext.url || '');
+        const webTarget = this._getWebTargetConfig(appName || this.currentApp || '', '', '');
+
+        if (this.currentLaunchMode === 'browser') return true;
+        if (this._looksLikeBrowserTarget(requestedNorm)) return true;
+        if (focusNorm.includes('chrome') || focusNorm === 'browser') return true;
+        if (browserAppNorm && requestedNorm && (browserAppNorm.includes(requestedNorm) || requestedNorm.includes(browserAppNorm))) return true;
+        if (webTarget && Array.isArray(webTarget.domains) && webTarget.domains.some(domain => browserUrlNorm.includes(this._normalizeText(domain)))) return true;
+
+        return false;
+    }
+
+    _isLowSignalBrowserNode(element) {
+        const label = this._normalizeText(element?.label || '');
+        const type = this._normalizeText(element?.type || '');
+        const bbox = element?.bbox || {};
+
+        let y = Number(bbox.y || 0);
+        if (y > 1) y = y / (this.screenHeight || 1);
+
+        const toolbarRegion = y >= 0 && y < 0.13;
+        const browserChromePatterns = [
+            'back',
+            'forward',
+            'reload',
+            'search tabs',
+            'view site information',
+            'new tab',
+            'open tabs',
+            'close tab',
+            'extensions',
+            'install ',
+            'address and search bar',
+            'toolbar'
+        ];
+
+        if (browserChromePatterns.some(pattern => label.includes(pattern))) return true;
+        if (toolbarRegion && type === 'toolbar') return true;
+        if (toolbarRegion && type === 'input' && (label.includes('.com') || label.includes('http'))) return true;
+        if (toolbarRegion && ['group', 'checkbox', 'menu'].includes(type) && (!label || label === type || label.includes('google chrome'))) return true;
+
+        return false;
+    }
+
+    _filterBrowserChromeNoise(elements, appName = '', detectedApp = '') {
+        if (!Array.isArray(elements) || elements.length === 0) return elements;
+
+        const detectedNorm = this._normalizeText(detectedApp);
+        const shouldFilter = this.currentLaunchMode === 'browser' ||
+            detectedNorm.includes('chrome') ||
+            detectedNorm.includes('browser') ||
+            this._shouldUseBrowserAgent(appName);
+
+        if (!shouldFilter) return elements;
+
+        const filtered = elements.filter(element => !this._isLowSignalBrowserNode(element));
+        const denoised = filtered.filter(element => {
+            const type = this._normalizeText(element?.type || '');
+            const label = this._normalizeText(element?.label || '');
+            return !(type === 'group' && (!label || label === 'group') && filtered.length > 12);
+        });
+
+        if (denoised.length >= 5) {
+            const removed = elements.length - denoised.length;
+            if (removed > 0) {
+                console.log(`🧹 [ScreenAgent] Browser noise filtered: ${elements.length} -> ${denoised.length} nodes`);
+            }
+            return denoised;
+        }
+
+        return elements;
     }
 
 
@@ -394,12 +838,15 @@ ACCIONES RECOMENDADAS:
 
      * The agent will use GPT-4.1 to diagnose problems and search the web for solutions
      */
-    async _runAxDetection(appName = null) {
+    async _runAxDetection(appName = null, focusAppName = null) {
         // Enrutador inteligente: BrowserAgent vs Native OS
-        const normalizedApp = this._sanitizeAppName(appName || '').toLowerCase();
-        if (this.browserAgent && this.browserAgent.browserContext.active &&
-            (normalizedApp.includes('chrome') || normalizedApp === 'browser')) {
-            console.log('🌐 [ScreenAgent] Delegando Extracción a BrowserAgent (Playwright)');
+        const semanticApp = appName || this.currentApp || '';
+        const nativeFocusApp = focusAppName || this.currentFocusApp || this._sanitizeAppName(semanticApp);
+
+        if (this._shouldUseBrowserAgent(semanticApp)) {
+            if (VERBOSE_SCREEN_AGENT_LOGS) {
+                console.log(`🌐 [ScreenAgent] Delegando extracción web a BrowserAgent para "${semanticApp}"`);
+            }
             try {
                 const bResult = await this.browserAgent.extractAffordances();
                 if (bResult.elements && bResult.elements.length > 0) {
@@ -407,16 +854,18 @@ ACCIONES RECOMENDADAS:
                         elements: bResult.elements,
                         app: bResult.app || 'browser',
                         window: bResult.url || 'web',
-                        source: 'BROWSER_CDP'
+                        source: bResult.source || 'BROWSER_CDP',
+                        url: bResult.url || ''
                     };
                 }
+                console.warn('⚠️ [ScreenAgent] BrowserAgent no devolvió affordances útiles. Intentando AX nativo...');
             } catch (e) {
                 console.warn('⚠️ [ScreenAgent] BrowserAgent falló en extracción, intentando fallback nativo...', e.message);
             }
         }
 
         try {
-            const result = await this.axAgent.extract(appName);
+            const result = await this.axAgent.extract(nativeFocusApp);
 
             if (result.error || !result.snapshot || result.snapshot.length === 0) {
                 console.warn('⚠️ [ScreenAgent] AX Agent (Native) returned error:', result.error);
@@ -424,7 +873,7 @@ ACCIONES RECOMENDADAS:
             }
 
             // Normalize elements to match expected format
-            const elements = result.snapshot.map(e => ({
+            let elements = result.snapshot.map(e => ({
                 id: e.id,
                 type: e.type,
                 label: e.label || e.type,
@@ -435,6 +884,8 @@ ACCIONES RECOMENDADAS:
                     y: e.bbox.y + e.bbox.h / 2
                 }
             }));
+
+            elements = this._filterBrowserChromeNoise(elements, semanticApp, result.app);
 
             return {
                 elements,
@@ -475,7 +926,9 @@ ACCIONES RECOMENDADAS:
             };
 
             fs.writeFileSync(filename, JSON.stringify(data, null, 2));
-            console.log(`💾 [ScreenAgent] Graph saved: ${filename}`);
+            if (VERBOSE_SCREEN_AGENT_LOGS) {
+                console.log(`💾 [ScreenAgent] Graph saved: ${filename}`);
+            }
 
             // TODO: Pipe to Jetson here if needed
 
@@ -489,7 +942,7 @@ ACCIONES RECOMENDADAS:
     /**
      * Main action loop override to use hybrid AX/Vision approach.
      */
-    async executeAction(goal, app, stepsHint) {
+    async executeAction(goal, app, stepsHint, options = {}) {
         if (this.isRunning) {
             console.log('⚠️ [ScreenAgent] Already running an action');
             return { success: false, error: 'Already executing an action' };
@@ -499,10 +952,19 @@ ACCIONES RECOMENDADAS:
         this.abortRequested = false;
         this.deferWindowRestore = false;
         this.currentTypeTask = null;
-        this.currentApp = this._sanitizeAppName(app); // Track current app context
+        this.lastBrowserElement = null;
+        this.currentExecutionState = null;
+        this.lastExecutionStateKey = '';
+        this.currentBrowserGoalProgress = null;
+        const launchPlan = await this._resolveLaunchPlan(app, goal, stepsHint);
+        this.currentApp = launchPlan.semanticApp || this._sanitizeAppName(app);
+        this.currentFocusApp = launchPlan.focusApp || this.currentApp;
+        this.currentLaunchMode = launchPlan.mode || 'native';
+        this.currentTargetUrl = launchPlan.url || '';
         this.workflowGuidance = null;
         this.workflowAnchorIndex = 0;
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
+        console.log(`🧭 [ScreenAgent] Launch plan → semantic="${this.currentApp}", focus="${this.currentFocusApp}", mode=${this.currentLaunchMode}${this.currentTargetUrl ? `, url=${this.currentTargetUrl}` : ''}`);
 
         this._notify('action-status', { phase: 'starting', goal, app });
 
@@ -550,7 +1012,7 @@ ACCIONES RECOMENDADAS:
                 });
             }
 
-            await this._openApp(app);
+            await this._activateLaunchPlan(launchPlan);
             await this._wait(500); // Reduced from 1500ms — app is already focused via AppleScript
 
             let iteration = 0;
@@ -574,13 +1036,15 @@ PASOS SUGERIDOS: "${stepsHint}"
 
 MODO HÍBRIDO (AX + Vision):
 Recibirás una lista de elementos UI.
-- Si la fuente es 'AX_ACCESSIBILITY', los IDs y coordenadas son EXACTOS (Ground Truth). Confía plenamente en ellos.
+- Si la fuente es 'AX_ACCESSIBILITY', 'BROWSER_CDP' o 'BROWSER_CORE', los IDs y coordenadas son EXACTOS (Ground Truth). Confía plenamente en ellos.
+- Si el objetivo incluye una URL o dominio explícito, ábrelo directamente. NO pidas permiso para navegar a esa URL.
 - Si la fuente es 'VISION' (YOLO), los elementos son aproximados.
 
 ACCIONES DISPONIBLES (ordenadas por preferencia):
 1. perform_set_of_actions([...]): EJECUTA UNA SECUENCIA. Úsala SIEMPRE que se requiera más de un clic consecutivo o llenado de formularios.
-2. switch_app("NombreApp"): Cambia de aplicación.
+2. switch_app("NombreApp"): Cambia de aplicación. También puedes usarlo para pasar a navegador si el objetivo es web.
 3. request_user_input("pregunta"): Pausar y pedir datos faltantes al usuario.
+Usa request_user_input tambien si llegas a un portal o pagina intermedia y la siguiente accion no es inequívoca.
 4. goal_reached("Resumen"): Terminar la tarea.
 
 REGLAS DE VELOCIDAD EXTREMA:
@@ -590,6 +1054,17 @@ REGLAS DE VELOCIDAD EXTREMA:
 
 IMPORTANTE SOBRE MULTI-APP:
 Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa 'switch_app' cuando termines con la primera.
+
+REGLA DE NAVEGADOR:
+Si el objetivo real vive dentro de una página web (Instagram, Gmail, Notion, etc.), prioriza SIEMPRE el contenido de la página.
+Evita controles del navegador como tabs, barra de direcciones, extensiones, "Search tabs", Back, Forward o Reload salvo que el objetivo pida explícitamente usarlos.
+Si el estado actual detectado indica un bloqueo real (login, archivo, confirmación del usuario), prioriza ESE bloqueo por encima del plan inicial.
+NO pidas datos de etapas futuras si la interfaz actual aún no llegó a esa etapa.
+Si llegas a un portal, dashboard o hub y el siguiente clic abriría una plataforma, curso, sección o flujo que el usuario NO especificó claramente, usa request_user_input en vez de adivinar.
+Si dudas entre dos o más acciones plausibles, pregunta. NO inventes la siguiente ruta.
+Para tareas de subida: no asumas Canvas, curso, tarea, sección, "Crear" o "Subir contenido" salvo que esté explícito por el usuario o sea inequívoco en la UI actual.
+Si se requiere autenticación, NUNCA pidas contraseñas o credenciales al usuario por chat. Pídele que complete el login directamente en la página y luego continúa.
+Si el usuario acaba de dar una instrucción clara de continuación, NO pidas confirmación redundante sobre esa misma instrucción.
 
 IMPORTANTE SOBRE VELOCIDAD:
 ¡USA 'perform_set_of_actions' SIEMPRE QUE SEA SEGURO!
@@ -636,7 +1111,7 @@ Si ya estás en una etapa posterior, NO pidas datos de una etapa anterior.`
                 // Retry AX a few times if it fails
                 let detectionResult = null;
                 for (let i = 0; i < 3; i++) {
-                    detectionResult = await this._runAxDetection(this.currentApp); // Use currentApp dynamic context
+                    detectionResult = await this._runAxDetection(this.currentApp, this.currentFocusApp);
                     if (detectionResult && detectionResult.elements.length > 0) break;
                     console.log(`⏳ [ScreenAgent] AX Retry ${i + 1}/3...`);
                     await this._wait(1500);
@@ -678,7 +1153,9 @@ Si ya estás en una etapa posterior, NO pidas datos de una etapa anterior.`
 
                 if (currentHash === lastElementsHash) {
                     sameStateCount++;
-                    console.log(`⚠️ [ScreenAgent] Same state detected: ${sameStateCount}/${LOOP_THRESHOLD}`);
+                    if (VERBOSE_SCREEN_AGENT_LOGS) {
+                        console.log(`⚠️ [ScreenAgent] Same state detected: ${sameStateCount}/${LOOP_THRESHOLD}`);
+                    }
 
                     if (sameStateCount >= LOOP_THRESHOLD) {
                         loopWarning = `\n\n🔴 ADVERTENCIA CRÍTICA: No se detecta progreso en las últimas ${LOOP_THRESHOLD} iteraciones.
@@ -694,7 +1171,7 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                         console.warn(`🔴 [ScreenAgent] LOOP DETECTED! Same state for ${sameStateCount} iterations`);
                     }
                 } else {
-                    if (sameStateCount > 0) {
+                    if (sameStateCount > 0 && VERBOSE_SCREEN_AGENT_LOGS) {
                         console.log(`✅ [ScreenAgent] State changed! Loop counter reset.`);
                     }
                     sameStateCount = 0;
@@ -717,11 +1194,51 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                 const enableFormalizer = process.env.IU_AX_FORMALIZER === '1';
                 let llmElements = elements;
                 if (elements.length > 0 && enableFormalizer) {
-                    console.log(`🧠 [ScreenAgent] Formalizing graph with ${elements.length} raw nodes...`);
+                    if (VERBOSE_SCREEN_AGENT_LOGS) {
+                        console.log(`🧠 [ScreenAgent] Formalizing graph with ${elements.length} raw nodes...`);
+                    }
                     llmElements = GraphFormalizer.optimize(elements);
-                    console.log(`📉 [ScreenAgent] Graph formalized: ${elements.length} -> ${llmElements.length} meaningful nodes`);
+                    if (VERBOSE_SCREEN_AGENT_LOGS) {
+                        console.log(`📉 [ScreenAgent] Graph formalized: ${elements.length} -> ${llmElements.length} meaningful nodes`);
+                    }
                 } else if (elements.length > 0) {
-                    console.log(`🧪 [ScreenAgent] Graph formalizer disabled (IU_AX_FORMALIZER!=1). Using raw AX nodes: ${elements.length}`);
+                    if (VERBOSE_SCREEN_AGENT_LOGS) {
+                        console.log(`🧪 [ScreenAgent] Graph formalizer disabled (IU_AX_FORMALIZER!=1). Using raw AX nodes: ${elements.length}`);
+                    }
+                }
+
+                const browserExecutionState = this.currentLaunchMode === 'browser'
+                    ? detectBrowserExecutionState({
+                        goal,
+                        stepsHint,
+                        url: detectionResult?.url || this.currentTargetUrl || this.browserAgent?.browserContext?.url || '',
+                        elements: llmElements,
+                        source: detectionResult?.source || ''
+                    })
+                    : null;
+
+                const browserGoalProgress = this.currentLaunchMode === 'browser'
+                    ? reduceBrowserGoalProgress({
+                        goal,
+                        stepsHint,
+                        url: detectionResult?.url || this.currentTargetUrl || this.browserAgent?.browserContext?.url || '',
+                        elements: llmElements,
+                        source: detectionResult?.source || ''
+                    })
+                    : null;
+                this.currentBrowserGoalProgress = browserGoalProgress;
+
+                if (browserExecutionState) {
+                    this._updateExecutionState(browserExecutionState);
+                }
+
+                if (browserExecutionState?.requiresUserTurn) {
+                    actionResult = browserExecutionState.userMessage;
+                    this.deferWindowRestore = true;
+                    console.log(`🧭 [ScreenAgent] Browser state handoff → ${browserExecutionState.stage}: ${browserExecutionState.userMessage}`);
+                    this._notifyUserTurn('Tu turno', browserExecutionState.userMessage, 120000);
+                    iteration = this.maxIterations;
+                    break;
                 }
 
                 // 5. Format elements list for LLM
@@ -734,8 +1251,13 @@ ACCIÓN REQUERIDA: Cambia de estrategia INMEDIATAMENTE. NO sigas clickeando los 
                 const appInstructions = this._getAppSpecificInstructions(this.currentApp, elements);
                 const runtimeContextHint = `\n\nContexto actual detectado:
 - App: ${detectionResult?.app || this.currentApp || 'desconocida'}
+- Foco del SO: ${this.currentFocusApp || this.currentApp || 'desconocido'}
 - Ventana/Módulo: ${detectionResult?.window || 'desconocido'}
-- Etapa actual (acciones recientes): ${(this.lastContextSnapshot.recentActions || []).slice(-4).join(' | ') || 'sin acciones previas'}`;
+- URL objetivo: ${this.currentTargetUrl || this.browserAgent?.browserContext?.url || 'n/a'}
+- Estado de ejecución: ${browserExecutionState?.stage || 'desconocido'}
+- Bloqueo actual: ${browserExecutionState?.blocker || 'ninguno'}
+- Turno actual: ${browserExecutionState?.turn || 'assistant'}
+- Etapa actual (acciones recientes): ${(this.lastContextSnapshot.recentActions || []).slice(-4).join(' | ') || 'sin acciones previas'}${browserGoalProgress?.guidanceText || ''}`;
 
                 somMessages.push({
                     role: "user",
@@ -748,7 +1270,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                 });
 
                 console.log(`📤 [ScreenAgent] Sending to LLM: ${elements.length} elements, tool_choice=required`);
-                console.log(`📋 [ScreenAgent] Tools available: ${SOM_TOOLS.map(t => t.function.name).join(', ')}`);
+                if (VERBOSE_SCREEN_AGENT_LOGS) {
+                    console.log(`📋 [ScreenAgent] Tools available: ${SOM_TOOLS.map(t => t.function.name).join(', ')}`);
+                }
 
                 const inferStartTime = Date.now();
                 const somResponse = await this._retryWithBackoff(() => ModelSwitch.chatCompletion({
@@ -759,12 +1283,14 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                 }), 3);
                 const inferElapsed = Date.now() - inferStartTime;
 
-                console.log(`📥 [ScreenAgent] LLM Response [${inferElapsed}ms]:`, JSON.stringify({
-                    hasToolCalls: !!somResponse.choices[0]?.message?.tool_calls,
-                    toolCallCount: somResponse.choices[0]?.message?.tool_calls?.length || 0,
-                    finishReason: somResponse.choices[0]?.finish_reason,
-                    messageContent: somResponse.choices[0]?.message?.content?.substring(0, 100)
-                }));
+                if (VERBOSE_SCREEN_AGENT_LOGS) {
+                    console.log(`📥 [ScreenAgent] LLM Response [${inferElapsed}ms]:`, JSON.stringify({
+                        hasToolCalls: !!somResponse.choices[0]?.message?.tool_calls,
+                        toolCallCount: somResponse.choices[0]?.message?.tool_calls?.length || 0,
+                        finishReason: somResponse.choices[0]?.finish_reason,
+                        messageContent: somResponse.choices[0]?.message?.content?.substring(0, 100)
+                    }));
+                }
 
                 const somChoice = somResponse.choices[0];
                 const toolCalls = somChoice.message.tool_calls;
@@ -825,23 +1351,43 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                     // Handle dynamic user info request (pause flow without finishing)
                     if (fnName === 'request_user_input') {
                         const question = String(args.question || '').trim();
-                        const missingFields = String(args.missing_fields || '').trim();
-                        const msg = question || `Necesito estos datos para continuar: ${missingFields}`;
+                        let missingFields = String(args.missing_fields || '').trim();
+                        let msg = question || `Necesito estos datos para continuar: ${missingFields}`;
+                        const normalizedRequest = this._normalizeText(`${msg} ${missingFields}`);
+                        const hasRecentExplicitContinuation = /ACLARACI[ÓO]N DEL USUARIO:/i.test(String(stepsHint || ''));
+
+                        if (hasRecentExplicitContinuation && (
+                            normalizedRequest.includes('confirma') ||
+                            normalizedRequest.includes('confirmacion') ||
+                            normalizedRequest.includes('responde si') ||
+                            normalizedRequest.includes('si no')
+                        )) {
+                            const autoConfirmation = 'AUTO_CONFIRMADO: el usuario ya dio esta instrucción explícitamente en la continuación.';
+                            console.log(`🧭 [ScreenAgent] Auto-confirming redundant request_user_input: ${msg}`);
+                            somMessages.push({
+                                role: "tool",
+                                tool_call_id: toolCall.id,
+                                content: autoConfirmation,
+                                _functionName: fnName
+                            });
+                            continue;
+                        }
+
+                        if (
+                            normalizedRequest.includes('contrasena') ||
+                            normalizedRequest.includes('password') ||
+                            normalizedRequest.includes('credenciales') ||
+                            normalizedRequest.includes('correo') ||
+                            normalizedRequest.includes('email')
+                        ) {
+                            msg = 'Necesito que completes el inicio de sesión directamente en la página. Cuando estés dentro, yo continúo.';
+                            missingFields = 'inicio_de_sesion';
+                        }
+
                         actionResult = msg;
                         this.deferWindowRestore = true;
                         console.log(`📝 [ScreenAgent] Awaiting user input: ${msg} [missing: ${missingFields}]`);
-                        this._notify('action-status', {
-                            phase: 'awaiting_user_input',
-                            question: msg,
-                            missing_fields: missingFields
-                        });
-                        try {
-                            stickyFace.setFaceColor('#00ff00');
-                            stickyFace.setExpression('mild_attention');
-                            stickyFace.showMessage({ title: 'Necesito datos', body: msg }, 120000);
-                        } catch (e) {
-                            // best effort only
-                        }
+                        this._notifyUserTurn('Necesito datos', msg, 120000);
 
                         somMessages.push({
                             role: "tool",
@@ -865,6 +1411,18 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                             console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
                             actionSummary = `SELECT #${args.element_id} — NOT FOUND`;
                         } else {
+                            const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
+                            if (skipDecision.skip) {
+                                console.log(`🧭 [ScreenAgent] Skipping redundant click on #${targetElement.id}: ${skipDecision.reason}`);
+                                actionSummary = `SELECT #${targetElement.id} — SKIPPED (${skipDecision.reason})`;
+                                somMessages.push({
+                                    role: "tool",
+                                    tool_call_id: toolCall.id,
+                                    content: actionSummary,
+                                    _functionName: fnName
+                                });
+                                continue;
+                            }
                             let px, py;
                             if (targetElement.center) {
                                 px = targetElement.center.x;
@@ -879,29 +1437,67 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                                 py = Math.round(py * this.screenHeight);
                             }
 
-                            const label = `${targetElement.label || targetElement.type}`;
-                            console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
+                            const revalidated = await this._revalidateBrowserClickTarget(targetElement);
+                            if (revalidated.hash) {
+                                lastElementsHash = revalidated.hash;
+                            }
 
-                            await this._executeToolDirect('click', { px, py, label });
-                            actionSummary = `SELECT #${targetElement.id} [${label}]`;
+                            if (!revalidated.ok || !revalidated.element) {
+                                console.warn(`⚠️ [ScreenAgent] Click aborted after fast revalidation: ${revalidated.reason}`);
+                                actionSummary = `SELECT #${args.element_id} — STALE UI (${revalidated.reason})`;
+                            } else {
+                                targetElement = revalidated.element;
+                                const skipDecisionAfterRefresh = this._shouldSkipBrowserProgressAction(targetElement);
+                                if (skipDecisionAfterRefresh.skip) {
+                                    console.log(`🧭 [ScreenAgent] Skipping redundant click after refresh on #${targetElement.id}: ${skipDecisionAfterRefresh.reason}`);
+                                    actionSummary = `SELECT #${targetElement.id} — SKIPPED (${skipDecisionAfterRefresh.reason})`;
+                                } else if (this._isBrowserCoreElement(targetElement)) {
+                                    await this._clickBrowserElement(targetElement);
+                                    actionSummary = `SELECT #${targetElement.id} [${targetElement.label || targetElement.type}]`;
+                                } else {
+                                    const point = this._elementCenterPixels(targetElement);
+                                    if (!point) {
+                                        console.warn(`⚠️ [ScreenAgent] Click aborted: target revalidated but has no usable center`);
+                                        actionSummary = `SELECT #${args.element_id} — NO CLICK POINT`;
+                                    } else {
+                                        px = point.x;
+                                        py = point.y;
+                                        const label = `${targetElement.label || targetElement.type}`;
+                                        console.log(`🎯 [ScreenAgent] Click on #${targetElement.id} [${label}] at pixel (${px}, ${py})`);
+
+                                        await this._executeToolDirect('click', { px, py, label });
+                                        actionSummary = `SELECT #${targetElement.id} [${label}]`;
+                                    }
+                                }
+                            }
                         }
                     }
                     else if (fnName === 'type_text') {
-                        await this._executeTool('type_text', args);
+                        const typedViaBrowser = await this._typeIntoBrowserElement(this.lastBrowserElement, args.text).catch(() => false);
+                        if (!typedViaBrowser) {
+                            await this._executeTool('type_text', args);
+                        }
                         actionSummary = `TYPE "${args.text}"`;
                     }
                     else if (fnName === 'key_press') {
-                        await this._executeTool('key_press', args);
+                        const pressedViaBrowser = await this._pressBrowserKey(args.key).catch(() => false);
+                        if (!pressedViaBrowser) {
+                            await this._executeTool('key_press', args);
+                        }
                         actionSummary = `KEY ${args.key}`;
                     }
                     else if (fnName === 'switch_app') {
                         console.log(`🔄 [ScreenAgent] Switching app to: "${args.app_name}"`);
                         try {
-                            // Use existing _openApp method
-                            await this._openApp(args.app_name);
+                            const switchPlan = await this._resolveLaunchPlan(args.app_name, goal, stepsHint);
+                            await this._activateLaunchPlan(switchPlan);
                             await this._wait(1000); // Reduced from 2000ms — app opens/focuses faster now
 
-                            this.currentApp = this._sanitizeAppName(args.app_name); // Update context with sanitized app name
+                            this.currentApp = switchPlan.semanticApp || this._sanitizeAppName(args.app_name);
+                            this.currentFocusApp = switchPlan.focusApp || this.currentApp;
+                            this.currentLaunchMode = switchPlan.mode || 'native';
+                            this.currentTargetUrl = switchPlan.url || '';
+                            this.lastBrowserElement = null;
                             actionSummary = `SWITCH APP to "${args.app_name}"`;
 
                             lastElementsHash = null;
@@ -915,9 +1511,13 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                         const subActions = args.actions;
                         console.log(`📦 [ScreenAgent] Batch executing ${subActions.length} actions...`);
                         const batchStartTime = Date.now();
+                        let executedActions = 0;
+                        let batchStoppedDueToStaleUi = false;
 
-                        // Refocus ONCE before batch
-                        await this._ensureFocus(this.currentApp);
+                        // Refocus ONCE before batch when using native/OS actions.
+                        if (this.currentLaunchMode !== 'browser') {
+                            await this._ensureFocus(this.currentFocusApp || this.currentApp);
+                        }
 
                         for (let j = 0; j < subActions.length; j++) {
                             if (this.abortRequested) break;
@@ -933,31 +1533,67 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                                     continue;
                                 }
 
-                                let px, py;
-                                if (targetElement.center) {
-                                    px = targetElement.center.x;
-                                    py = targetElement.center.y;
-                                } else if (targetElement.bbox) {
-                                    px = targetElement.bbox.x * this.screenWidth + (targetElement.bbox.w * this.screenWidth / 2);
-                                    py = targetElement.bbox.y * this.screenHeight + (targetElement.bbox.h * this.screenHeight / 2);
+                                const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
+                                if (skipDecision.skip) {
+                                    console.log(`🧭 [ScreenAgent] ${stepStr}: skipped redundant click on #${targetElement.id} (${skipDecision.reason})`);
+                                    continue;
                                 }
-                                if (px < 1 && py < 1) { px = Math.round(px * this.screenWidth); py = Math.round(py * this.screenHeight); }
 
-                                await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
+                                const revalidated = await this._revalidateBrowserClickTarget(targetElement);
+                                if (revalidated.hash) {
+                                    lastElementsHash = revalidated.hash;
+                                }
+                                if (!revalidated.ok || !revalidated.element) {
+                                    console.warn(`⚠️ [ScreenAgent] ${stepStr}: click aborted after revalidation (${revalidated.reason})`);
+                                    batchStoppedDueToStaleUi = true;
+                                    break;
+                                }
+
+                                targetElement = revalidated.element;
+                                const skipDecisionAfterRefresh = this._shouldSkipBrowserProgressAction(targetElement);
+                                if (skipDecisionAfterRefresh.skip) {
+                                    console.log(`🧭 [ScreenAgent] ${stepStr}: skipped redundant click after refresh on #${targetElement.id} (${skipDecisionAfterRefresh.reason})`);
+                                    continue;
+                                }
+                                if (this._isBrowserCoreElement(targetElement)) {
+                                    await this._clickBrowserElement(targetElement);
+                                } else {
+                                    const point = this._elementCenterPixels(targetElement);
+                                    if (!point) {
+                                        console.warn(`⚠️ [ScreenAgent] ${stepStr}: revalidated target has no usable center`);
+                                        batchStoppedDueToStaleUi = true;
+                                        break;
+                                    }
+                                    const px = point.x;
+                                    const py = point.y;
+
+                                    await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
+                                }
+                                executedActions++;
                                 lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                             }
                             else if (sub.action === 'type') {
-                                await this._executeTool('type_text', { text: sub.text }, true);
+                                const typedViaBrowser = await this._typeIntoBrowserElement(this.lastBrowserElement, sub.text).catch(() => false);
+                                if (!typedViaBrowser) {
+                                    await this._executeTool('type_text', { text: sub.text }, true);
+                                }
+                                executedActions++;
                                 lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                             }
                             else if (sub.action === 'key') {
-                                await this._executeTool('key_press', { key: sub.key }, true);
+                                const pressedViaBrowser = await this._pressBrowserKey(sub.key).catch(() => false);
+                                if (!pressedViaBrowser) {
+                                    await this._executeTool('key_press', { key: sub.key }, true);
+                                }
+                                executedActions++;
                                 lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                             }
                         }
                         const batchElapsed = Date.now() - batchStartTime;
                         const reasoningStr = args.justificacion ? ` (${args.justificacion})` : '';
-                        actionSummary = `BATCH: Executed ${subActions.length} actions in ${batchElapsed}ms${reasoningStr}`;
+                        actionSummary = batchStoppedDueToStaleUi
+                            ? `BATCH: Stopped after ${executedActions}/${subActions.length} actions due to stale UI${reasoningStr}`
+                            : `BATCH: Executed ${subActions.length} actions in ${batchElapsed}ms${reasoningStr}`;
                         console.log(`⏱️ [ScreenAgent] Batch complete in ${batchElapsed}ms${reasoningStr}`);
                     }
 
@@ -988,11 +1624,17 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                 }
             }
 
-            if (this.deferWindowRestore && !goalReached && actionResult) {
-                this._notify('action-status', { phase: 'awaiting_user_input', question: actionResult });
-            } else if (this.abortRequested) {
+            const waitingForUser = !!(this.deferWindowRestore && !goalReached && actionResult);
+
+            if (this.abortRequested) {
                 console.log('🛑 [ScreenAgent] Action loop interrupted by user');
                 this._notify('action-status', { phase: 'stopped' });
+            } else if (waitingForUser) {
+                this._notify('action-status', {
+                    phase: 'waiting_user',
+                    summary: actionResult,
+                    execution_state: this.currentExecutionState || null
+                });
             } else if (!goalReached) {
                 console.warn(`⚠️ [ScreenAgent] Stopped after ${iteration} iterations without reaching goal`);
                 this._notify('action-status', { phase: 'incomplete', iterations: iteration });
@@ -1003,7 +1645,11 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                 iterations: iteration,
                 summary: actionResult,
                 aborted: this.abortRequested,
-                awaitingUserInput: !!(this.deferWindowRestore && !goalReached && actionResult)
+                awaitingUserInput: waitingForUser,
+                executionState: this.currentExecutionState || null,
+                runtimeContext: this.getRuntimeContextSnapshot(),
+                interruption: this.getInterruptionSnapshot(),
+                sessionId: options.sessionId || ''
             };
 
 
@@ -1016,6 +1662,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
             this.abortRequested = false;
             this.workflowGuidance = null;
             this.workflowAnchorIndex = 0;
+            this.currentBrowserGoalProgress = null;
 
             // RESTORE WINDOWS & HIDE STICKY FACE (unless command-hold override requests hidden state)
             try {
@@ -1307,7 +1954,7 @@ CONTEXTO DE VENTANAS:
     async _executeToolDirect(fnName, args, skipFocus = false) {
         try {
             if (this.abortRequested) return;
-            if (!skipFocus) await this._ensureFocus(this.currentApp);
+            if (!skipFocus) await this._ensureFocus(this.currentFocusApp || this.currentApp);
             if (this.abortRequested) return;
 
             const { mouse, Button, Point } = await this._getNutJS();
@@ -1562,7 +2209,7 @@ CONTEXTO DE VENTANAS:
     async _executeTool(fnName, args, skipFocus = false) {
         try {
             if (this.abortRequested) return;
-            if (!skipFocus) await this._ensureFocus(this.currentApp);
+            if (!skipFocus) await this._ensureFocus(this.currentFocusApp || this.currentApp);
             if (this.abortRequested) return;
 
             const { mouse, keyboard, Button, Key, Point } = await this._getNutJS();
@@ -1754,7 +2401,9 @@ CONTEXTO DE VENTANAS:
             if (detection && detection.elements && detection.elements.length > 0) {
                 const currentHash = this._hashElements(detection.elements);
                 if (currentHash !== oldHash) {
-                    console.log(`⏱️ [ScreenAgent] Dynamic Wait: UI cambió en ${elapsed}ms`);
+                    if (VERBOSE_SCREEN_AGENT_LOGS) {
+                        console.log(`⏱️ [ScreenAgent] Dynamic Wait: UI cambió en ${elapsed}ms`);
+                    }
                     await this._wait(150); // Pausa extra para que se asienten animaciones post-cambio
                     return currentHash;
                 }
@@ -1763,7 +2412,9 @@ CONTEXTO DE VENTANAS:
             elapsed += pollIntervalMs;
         }
 
-        console.log(`⏱️ [ScreenAgent] Dynamic Wait: Timeout (${timeoutMs}ms), UI no cambió o fue imperceptible.`);
+        if (VERBOSE_SCREEN_AGENT_LOGS) {
+            console.log(`⏱️ [ScreenAgent] Dynamic Wait: Timeout (${timeoutMs}ms), UI no cambió o fue imperceptible.`);
+        }
         return oldHash;
     }
 
@@ -1781,6 +2432,124 @@ CONTEXTO DE VENTANAS:
             .replace(/[^\p{L}\p{N}\s]/gu, ' ')
             .replace(/\s+/g, ' ')
             .trim();
+    }
+
+    _normalizeUrlForMatch(url) {
+        const raw = String(url || '').trim();
+        if (!raw) return '';
+        try {
+            const parsed = new URL(raw);
+            const pathname = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/+$/, '') : '';
+            return `${parsed.origin}${pathname}${parsed.search}`.toLowerCase();
+        } catch (_) {
+            return raw.replace(/\/+$/, '').toLowerCase();
+        }
+    }
+
+    _urlsMatch(left, right) {
+        const a = this._normalizeUrlForMatch(left);
+        const b = this._normalizeUrlForMatch(right);
+        if (!a || !b) return false;
+        return a === b || a.includes(b) || b.includes(a);
+    }
+
+    _isBrowserCoreElement(element) {
+        return !!(element && element.browserRef && this.browserAgent?.act);
+    }
+
+    _canTypeIntoBrowserElement(element) {
+        const role = this._normalizeText(element?.role || element?.type || '');
+        return ['textbox', 'searchbox', 'combobox'].includes(role);
+    }
+
+    _toBrowserKey(key) {
+        const normalized = this._normalizeText(key);
+        const keyMap = {
+            enter: 'Enter',
+            tab: 'Tab',
+            escape: 'Escape',
+            backspace: 'Backspace',
+            delete: 'Delete',
+            up: 'ArrowUp',
+            down: 'ArrowDown',
+            left: 'ArrowLeft',
+            right: 'ArrowRight',
+            pageup: 'PageUp',
+            pagedown: 'PageDown',
+            home: 'Home',
+            end: 'End'
+        };
+        return keyMap[normalized] || key;
+    }
+
+    async _executeBrowserCoreAction(request, profile = 'managed') {
+        if (!this.browserAgent?.act) return null;
+        const result = await this.browserAgent.act(request, profile);
+        if (result?.url) {
+            this.browserAgent.setBrowserContext(result.url, {
+                targetId: result.targetId || request.targetId || '',
+                wsUrl: result.url
+            });
+        }
+        return result;
+    }
+
+    async _clickBrowserElement(element) {
+        if (!this._isBrowserCoreElement(element)) return false;
+
+        // Move OS mouse to the element's screen coordinates for visual UX feedback.
+        // Fire-and-forget — does NOT block the actual browser click.
+        const center = this._elementCenterPixels(element);
+        if (center && Number.isFinite(center.x) && Number.isFinite(center.y) && center.x > 0 && center.y > 0) {
+            this._humanLikeMove(center.x, center.y, 5.0).catch(() => {});
+        }
+
+        await this._executeBrowserCoreAction({
+            kind: 'click',
+            targetId: element.browserTargetId || this.browserAgent?.browserContext?.targetId || undefined,
+            ref: element.browserRef
+        }, element.browserProfile || 'managed');
+        this.lastBrowserElement = element;
+        return true;
+    }
+
+    async _typeIntoBrowserElement(element, text) {
+        if (!this._isBrowserCoreElement(element) || !this._canTypeIntoBrowserElement(element)) return false;
+        await this._executeBrowserCoreAction({
+            kind: 'type',
+            targetId: element.browserTargetId || this.browserAgent?.browserContext?.targetId || undefined,
+            ref: element.browserRef,
+            text: String(text || '')
+        }, element.browserProfile || 'managed');
+        this.lastBrowserElement = element;
+        return true;
+    }
+
+    async _pressBrowserKey(key) {
+        if (!this.browserAgent?.act) return false;
+        await this._executeBrowserCoreAction({
+            kind: 'press',
+            targetId: this.browserAgent?.browserContext?.targetId || undefined,
+            key: this._toBrowserKey(key)
+        });
+        return true;
+    }
+
+    _updateExecutionState(state) {
+        this.currentExecutionState = state || null;
+        const nextKey = state ? `${state.stage}:${state.blocker}:${state.turn}:${state.summary}` : '';
+        if (!nextKey || nextKey === this.lastExecutionStateKey) return;
+        this.lastExecutionStateKey = nextKey;
+        this._notify('action-status', {
+            phase: 'execution_state',
+            turn: state.turn,
+            browser_state: state
+        });
+    }
+
+    _shouldSkipBrowserProgressAction(element) {
+        if (this.currentLaunchMode !== 'browser') return { skip: false, reason: '' };
+        return shouldSkipRedundantBrowserAction(element, this.currentBrowserGoalProgress);
     }
 
     _inferZoneFromBbox(bbox) {
@@ -1867,6 +2636,112 @@ CONTEXTO DE VENTANAS:
         }
 
         return llmTarget;
+    }
+
+    _elementCenterPixels(element) {
+        if (!element) return null;
+
+        let x = Number(element?.center?.x);
+        let y = Number(element?.center?.y);
+
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            const bbox = element?.bbox || {};
+            x = Number(bbox.x || 0) + (Number(bbox.w || 0) / 2);
+            y = Number(bbox.y || 0) + (Number(bbox.h || 0) / 2);
+        }
+
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        if (x <= 1 && y <= 1) {
+            return {
+                x: Math.round(x * this.screenWidth),
+                y: Math.round(y * this.screenHeight)
+            };
+        }
+
+        return {
+            x: Math.round(x),
+            y: Math.round(y)
+        };
+    }
+
+    _findFreshElementMatch(elements, targetElement) {
+        if (!Array.isArray(elements) || elements.length === 0 || !targetElement) return null;
+
+        const targetLabel = this._normalizeText(targetElement.label || targetElement.type || '');
+        const targetType = this._normalizeText(targetElement.type || targetElement.role || '');
+        const targetZone = this._inferZoneFromBbox(targetElement.bbox);
+        const targetCenter = this._elementCenterPixels(targetElement);
+
+        let best = null;
+        let bestScore = -1;
+
+        for (const candidate of elements) {
+            const candidateLabel = this._normalizeText(candidate.label || candidate.type || '');
+            const candidateType = this._normalizeText(candidate.type || candidate.role || '');
+            const candidateZone = this._inferZoneFromBbox(candidate.bbox);
+            const candidateCenter = this._elementCenterPixels(candidate);
+
+            let score = 0;
+            score += this._labelScore(targetLabel, candidateLabel) * 2;
+
+            if (targetLabel && candidateLabel && targetLabel === candidateLabel) score += 4;
+            if (targetType && candidateType && targetType === candidateType) score += 3;
+            if (targetZone && candidateZone && targetZone === candidateZone) score += 1;
+
+            if (targetCenter && candidateCenter) {
+                const dist = Math.hypot(targetCenter.x - candidateCenter.x, targetCenter.y - candidateCenter.y);
+                if (dist < 40) score += 4;
+                else if (dist < 120) score += 3;
+                else if (dist < 220) score += 2;
+                else if (dist < 360) score += 1;
+            }
+
+            if (score > bestScore) {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+
+        return best && bestScore >= 5 ? best : null;
+    }
+
+    async _revalidateBrowserClickTarget(targetElement) {
+        if (!targetElement) {
+            return { ok: false, reason: 'missing_target', element: null, hash: null };
+        }
+
+        if (!this._shouldUseBrowserAgent(this.currentApp) || !this.browserAgent?.browserContext?.active) {
+            return { ok: true, reason: 'not_browser_mode', element: targetElement, hash: null };
+        }
+
+        const previousUrl = this.browserAgent.browserContext.url || '';
+        await this.browserAgent.syncActiveTabContext(this.currentTargetUrl || previousUrl || '').catch(() => { });
+
+        const detection = await this._runAxDetection(this.currentApp, this.currentFocusApp);
+        const freshElements = Array.isArray(detection?.elements) ? detection.elements : [];
+        const freshHash = freshElements.length > 0 ? this._hashElements(freshElements) : null;
+        const matched = this._findFreshElementMatch(freshElements, targetElement);
+        const latestUrl = detection?.url || this.browserAgent?.browserContext?.url || previousUrl || '';
+
+        if (!matched) {
+            return {
+                ok: false,
+                reason: latestUrl && previousUrl && latestUrl !== previousUrl
+                    ? `browser_target_changed:${previousUrl}=>${latestUrl}`
+                    : 'target_missing_in_fresh_snapshot',
+                element: null,
+                hash: freshHash,
+                url: latestUrl
+            };
+        }
+
+        return {
+            ok: true,
+            reason: latestUrl && previousUrl && latestUrl !== previousUrl ? 'target_relocated_after_tab_change' : 'target_confirmed',
+            element: matched,
+            hash: freshHash,
+            url: latestUrl
+        };
     }
 
     /**

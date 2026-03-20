@@ -1,0 +1,27 @@
+{
+    "manifest_version": 3,
+    "name": "I&Ü - Asistente Web",
+    "version": "1.0.2",
+    "description": "Extensión oficial de I&Ü para control nativo y extracción de accesibilidad en la web.",
+    "permissions": [
+        "activeTab",
+        "tabs",
+        "scripting"
+    ],
+    "host_permissions": [
+        "ws://127.0.0.1:9223/*",
+        "ws://localhost:9223/*",
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "action": {
+        "default_title": "I&Ü Asistente Web"
+    },
+    "icons": {
+        "16": "icon16.png",
+        "48": "icon48.png",
+        "128": "icon128.png"
+    }
+}

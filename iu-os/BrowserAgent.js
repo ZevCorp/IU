@@ -32,8 +32,30 @@
 
 const net = require('net');
 const http = require('http');
+const path = require('path');
+const { execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const { chromium } = require('playwright-core'); // Incorporado Playwright
+const {
+    MANAGED_CHROME_APP,
+    MANAGED_CHROME_PORT,
+    ensureManagedChrome,
+    focusManagedChromeInstance,
+    getManagedChromeConfig,
+    getManagedChromeTargets,
+    openManagedChromeUrl
+} = require('./ManagedChrome');
+const VERBOSE_BROWSER_LOGS = process.env.IU_VERBOSE_BROWSER_LOGS === '1';
+
+function isRestrictedBrowserUrl(url = '') {
+    const normalized = String(url || '').toLowerCase();
+    if (!normalized) return true;
+    return normalized.startsWith('chrome://') ||
+        normalized.startsWith('chrome-extension://') ||
+        normalized.startsWith('devtools://') ||
+        normalized.startsWith('edge://') ||
+        normalized.startsWith('about:');
+}
 
 // ─────────────────────────────────────────────────────────────
 // CDP HTTP helpers
@@ -70,13 +92,13 @@ function fetchCdpTargets(host = '127.0.0.1', port = 9222) {
 async function extractAriaAffordances(wsUrl, limit = 400) {
     let browser;
     try {
-        // Conectar Playwright a la instancia de Chrome activa del usuario
-        browser = await chromium.connectOverCDP(wsUrl);
+        // Conectar Playwright al browser gestionado de IU y seleccionar la tab objetivo.
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${MANAGED_CHROME_PORT}`);
         const context = browser.contexts()[0];
-
-        // Asumiendo que Playwright selecciona la primera página predeterminada al conectar 
-        // a una pestaña específica de wsUrl conectamos a ella, o a page[0].
-        const page = context.pages().find(p => p.url() !== 'about:blank') || context.pages()[0];
+        const page = context.pages().find(p => (p.url() || '') === wsUrl)
+            || context.pages().find(p => (p.url() || '').includes(wsUrl))
+            || context.pages().find(p => !isRestrictedBrowserUrl(p.url() || ''))
+            || context.pages()[0];
         if (!page) throw new Error("No hay página activa");
 
         // 1. Obtener la distancia exacta desde el borde superior de la pantalla hasta 
@@ -184,9 +206,13 @@ async function extractAriaAffordances(wsUrl, limit = 400) {
 async function extractDomAffordances(wsUrl) {
     let browser;
     try {
-        browser = await chromium.connectOverCDP(wsUrl);
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${MANAGED_CHROME_PORT}`);
         const context = browser.contexts()[0];
-        const page = context.pages().find(p => p.url() !== 'about:blank') || context.pages()[0];
+        const page = context.pages().find(p => (p.url() || '') === wsUrl)
+            || context.pages().find(p => (p.url() || '').includes(wsUrl))
+            || context.pages().find(p => !isRestrictedBrowserUrl(p.url() || ''))
+            || context.pages()[0];
+        if (!page) throw new Error("No hay página activa");
 
         const affordances = await page.evaluate(() => {
             const uiHeaderHeight = window.outerHeight - window.innerHeight;
@@ -227,8 +253,13 @@ async function extractDomAffordances(wsUrl) {
 async function evalInTab(wsUrl, expression) {
     let browser;
     try {
-        browser = await chromium.connectOverCDP(wsUrl);
-        const page = browser.contexts()[0].pages()[0];
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${MANAGED_CHROME_PORT}`);
+        const context = browser.contexts()[0];
+        const page = context.pages().find(p => (p.url() || '') === wsUrl)
+            || context.pages().find(p => (p.url() || '').includes(wsUrl))
+            || context.pages().find(p => !isRestrictedBrowserUrl(p.url() || ''))
+            || context.pages()[0];
+        if (!page) throw new Error("No hay página activa");
         const result = await page.evaluate(expression);
         return result;
     } catch (e) {
@@ -243,17 +274,20 @@ async function evalInTab(wsUrl, expression) {
 // ─────────────────────────────────────────────────────────────
 
 class BrowserAgent extends EventEmitter {
-    constructor(mainWindow) {
+    constructor(mainWindow, options = {}) {
         super();
         this.mainWindow = mainWindow;
+        this.browserCoreClient = options.browserCoreClient || null;
 
         // Estado del contexto activo del browser
         this.browserContext = {
             active: false,       // ¿Está activo el modo browser?
             url: '',             // URL activa
             app: '',             // Nombre del sitio/app (ej: 'agario', 'gmail')
-            wsUrl: '',           // CDP WebSocket URL del tab activo
+            wsUrl: '',           // URL/CDP identity del tab activo
+            targetId: '',        // Target CDP del tab cuando se conoce
         };
+        this.lastRequestedUrl = '';
 
         // Estado del cursor para AgarIO (pinch gesture → mouse move)
         this.agarIoCursor = {
@@ -271,7 +305,9 @@ class BrowserAgent extends EventEmitter {
 
         // Config CDP
         this.CDP_HOST = '127.0.0.1';
-        this.CDP_PORT = 9222;
+        this.CDP_PORT = MANAGED_CHROME_PORT;
+        this.managedChrome = getManagedChromeConfig();
+        this.extensionOnboardingShown = false;
 
         // Gain del cursor para AgarIO (mueve más rápido que la ventana Electron)
         this.AGARIO_CURSOR_GAIN = 3.5;
@@ -284,6 +320,100 @@ class BrowserAgent extends EventEmitter {
         console.log('🌐 [BrowserAgent] Initialized');
     }
 
+    async getStatus() {
+        if (!this.browserCoreClient) {
+            return {
+                active: this.browserContext.active,
+                app: this.browserContext.app,
+                url: this.browserContext.url,
+                isAgarIO: this.isAgarIO,
+                core: null
+            };
+        }
+        try {
+            const core = await this.browserCoreClient.status();
+            return {
+                active: this.browserContext.active,
+                app: this.browserContext.app,
+                url: this.browserContext.url,
+                isAgarIO: this.isAgarIO,
+                core
+            };
+        } catch (error) {
+            return {
+                active: this.browserContext.active,
+                app: this.browserContext.app,
+                url: this.browserContext.url,
+                isAgarIO: this.isAgarIO,
+                coreError: error.message
+            };
+        }
+    }
+
+    async listProfiles() {
+        if (!this.browserCoreClient) {
+            return {
+                ok: true,
+                profiles: []
+            };
+        }
+        return await this.browserCoreClient.profiles();
+    }
+
+    async listTabs(profile = 'managed') {
+        if (!this.browserCoreClient) {
+            return { ok: true, profile, tabs: [] };
+        }
+        return await this.browserCoreClient.tabs(profile);
+    }
+
+    async getSnapshot(options = {}) {
+        if (!this.browserCoreClient) {
+            throw new Error('Browser core client is not available');
+        }
+        return await this.browserCoreClient.snapshot({
+            profile: options.profile || 'managed',
+            targetId: options.targetId,
+            format: options.format,
+            maxChars: options.maxChars
+        });
+    }
+
+    async act(request, profile = 'managed') {
+        if (!this.browserCoreClient) {
+            throw new Error('Browser core client is not available');
+        }
+        return await this.browserCoreClient.act(profile, request);
+    }
+
+    async takeScreenshot(options = {}) {
+        if (!this.browserCoreClient) {
+            throw new Error('Browser core client is not available');
+        }
+        return await this.browserCoreClient.screenshot({
+            profile: options.profile || 'managed',
+            targetId: options.targetId,
+            ref: options.ref,
+            selector: options.selector,
+            fullPage: options.fullPage,
+            type: options.type
+        });
+    }
+
+    async getConsole(profile = 'managed', targetId = undefined) {
+        if (!this.browserCoreClient) {
+            throw new Error('Browser core client is not available');
+        }
+        return await this.browserCoreClient.console(profile, targetId);
+    }
+
+    async getNetwork(profile = 'managed', targetId = undefined) {
+        if (!this.browserCoreClient) {
+            throw new Error('Browser core client is not available');
+        }
+        return await this.browserCoreClient.network(profile, targetId);
+    }
+
     // ─── Servidor WebSocket para Extensión de Chrome ───────────
     _initExtensionServer() {
         try {
@@ -293,6 +423,7 @@ class BrowserAgent extends EventEmitter {
             this.wss.on('connection', (ws) => {
                 console.log('🔌 [BrowserAgent] Extensión de Chrome Conectada!');
                 this.extensionWebSocket = ws;
+                this.extensionOnboardingShown = false;
 
                 ws.on('message', (message) => {
                     try {
@@ -342,10 +473,10 @@ class BrowserAgent extends EventEmitter {
      */
     async getChromeTargets() {
         try {
-            const targets = await fetchCdpTargets(this.CDP_HOST, this.CDP_PORT);
-            return targets.filter(t => t.type === 'page');
+            await ensureManagedChrome('', [], { source: 'BrowserAgent.getChromeTargets' });
+            return await getManagedChromeTargets();
         } catch (e) {
-            console.log(`⚠️ [BrowserAgent] Chrome CDP no disponible en puerto ${this.CDP_PORT}:`, e.message);
+            console.log(`⚠️ [BrowserAgent] IU Chrome no disponible en puerto ${this.CDP_PORT}:`, e.message);
             return [];
         }
     }
@@ -359,8 +490,8 @@ class BrowserAgent extends EventEmitter {
         if (urlPattern) {
             return targets.find(t => t.url && t.url.includes(urlPattern)) || null;
         }
-        // Sin patrón: devuelve el primer tab de página
-        return targets[0] || null;
+        // Sin patrón: prioriza tabs web reales por sobre internas/restringidas.
+        return targets.find(t => t.url && !isRestrictedBrowserUrl(t.url)) || targets[0] || null;
     }
 
     // ─── Contexto activo ──────────────────────────────────────
@@ -369,15 +500,51 @@ class BrowserAgent extends EventEmitter {
      * Activa el modo browser con el contexto del tab actual.
      * Llamado cuando el usuario cambia de app nativa a browser.
      */
-    setBrowserContext(url) {
+    setBrowserContext(url, meta = {}) {
         const app = this._detectApp(url);
         this.browserContext = {
             active: true,
             url,
             app,
-            wsUrl: '', // Se resolverá vía CDP al primer uso
+            wsUrl: meta.wsUrl || '',
+            targetId: meta.targetId || '',
         };
+        this.lastRequestedUrl = url || this.lastRequestedUrl || '';
         console.log(`🌐 [BrowserAgent] Context set → ${app} (${url})`);
+    }
+
+    _normalizeUrlForMatch(url) {
+        const raw = String(url || '').trim();
+        if (!raw) return '';
+        try {
+            const parsed = new URL(raw);
+            const pathname = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname.replace(/\/+$/, '') : '';
+            return `${parsed.origin}${pathname}${parsed.search}`.toLowerCase();
+        } catch (_) {
+            return raw.replace(/\/+$/, '').toLowerCase();
+        }
+    }
+
+    _urlsMatch(left, right) {
+        const a = this._normalizeUrlForMatch(left);
+        const b = this._normalizeUrlForMatch(right);
+        if (!a || !b) return false;
+        return a === b || a.includes(b) || b.includes(a);
+    }
+
+    _pickBestTabMatch(tabs, preferredUrl = '', preferredTargetId = '') {
+        if (!Array.isArray(tabs) || tabs.length === 0) return null;
+
+        const preferred = String(preferredUrl || '').trim();
+        const targetId = String(preferredTargetId || '').trim();
+
+        return tabs.find((tab) => targetId && tab?.targetId === targetId)
+            || tabs.find((tab) => preferred && this._urlsMatch(tab?.url, preferred) && tab?.active)
+            || tabs.find((tab) => preferred && this._urlsMatch(tab?.url, preferred))
+            || tabs.find((tab) => tab?.active && tab?.url && !isRestrictedBrowserUrl(tab.url))
+            || tabs.find((tab) => tab?.url && !isRestrictedBrowserUrl(tab.url))
+            || tabs[0]
+            || null;
     }
 
     /**
@@ -387,6 +554,127 @@ class BrowserAgent extends EventEmitter {
         this.browserContext.active = false;
         this.agarIoCursor.active = false;
         console.log('🌐 [BrowserAgent] Context cleared (native app mode)');
+    }
+
+    async syncActiveTabContext(preferredUrl = '') {
+        if (this.browserCoreClient) {
+            try {
+                const preferred = String(preferredUrl || this.lastRequestedUrl || this.browserContext?.url || '').trim();
+                const preferredTargetId = String(this.browserContext?.targetId || '').trim();
+                const response = await this.browserCoreClient.tabs('managed');
+                const tabs = Array.isArray(response?.tabs) ? response.tabs : [];
+                const chosen = this._pickBestTabMatch(tabs, preferred, preferredTargetId);
+                if (!chosen?.url) {
+                    return { ...this.browserContext };
+                }
+                this.setBrowserContext(chosen.url, {
+                    targetId: chosen.targetId || '',
+                    wsUrl: chosen.url || ''
+                });
+                return { ...this.browserContext };
+            } catch (error) {
+                if (this.browserContext?.active && this.browserContext?.url) {
+                    console.warn('⚠️ [BrowserAgent] browser-core sync failed; preserving current browser context:', error.message);
+                    return { ...this.browserContext };
+                }
+                // Fallback al camino legacy mientras migramos
+            }
+        }
+
+        const preferred = String(preferredUrl || this.browserContext?.url || '').trim();
+        const targets = await this.getChromeTargets();
+
+        let pageStates = [];
+        try {
+            const { browser, context } = await this._connectManagedBrowser();
+            try {
+                const pages = context.pages().filter(page => !isRestrictedBrowserUrl(page.url() || ''));
+                pageStates = await Promise.all(pages.map(async (page) => {
+                    const url = page.url() || '';
+                    let visibilityState = 'unknown';
+                    let hasFocus = false;
+                    try {
+                        const state = await page.evaluate(() => ({
+                            visibilityState: document.visibilityState,
+                            hasFocus: document.hasFocus()
+                        }));
+                        visibilityState = String(state?.visibilityState || 'unknown');
+                        hasFocus = Boolean(state?.hasFocus);
+                    } catch (_) {
+                        // best effort only
+                    }
+
+                    return {
+                        url,
+                        visibilityState,
+                        hasFocus
+                    };
+                }));
+            } finally {
+                await browser.close().catch(() => { });
+            }
+        } catch (_) {
+            // best effort only
+        }
+
+        const targetByUrl = (url = '') => targets.find(target => target?.url === url)
+            || targets.find(target => String(target?.url || '').includes(url) || String(url || '').includes(String(target?.url || '')))
+            || null;
+
+        const preferredVisible = pageStates.find(page => page.url === preferred && (page.hasFocus || page.visibilityState === 'visible'));
+        const preferredPartialVisible = pageStates.find(page => preferred && String(page.url || '').includes(preferred) && (page.hasFocus || page.visibilityState === 'visible'));
+        const focused = pageStates.find(page => page.hasFocus);
+        const visible = pageStates.find(page => page.visibilityState === 'visible');
+        const preferredTarget = targets.find(target => target?.url === preferred)
+            || targets.find(target => preferred && String(target?.url || '').includes(preferred))
+            || null;
+        const fallbackTarget = targets.find(target => target?.url && !isRestrictedBrowserUrl(target.url)) || null;
+
+        const chosenUrl = preferredVisible?.url
+            || preferredPartialVisible?.url
+            || focused?.url
+            || visible?.url
+            || preferredTarget?.url
+            || fallbackTarget?.url
+            || '';
+
+        if (!chosenUrl) {
+            return { ...this.browserContext };
+        }
+
+        const chosenTarget = targetByUrl(chosenUrl);
+        this.setBrowserContext(chosenUrl, {
+            targetId: chosenTarget?.id || '',
+            wsUrl: chosenTarget?.url || chosenUrl
+        });
+
+        return { ...this.browserContext };
+    }
+
+    async _connectManagedBrowser() {
+        await ensureManagedChrome('', [], { source: 'BrowserAgent._connectManagedBrowser' });
+        const browser = await chromium.connectOverCDP(`http://${this.CDP_HOST}:${this.CDP_PORT}`);
+        const context = browser.contexts()[0];
+        if (!context) {
+            await browser.close().catch(() => { });
+            throw new Error('No se pudo obtener el contexto del IU Chrome');
+        }
+        return { browser, context };
+    }
+
+    _pickReusablePage(pages, targetUrl = '') {
+        const target = String(targetUrl || '');
+        return pages.find(page => target && (page.url() || '') === target)
+            || pages.find(page => target && (page.url() || '').includes(target))
+            || pages.find(page => {
+                const url = page.url() || '';
+                return url && !url.includes('chatgpt.com') && !isRestrictedBrowserUrl(url);
+            })
+            || pages.find(page => {
+                const url = page.url() || '';
+                return !url || url === 'about:blank' || url.startsWith('chrome://new-tab-page') || url.startsWith('chrome://newtab');
+            })
+            || null;
     }
 
     /**
@@ -400,6 +688,12 @@ class BrowserAgent extends EventEmitter {
         if (url.includes('notion.so')) return 'notion';
         if (url.includes('github.com')) return 'github';
         if (url.includes('youtube.com')) return 'youtube';
+        if (url.includes('instagram.com')) return 'instagram';
+        if (url.includes('web.whatsapp.com')) return 'whatsapp';
+        if (url.includes('linkedin.com')) return 'linkedin';
+        if (url.includes('reddit.com')) return 'reddit';
+        if (url.includes('facebook.com')) return 'facebook';
+        if (url.includes('twitter.com') || url.includes('x.com')) return 'x';
         try {
             return new URL(url).hostname.replace('www.', '');
         } catch (_) {
@@ -515,7 +809,10 @@ class BrowserAgent extends EventEmitter {
         }
 
         this.browserContext.wsUrl = tab.webSocketDebuggerUrl;
-        this.setBrowserContext(tab.url);
+        this.setBrowserContext(tab.url, {
+            targetId: tab.id || '',
+            wsUrl: tab.webSocketDebuggerUrl || tab.url || ''
+        });
 
         // 3. Escribir nickname y hacer click en Play via CDP
         try {
@@ -625,34 +922,128 @@ class BrowserAgent extends EventEmitter {
     }
 
     /**
-     * Abre una URL en Chrome vía AppleScript (macOS).
-     * Si Chrome ya está abierto, abre una nueva tab.
+     * Abre una URL en Chrome y actualiza el contexto activo inmediatamente.
      */
-    async _openInChrome(url) {
-        return new Promise((resolve) => {
-            const { exec } = require('child_process');
-            const script = `
-                tell application "Google Chrome"
-                    activate
-                    if (count of windows) = 0 then
-                        make new window
-                    end if
-                    set URL of active tab of front window to "${url}"
-                end tell
-            `;
-            exec(`osascript -e '${script}'`, (err) => {
-                if (err) {
-                    console.warn('⚠️ [BrowserAgent] AppleScript failed, trying open command:', err.message);
-                    exec(`open -a "Google Chrome" "${url}"`, (err2) => {
-                        if (err2) console.warn('⚠️ [BrowserAgent] open command also failed:', err2.message);
-                        resolve();
-                    });
-                } else {
-                    console.log(`🌐 [BrowserAgent] Opened ${url} in Chrome`);
-                    resolve();
-                }
-            });
+    async openUrl(url) {
+        if (!url) return { success: false, error: 'missing_url' };
+        this.lastRequestedUrl = url;
+        console.log(`🧭 [BrowserAgent] openUrl requested`, {
+            url,
+            currentContext: this.browserContext?.url || '',
+            extensionConnected: Boolean(this.extensionWebSocket && this.extensionWebSocket.readyState === 1)
         });
+        if (this.browserContext?.active && this.browserContext.url === url) {
+            console.log(`🧭 [BrowserAgent] openUrl reusing current tab/context`, { url });
+            await this.focusManagedChrome();
+            return {
+                success: true,
+                url,
+                app: this.browserContext.app
+            };
+        }
+        if (this.browserCoreClient) {
+            try {
+                const result = await this.browserCoreClient.open({ profile: 'managed', url });
+                await this.focusManagedChrome().catch(() => { });
+                this.setBrowserContext(result.url || url, {
+                    targetId: result.targetId || '',
+                    wsUrl: result.url || url
+                });
+                return {
+                    success: true,
+                    url: result.url || url,
+                    app: this.browserContext.app,
+                    targetId: result.targetId || ''
+                };
+            } catch (error) {
+                console.warn('⚠️ [BrowserAgent] browser-core openUrl failed, falling back to legacy path:', error.message);
+            }
+        }
+        const { browser, context } = await this._connectManagedBrowser();
+        try {
+            const pages = context.pages();
+            let page = this._pickReusablePage(pages, url);
+
+            if (!page) {
+                console.log(`🧭 [BrowserAgent] openUrl creating dedicated automation tab`, { url });
+                page = await context.newPage();
+            } else {
+                console.log(`🧭 [BrowserAgent] openUrl reusing page`, {
+                    from: page.url() || 'about:blank',
+                    to: url
+                });
+            }
+
+            await page.bringToFront().catch(() => { });
+            await page.goto(url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+        } finally {
+            await browser.close().catch(() => { });
+        }
+        await this.focusManagedChrome();
+        const activeTarget = await this.findActiveTab(url).catch(() => null);
+        this.setBrowserContext(url, {
+            targetId: activeTarget?.id || '',
+            wsUrl: activeTarget?.url || url
+        });
+        return {
+            success: true,
+            url,
+            app: this.browserContext.app
+        };
+    }
+
+    async openExtensionOnboarding() {
+        const config = this.managedChrome || getManagedChromeConfig();
+        const extensionDir = config.extensionDir;
+        this.extensionOnboardingShown = true;
+        console.log(`🧭 [BrowserAgent] openExtensionOnboarding requested`, {
+            currentContext: this.browserContext?.url || '',
+            extensionDir
+        });
+
+        this.emit('status', {
+            phase: 'extension_onboarding',
+            message: 'Instala la extensión de IÜ en el perfil aislado de IU Chrome.'
+        });
+
+        await this._openInChrome('chrome://extensions', {
+            newWindow: false,
+            source: 'BrowserAgent.openExtensionOnboarding'
+        });
+
+        await new Promise((resolve) => {
+            execFile('open', [extensionDir], () => resolve());
+        });
+
+        console.log(`🧩 [BrowserAgent] Extension onboarding opened. Folder: ${extensionDir}`);
+    }
+
+    _shouldAutoOpenExtensionOnboarding() {
+        const url = String(this.browserContext?.url || '').toLowerCase();
+        const appName = String(this.browserContext?.app || '').toLowerCase();
+        if (!url) return false;
+        if (appName === 'chatgpt.com') return false;
+        if (url.startsWith('https://chatgpt.com')) return false;
+        if (url.startsWith('chrome://extensions')) return false;
+        if (url.startsWith('chrome://newtab')) return false;
+        return true;
+    }
+
+    /**
+     * Abre una URL en el Google Chrome gestionado por IU.
+     */
+    async _openInChrome(url, options = {}) {
+        const extraArgs = options.newWindow ? ['--new-window'] : [];
+        await openManagedChromeUrl(url || '', extraArgs, {
+            source: options.source || 'BrowserAgent._openInChrome',
+            caller: options.caller || `target=${url || 'managed-home'} context=${this.browserContext?.url || 'none'}`
+        });
+        console.log(`🌐 [BrowserAgent] Opened ${url || 'managed Chrome home'} in ${MANAGED_CHROME_APP}`);
+    }
+
+    async focusManagedChrome() {
+        await focusManagedChromeInstance();
+        console.log(`🌐 [BrowserAgent] Focused ${MANAGED_CHROME_APP}`);
     }
 
     /**
@@ -686,13 +1077,69 @@ class BrowserAgent extends EventEmitter {
             return { elements: [], url: '', app: '', source: 'NONE' };
         }
 
-        // Prioridad 1: Extensión nativa (Cero Configuración para el Usuario)
+        if (VERBOSE_BROWSER_LOGS) {
+            console.log(`🧭 [BrowserAgent] extractAffordances start`, {
+                url: this.browserContext.url,
+                app: this.browserContext.app,
+                hasExtension: Boolean(this.extensionWebSocket && this.extensionWebSocket.readyState === 1),
+                hasWsUrl: Boolean(this.browserContext.wsUrl)
+            });
+        }
+
+        await ensureManagedChrome('', [], {
+            source: 'BrowserAgent.extractAffordances',
+            caller: `context=${this.browserContext?.url || 'none'}`
+        });
+
+        if (this.browserCoreClient) {
+            try {
+                const snapshot = await this.browserCoreClient.snapshot({
+                    profile: 'managed',
+                    targetId: this.browserContext.targetId || undefined,
+                    format: 'ai'
+                });
+                const elements = Array.isArray(snapshot.elements) ? snapshot.elements.map((element, index) => ({
+                    id: index + 1,
+                    browserRef: element.ref,
+                    browserTargetId: snapshot.targetId || this.browserContext.targetId || '',
+                    browserProfile: snapshot.profile || 'managed',
+                    role: element.role,
+                    label: element.label,
+                    type: element.role,
+                    selector: element.selector,
+                    bbox: element.bbox,
+                    center: element.center
+                })).filter(element => element.bbox && element.center) : [];
+                if (elements.length > 0) {
+                    this.setBrowserContext(snapshot.url || this.browserContext.url, {
+                        targetId: snapshot.targetId || this.browserContext.targetId || '',
+                        wsUrl: snapshot.url || this.browserContext.url
+                    });
+                    return {
+                        elements,
+                        url: snapshot.url || this.browserContext.url,
+                        app: this.browserContext.app || 'browser',
+                        source: 'BROWSER_CORE',
+                        targetId: snapshot.targetId || this.browserContext.targetId || ''
+                    };
+                }
+            } catch (error) {
+                console.warn('⚠️ [BrowserAgent] browser-core snapshot failed, trying fallback paths:', error.message);
+            }
+        }
+
+        // Prioridad 1 temporal: Extensión nativa como fallback mientras retiramos este camino
         if (this.extensionWebSocket && this.extensionWebSocket.readyState === 1 /* WebSocket.OPEN */) {
-            console.log('🌐 [BrowserAgent] Solicitando Extracción vía Extensión de Chrome...');
+            if (VERBOSE_BROWSER_LOGS) {
+                console.log('🌐 [BrowserAgent] Solicitando Extracción vía Extensión de Chrome...');
+            }
             try {
                 const response = await new Promise((resolve) => {
                     this.extensionPendingResolve = resolve;
-                    this.extensionWebSocket.send(JSON.stringify({ type: 'GET_AFFORDANCES' }));
+                    this.extensionWebSocket.send(JSON.stringify({
+                        type: 'GET_AFFORDANCES',
+                        preferredUrl: this.browserContext.url || ''
+                    }));
                     setTimeout(() => {
                         if (this.extensionPendingResolve) {
                             this.extensionPendingResolve = null;
@@ -703,12 +1150,14 @@ class BrowserAgent extends EventEmitter {
 
                 if (response.type === 'AFFORDANCES_RESULT') {
                     const data = response.data;
-                    console.log(`🌐 [BrowserAgent] Extracted ${data.elements?.length || 0} affordances from Extension (${data.url})`);
+                    if (VERBOSE_BROWSER_LOGS) {
+                        console.log(`🌐 [BrowserAgent] Extracted ${data.elements?.length || 0} affordances from Extension (${data.url})`);
+                    }
                     return {
                         elements: data.elements || [],
                         url: data.url || this.browserContext.url,
                         app: 'browser',
-                        source: 'EXTENSION_CDP'
+                        source: data.source || 'EXTENSION_DOM'
                     };
                 } else {
                     // Extensión conectada pero no puede acceder a esta tab (chrome://, edge://, etc.)
@@ -722,17 +1171,27 @@ class BrowserAgent extends EventEmitter {
             }
         }
 
+        if (!this.extensionOnboardingShown && this._shouldAutoOpenExtensionOnboarding()) {
+            this.extensionOnboardingShown = true;
+            console.warn('⚠️ [BrowserAgent] Extensión no conectada. Omitiendo onboarding automático para no abrir ventanas durante la tarea.');
+            this.emit('status', {
+                phase: 'extension_missing',
+                message: 'La extensión de IÜ no está conectada en IU Chrome. Puedes instalarla luego desde el onboarding.'
+            });
+        }
+
         // Prioridad 2: CDP Playwright directo (solo si NO hay extensión conectada)
-        // Requiere Chrome con --remote-debugging-port=9222 (modo dev avanzado, no user-facing)
+        // Requiere el IU Chrome gestionado en puerto 9222.
         if (!this.browserContext.wsUrl) {
             const tab = await this.findActiveTab();
             if (tab?.webSocketDebuggerUrl) {
-                this.browserContext.wsUrl = tab.webSocketDebuggerUrl;
+                this.browserContext.wsUrl = tab.url || this.browserContext.url;
+                this.browserContext.targetId = tab.id || this.browserContext.targetId || '';
             }
         }
 
         if (!this.browserContext.wsUrl) {
-            console.error('❌ [BrowserAgent] CDP wsUrl no disponible. Chrome debe estar con --remote-debugging-port=9222');
+            console.error('❌ [BrowserAgent] CDP wsUrl no disponible en IU Chrome.');
             return { elements: [], url: this.browserContext.url, app: this.browserContext.app, source: 'CDP_UNAVAILABLE' };
         }
 
@@ -747,7 +1206,9 @@ class BrowserAgent extends EventEmitter {
                 source = 'DOM';
             }
 
-            console.log(`🌐 [BrowserAgent] Extracted ${elements.length} affordances (${source}) from ${this.browserContext.app}`);
+            if (VERBOSE_BROWSER_LOGS) {
+                console.log(`🌐 [BrowserAgent] Extracted ${elements.length} affordances (${source}) from ${this.browserContext.app}`);
+            }
             return {
                 elements,
                 url: this.browserContext.url,

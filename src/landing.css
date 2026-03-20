@@ -128,7 +128,8 @@ nav {
     list-style: none;
 }
 
-.nav-links a {
+.nav-links a,
+.nav-links button {
     color: #000;
     background: #fff;
     padding: 10px 24px;
@@ -160,7 +161,14 @@ nav {
     box-shadow: 0 10px 20px rgba(0, 0, 0, 0.18);
 }
 
-.nav-links a:hover {
+.nav-link-button {
+    appearance: none;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.nav-links a:hover,
+.nav-links button:hover {
     transform: translateY(-2px);
     box-shadow: 0 10px 20px rgba(255, 255, 255, 0.1);
 }
@@ -477,6 +485,38 @@ h1 .alt {
     margin: 0;
 }
 
+.direct-downloads {
+    display: flex;
+    justify-content: center;
+    width: 100%;
+}
+
+.secondary-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 54px;
+    padding: 0 28px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.92);
+    text-decoration: none;
+    font-family: var(--font-hero);
+    font-size: 0.92rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    transition: transform 0.3s ease, background 0.3s ease, border-color 0.3s ease;
+}
+
+.secondary-cta:hover {
+    transform: translateY(-2px);
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
 .input-container {
     display: flex;
     background: rgba(255, 255, 255, 0.12);
@@ -726,6 +766,11 @@ input::placeholder {
         box-sizing: border-box;
     }
 
+    .direct-downloads {
+        padding: 0 24px;
+        box-sizing: border-box;
+    }
+
     .final-cta {
         font-size: clamp(1.8rem, 7vw, 2.8rem);
         letter-spacing: -1px;
@@ -761,6 +806,12 @@ input::placeholder {
         font-size: 0.85rem;
     }
 
+    .secondary-cta {
+        width: 100%;
+        min-height: 56px;
+        border-radius: 14px;
+    }
+
     /* --- COUNTDOWN: Scaled for mobile --- */
     .countdown-container {
         gap: 20px;
@@ -792,6 +843,14 @@ input::placeholder {
 
     .modal-content h2 {
         font-size: 1.5rem;
+    }
+
+    .qr-modal-card {
+        padding: 28px 22px 22px;
+    }
+
+    .qr-modal-card h2 {
+        font-size: 1.55rem;
     }
 
     /* --- GLOW: Slightly smaller on mobile --- */
@@ -898,6 +957,88 @@ input::placeholder {
     letter-spacing: 2px;
     color: var(--text-gray);
     margin-bottom: 20px;
+}
+
+.qr-modal-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(0, 0, 0, 0.82);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 1100;
+}
+
+.qr-modal-overlay.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.qr-modal-card {
+    position: relative;
+    width: min(100%, 420px);
+    padding: 32px 28px 24px;
+    border-radius: 28px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.06));
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+    text-align: center;
+}
+
+.qr-modal-close {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 2rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.qr-kicker {
+    margin-bottom: 10px;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.22em;
+    color: rgba(255, 255, 255, 0.62);
+}
+
+.qr-modal-card h2 {
+    font-family: var(--font-hero);
+    font-size: 2rem;
+    font-weight: 300;
+    line-height: 1.05;
+    margin-bottom: 22px;
+}
+
+.qr-canvas-shell {
+    display: flex;
+    justify-content: center;
+    padding: 18px;
+    border-radius: 24px;
+    background: #fff;
+}
+
+#share-qr-canvas {
+    width: min(100%, 260px);
+    height: auto;
+    display: block;
+}
+
+.qr-caption {
+    margin-top: 18px;
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    word-break: break-word;
 }
 
 .device-checklist {
