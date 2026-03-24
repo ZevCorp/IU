@@ -22,6 +22,7 @@ const WhatsAppContext = require('./WhatsAppContext');
 const LearningAgent = require('./LearningAgent');
 const { detectBrowserExecutionState } = require('./BrowserExecutionState');
 const { reduceBrowserGoalProgress, shouldSkipRedundantBrowserAction } = require('./BrowserStepReducer');
+const { extractDirectWebTarget } = require('./BrowserTargetResolver');
 const {
     ensureManagedChrome,
     focusManagedChromeInstance,
@@ -460,58 +461,7 @@ class ScreenAgent {
     }
 
     _extractDirectWebTarget(appName, goal = '', stepsHint = '') {
-        const rawHaystack = `${appName || ''} ${goal || ''} ${stepsHint || ''}`.trim();
-        if (!rawHaystack) return null;
-
-        const stripTrailingUrlPunctuation = (value) => String(value || '')
-            .trim()
-            .replace(/[;:.,!?]+$/g, '')
-            .replace(/[)\]]+$/g, '');
-
-        const candidates = [];
-
-        const explicitUrlRegex = /\bhttps?:\/\/[^\s)"'<>]+/gi;
-        for (const match of rawHaystack.matchAll(explicitUrlRegex)) {
-            const value = stripTrailingUrlPunctuation(match[0] || '');
-            if (!value) continue;
-            candidates.push({
-                raw: value,
-                index: typeof match.index === 'number' ? match.index : Number.MAX_SAFE_INTEGER
-            });
-        }
-
-        const bareDomainRegex = /\b(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+\b/gi;
-        for (const match of rawHaystack.matchAll(bareDomainRegex)) {
-            const value = stripTrailingUrlPunctuation(match[0] || '');
-            if (!value) continue;
-            candidates.push({
-                raw: value,
-                index: typeof match.index === 'number' ? match.index : Number.MAX_SAFE_INTEGER
-            });
-        }
-
-        candidates.sort((left, right) => left.index - right.index);
-        const rawTarget = candidates[0]?.raw || '';
-        if (!rawTarget) return null;
-
-        const normalizedUrl = /^https?:\/\//i.test(rawTarget)
-            ? rawTarget
-            : `https://${rawTarget}`;
-
-        let hostname = rawTarget;
-        try {
-            hostname = new URL(normalizedUrl).hostname.replace(/^www\./, '');
-        } catch (_) {
-            hostname = rawTarget.replace(/^www\./i, '');
-        }
-
-        return {
-            key: hostname,
-            name: hostname,
-            url: normalizedUrl,
-            domains: [hostname],
-            aliases: [hostname]
-        };
+        return extractDirectWebTarget(appName, goal, stepsHint);
     }
 
     _getWebTargetConfig(appName, goal = '', stepsHint = '') {
@@ -1508,93 +1458,125 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                         }
                     }
                     else if (fnName === 'perform_set_of_actions') {
-                        const subActions = args.actions;
+                        const subActions = Array.isArray(args.actions) ? args.actions : [];
                         console.log(`📦 [ScreenAgent] Batch executing ${subActions.length} actions...`);
                         const batchStartTime = Date.now();
                         let executedActions = 0;
                         let batchStoppedDueToStaleUi = false;
+                        const reasoningStr = args.justificacion ? ` (${args.justificacion})` : '';
 
-                        // Refocus ONCE before batch when using native/OS actions.
-                        if (this.currentLaunchMode !== 'browser') {
-                            await this._ensureFocus(this.currentFocusApp || this.currentApp);
+                        const fastBatch = await this._executeBrowserCoreBatchIfPossible(subActions, elements);
+                        if (fastBatch.mode === 'executed') {
+                            executedActions = Math.min(
+                                subActions.length,
+                                Number(fastBatch.executed || 0) + Number(fastBatch.skipped || 0)
+                            );
+                            if (executedActions > 0) {
+                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 900, 120);
+                            }
+                            const batchElapsed = Date.now() - batchStartTime;
+                            const skippedStr = fastBatch.skipped > 0 ? `, ${fastBatch.skipped} skipped` : '';
+                            actionSummary = `BATCH(BROWSER_CORE): Executed ${executedActions}/${subActions.length} actions in ${batchElapsed}ms${skippedStr}${reasoningStr}`;
+                            console.log(`⚡ [ScreenAgent] Browser-core batch complete in ${batchElapsed}ms${skippedStr}${reasoningStr}`);
                         }
+                        else if (fastBatch.mode === 'partial') {
+                            executedActions = Math.min(
+                                subActions.length,
+                                Number(fastBatch.executed || 0) + Number(fastBatch.skipped || 0)
+                            );
+                            const batchElapsed = Date.now() - batchStartTime;
+                            const firstError = Array.isArray(fastBatch.errors) && fastBatch.errors[0]
+                                ? String(fastBatch.errors[0].error || fastBatch.errors[0].message || '')
+                                : String(fastBatch.error || 'unknown_error');
+                            actionSummary = `BATCH(BROWSER_CORE): Partial ${executedActions}/${subActions.length} actions in ${batchElapsed}ms${reasoningStr}. Error: ${firstError}`;
+                            console.warn(`⚠️ [ScreenAgent] Browser-core batch partial after ${batchElapsed}ms: ${firstError}`);
+                        }
+                        else {
+                            if (fastBatch.reason) {
+                                console.log(`🧭 [ScreenAgent] Browser-core fast batch unavailable, using fallback: ${fastBatch.reason}`);
+                            }
 
-                        for (let j = 0; j < subActions.length; j++) {
-                            if (this.abortRequested) break;
-                            const sub = subActions[j];
-                            const stepStr = `Step ${j + 1}/${subActions.length}`;
+                            // Refocus ONCE before batch when using native/OS actions.
+                            if (this.currentLaunchMode !== 'browser') {
+                                await this._ensureFocus(this.currentFocusApp || this.currentApp);
+                            }
 
-                            if (sub.action === 'click') {
-                                let targetElement = elements.find(e => e.id == sub.element_id);
-                                const resolved = this._resolveElementByAnchor(elements, targetElement);
-                                if (resolved) targetElement = resolved;
-                                if (!targetElement) {
-                                    console.warn(`⚠️ [ScreenAgent] ${stepStr}: Element #${sub.element_id} not found`);
-                                    continue;
-                                }
+                            for (let j = 0; j < subActions.length; j++) {
+                                if (this.abortRequested) break;
+                                const sub = subActions[j];
+                                const stepStr = `Step ${j + 1}/${subActions.length}`;
 
-                                const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
-                                if (skipDecision.skip) {
-                                    console.log(`🧭 [ScreenAgent] ${stepStr}: skipped redundant click on #${targetElement.id} (${skipDecision.reason})`);
-                                    continue;
-                                }
+                                if (sub.action === 'click') {
+                                    let targetElement = elements.find(e => e.id == sub.element_id);
+                                    const resolved = this._resolveElementByAnchor(elements, targetElement);
+                                    if (resolved) targetElement = resolved;
+                                    if (!targetElement) {
+                                        console.warn(`⚠️ [ScreenAgent] ${stepStr}: Element #${sub.element_id} not found`);
+                                        continue;
+                                    }
 
-                                const revalidated = await this._revalidateBrowserClickTarget(targetElement);
-                                if (revalidated.hash) {
-                                    lastElementsHash = revalidated.hash;
-                                }
-                                if (!revalidated.ok || !revalidated.element) {
-                                    console.warn(`⚠️ [ScreenAgent] ${stepStr}: click aborted after revalidation (${revalidated.reason})`);
-                                    batchStoppedDueToStaleUi = true;
-                                    break;
-                                }
+                                    const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
+                                    if (skipDecision.skip) {
+                                        console.log(`🧭 [ScreenAgent] ${stepStr}: skipped redundant click on #${targetElement.id} (${skipDecision.reason})`);
+                                        continue;
+                                    }
 
-                                targetElement = revalidated.element;
-                                const skipDecisionAfterRefresh = this._shouldSkipBrowserProgressAction(targetElement);
-                                if (skipDecisionAfterRefresh.skip) {
-                                    console.log(`🧭 [ScreenAgent] ${stepStr}: skipped redundant click after refresh on #${targetElement.id} (${skipDecisionAfterRefresh.reason})`);
-                                    continue;
-                                }
-                                if (this._isBrowserCoreElement(targetElement)) {
-                                    await this._clickBrowserElement(targetElement);
-                                } else {
-                                    const point = this._elementCenterPixels(targetElement);
-                                    if (!point) {
-                                        console.warn(`⚠️ [ScreenAgent] ${stepStr}: revalidated target has no usable center`);
+                                    const revalidated = await this._revalidateBrowserClickTarget(targetElement);
+                                    if (revalidated.hash) {
+                                        lastElementsHash = revalidated.hash;
+                                    }
+                                    if (!revalidated.ok || !revalidated.element) {
+                                        console.warn(`⚠️ [ScreenAgent] ${stepStr}: click aborted after revalidation (${revalidated.reason})`);
                                         batchStoppedDueToStaleUi = true;
                                         break;
                                     }
-                                    const px = point.x;
-                                    const py = point.y;
 
-                                    await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
+                                    targetElement = revalidated.element;
+                                    const skipDecisionAfterRefresh = this._shouldSkipBrowserProgressAction(targetElement);
+                                    if (skipDecisionAfterRefresh.skip) {
+                                        console.log(`🧭 [ScreenAgent] ${stepStr}: skipped redundant click after refresh on #${targetElement.id} (${skipDecisionAfterRefresh.reason})`);
+                                        continue;
+                                    }
+                                    if (this._isBrowserCoreElement(targetElement)) {
+                                        await this._clickBrowserElement(targetElement);
+                                    } else {
+                                        const point = this._elementCenterPixels(targetElement);
+                                        if (!point) {
+                                            console.warn(`⚠️ [ScreenAgent] ${stepStr}: revalidated target has no usable center`);
+                                            batchStoppedDueToStaleUi = true;
+                                            break;
+                                        }
+                                        const px = point.x;
+                                        const py = point.y;
+
+                                        await this._executeToolDirect('click', { px, py, label: `Sequence #${sub.element_id}` }, true); // true = skipFocus
+                                    }
+                                    executedActions++;
+                                    lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                                 }
-                                executedActions++;
-                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
-                            }
-                            else if (sub.action === 'type') {
-                                const typedViaBrowser = await this._typeIntoBrowserElement(this.lastBrowserElement, sub.text).catch(() => false);
-                                if (!typedViaBrowser) {
-                                    await this._executeTool('type_text', { text: sub.text }, true);
+                                else if (sub.action === 'type') {
+                                    const typedViaBrowser = await this._typeIntoBrowserElement(this.lastBrowserElement, sub.text).catch(() => false);
+                                    if (!typedViaBrowser) {
+                                        await this._executeTool('type_text', { text: sub.text }, true);
+                                    }
+                                    executedActions++;
+                                    lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                                 }
-                                executedActions++;
-                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
-                            }
-                            else if (sub.action === 'key') {
-                                const pressedViaBrowser = await this._pressBrowserKey(sub.key).catch(() => false);
-                                if (!pressedViaBrowser) {
-                                    await this._executeTool('key_press', { key: sub.key }, true);
+                                else if (sub.action === 'key') {
+                                    const pressedViaBrowser = await this._pressBrowserKey(sub.key).catch(() => false);
+                                    if (!pressedViaBrowser) {
+                                        await this._executeTool('key_press', { key: sub.key }, true);
+                                    }
+                                    executedActions++;
+                                    lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                                 }
-                                executedActions++;
-                                lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 800, 150);
                             }
+                            const batchElapsed = Date.now() - batchStartTime;
+                            actionSummary = batchStoppedDueToStaleUi
+                                ? `BATCH: Stopped after ${executedActions}/${subActions.length} actions due to stale UI${reasoningStr}`
+                                : `BATCH: Executed ${subActions.length} actions in ${batchElapsed}ms${reasoningStr}`;
+                            console.log(`⏱️ [ScreenAgent] Batch complete in ${batchElapsed}ms${reasoningStr}`);
                         }
-                        const batchElapsed = Date.now() - batchStartTime;
-                        const reasoningStr = args.justificacion ? ` (${args.justificacion})` : '';
-                        actionSummary = batchStoppedDueToStaleUi
-                            ? `BATCH: Stopped after ${executedActions}/${subActions.length} actions due to stale UI${reasoningStr}`
-                            : `BATCH: Executed ${subActions.length} actions in ${batchElapsed}ms${reasoningStr}`;
-                        console.log(`⏱️ [ScreenAgent] Batch complete in ${batchElapsed}ms${reasoningStr}`);
                     }
 
                     if (actionSummary) {
@@ -2533,6 +2515,145 @@ CONTEXTO DE VENTANAS:
             key: this._toBrowserKey(key)
         });
         return true;
+    }
+
+    _buildBrowserCoreBatchPlan(subActions, elements) {
+        if (!Array.isArray(subActions) || subActions.length === 0) {
+            return { ok: false, reason: 'empty_actions' };
+        }
+
+        const planned = [];
+        let skipped = 0;
+        let lastInteractionElement = this._isBrowserCoreElement(this.lastBrowserElement) ? this.lastBrowserElement : null;
+
+        for (let index = 0; index < subActions.length; index++) {
+            const sub = subActions[index] || {};
+            const step = String(sub.action || '').trim().toLowerCase();
+
+            if (step === 'click') {
+                let targetElement = elements.find(e => e.id == sub.element_id);
+                const resolved = this._resolveElementByAnchor(elements, targetElement);
+                if (resolved) targetElement = resolved;
+                if (!targetElement) {
+                    return { ok: false, reason: `missing_element:${sub.element_id}` };
+                }
+
+                const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
+                if (skipDecision.skip) {
+                    skipped++;
+                    continue;
+                }
+
+                if (!this._isBrowserCoreElement(targetElement)) {
+                    return { ok: false, reason: `non_browser_element:${sub.element_id}` };
+                }
+
+                planned.push({
+                    kind: 'click',
+                    ref: targetElement.browserRef
+                });
+                lastInteractionElement = targetElement;
+                continue;
+            }
+
+            if (step === 'type') {
+                const typeTarget = this._canTypeIntoBrowserElement(lastInteractionElement)
+                    ? lastInteractionElement
+                    : (this._canTypeIntoBrowserElement(this.lastBrowserElement) ? this.lastBrowserElement : null);
+
+                if (!typeTarget || !this._isBrowserCoreElement(typeTarget)) {
+                    return { ok: false, reason: 'missing_type_target' };
+                }
+
+                planned.push({
+                    kind: 'type',
+                    ref: typeTarget.browserRef,
+                    text: String(sub.text || '')
+                });
+                lastInteractionElement = typeTarget;
+                continue;
+            }
+
+            if (step === 'key') {
+                planned.push({
+                    kind: 'press',
+                    key: this._toBrowserKey(sub.key)
+                });
+                continue;
+            }
+
+            return { ok: false, reason: `unsupported_action:${step || 'unknown'}` };
+        }
+
+        return {
+            ok: true,
+            actions: planned,
+            skipped,
+            lastElement: this._isBrowserCoreElement(lastInteractionElement) ? lastInteractionElement : null
+        };
+    }
+
+    async _executeBrowserCoreBatchIfPossible(subActions, elements) {
+        if (!this._shouldUseBrowserAgent(this.currentApp) || !this.browserAgent?.act) {
+            return { mode: 'fallback', reason: 'browser_mode_not_active' };
+        }
+
+        const plan = this._buildBrowserCoreBatchPlan(subActions, Array.isArray(elements) ? elements : []);
+        if (!plan.ok) {
+            return { mode: 'fallback', reason: plan.reason || 'batch_plan_unavailable' };
+        }
+
+        if (!Array.isArray(plan.actions) || plan.actions.length === 0) {
+            return {
+                mode: 'executed',
+                executed: 0,
+                skipped: Number(plan.skipped || 0),
+                total: Array.isArray(subActions) ? subActions.length : 0
+            };
+        }
+
+        const targetId = this.browserAgent?.browserContext?.targetId || undefined;
+        try {
+            const result = await this._executeBrowserCoreAction({
+                kind: 'batch',
+                targetId,
+                actions: plan.actions,
+                stopOnError: true,
+                timeoutMs: 8000
+            });
+
+            const details = result?.details || {};
+            const executed = Number.isFinite(Number(details.executed)) ? Number(details.executed) : plan.actions.length;
+            const errors = Array.isArray(details.errors) ? details.errors : [];
+            if (plan.lastElement && this._isBrowserCoreElement(plan.lastElement)) {
+                this.lastBrowserElement = plan.lastElement;
+            }
+
+            if (errors.length > 0) {
+                return {
+                    mode: 'partial',
+                    executed,
+                    skipped: Number(plan.skipped || 0),
+                    total: Array.isArray(subActions) ? subActions.length : plan.actions.length,
+                    errors
+                };
+            }
+
+            return {
+                mode: 'executed',
+                executed,
+                skipped: Number(plan.skipped || 0),
+                total: Array.isArray(subActions) ? subActions.length : plan.actions.length
+            };
+        } catch (error) {
+            return {
+                mode: 'partial',
+                executed: 0,
+                skipped: Number(plan.skipped || 0),
+                total: Array.isArray(subActions) ? subActions.length : plan.actions.length,
+                error: error?.message || String(error)
+            };
+        }
     }
 
     _updateExecutionState(state) {

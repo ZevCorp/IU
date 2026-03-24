@@ -1109,7 +1109,7 @@ class BrowserAgent extends EventEmitter {
                     selector: element.selector,
                     bbox: element.bbox,
                     center: element.center
-                })).filter(element => element.bbox && element.center) : [];
+                })).filter(element => element.browserRef) : [];
                 if (elements.length > 0) {
                     this.setBrowserContext(snapshot.url || this.browserContext.url, {
                         targetId: snapshot.targetId || this.browserContext.targetId || '',
