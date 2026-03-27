@@ -134,6 +134,7 @@ const ScreenAgent = require('./ScreenAgent');
 const Brain = require('./Brain');
 const ExecutionSessionManager = require('./ExecutionSessionManager');
 const NotebookExecutionManager = require('./NotebookExecutionManager');
+const KnowledgeService = require('./KnowledgeService');
 // Browser Agent: control transversal de páginas web via CDP
 const BrowserAgent = require('./BrowserAgent');
 const { startBrowserCoreService, createBrowserCoreClient, toClientOptions } = require('./browser-core/dist');
@@ -190,6 +191,10 @@ const notebookManager = new NotebookExecutionManager({
     storageDir: path.join(app.getPath('userData'), 'chat-notebooks'),
     modelSwitch: ModelSwitch,
     isModelReady: () => ModelSwitch.isReady({ capability: 'chat' })
+});
+const knowledgeService = new KnowledgeService({
+    notebookManager,
+    storageDir: path.join(app.getPath('userData'), 'chat-notebooks')
 });
 
 let mainWindow = null;
@@ -1034,6 +1039,12 @@ function buildChatSystemPrompt(relevantLearned, relevantContext) {
 
 Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que haras y llama la funcion execute_screen_action.
 
+Si el usuario pide gestionar conocimiento personal, usa tools de CRUD:
+- create_note, update_note, delete_note
+- create_meta, update_meta, delete_meta
+- attach_note_to_meta, detach_note_from_meta
+Usa esas funciones cuando te pidan crear, editar, borrar o anidar notas/metas.
+
 Si solo conversa o pregunta algo, responde de forma breve y util. Maximo 2-3 oraciones.
 Responde en espanol.`;
 
@@ -1244,6 +1255,302 @@ function normalizeAgentIntent(rawIntent) {
     return 'respond';
 }
 
+function looksLikeLowQualityReply(text) {
+    const value = String(text || '').trim();
+    if (!value) return true;
+    const lower = value.toLowerCase();
+    const badStarts = [
+        "i'm ready to help",
+        'i’m ready to help',
+        'how can i assist you',
+        'how can i help you today',
+        'how may i assist'
+    ];
+    return badStarts.some((item) => lower.includes(item));
+}
+
+function isSummaryRequest(prompt) {
+    const lower = String(prompt || '').toLowerCase();
+    const asksSummary = /(summary|resumen|resum[eé]|sintetiza|sintesis|sumariza)/i.test(lower);
+    const mentionsKnowledge = /(nota|notas|meta|metas|knowledge|contexto)/i.test(lower);
+    return asksSummary && mentionsKnowledge;
+}
+
+function buildSummaryFallbackFromKnowledge({ metas = [], notes = [], keptNotes = [] } = {}) {
+    const topMetas = (Array.isArray(metas) ? metas : []).slice(0, 6);
+    const topNotes = (Array.isArray(keptNotes) && keptNotes.length > 0 ? keptNotes : notes).slice(0, 8);
+
+    const metaLines = topMetas.length > 0
+        ? topMetas.map((meta, index) => {
+            const title = String(meta?.title || '').trim() || `Meta ${index + 1}`;
+            const desc = String(meta?.description || '').trim();
+            const noteCount = Array.isArray(meta?.noteIds) ? meta.noteIds.length : 0;
+            return `- ${title}${desc ? `: ${safeSliceText(desc, 120)}` : ''} (${noteCount} nota${noteCount === 1 ? '' : 's'})`;
+        }).join('\n')
+        : '- No encontré metas guardadas.';
+
+    const noteLines = topNotes.length > 0
+        ? topNotes.map((note) => {
+            const title = String(note?.title || '').trim() || 'Sin titulo';
+            const body = safeSliceText(String(note?.body || '').replace(/\s+/g, ' ').trim(), 110);
+            return `- ${title}${body ? `: ${body}` : ''}`;
+        }).join('\n')
+        : '- No encontré notas guardadas.';
+
+    return [
+        `Resumen rápido: tienes ${metas.length} meta${metas.length === 1 ? '' : 's'} y ${notes.length} nota${notes.length === 1 ? '' : 's'}.`,
+        '',
+        'Metas:',
+        metaLines,
+        '',
+        'Notas:',
+        noteLines
+    ].join('\n');
+}
+
+function getKnowledgeTools() {
+    return [
+        {
+            type: 'function',
+            function: {
+                name: 'create_note',
+                description: 'Crea una nota con titulo y contenido opcional.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        title: { type: 'string', description: 'Titulo de la nota' },
+                        body: { type: 'string', description: 'Contenido inicial de la nota' }
+                    },
+                    required: ['title']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'update_note',
+                description: 'Actualiza una nota existente por id.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        note_id: { type: 'string', description: 'ID de la nota' },
+                        title: { type: 'string', description: 'Nuevo titulo (opcional)' },
+                        body: { type: 'string', description: 'Nuevo contenido (opcional)' }
+                    },
+                    required: ['note_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'delete_note',
+                description: 'Archiva o elimina una nota por id.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        note_id: { type: 'string', description: 'ID de la nota' }
+                    },
+                    required: ['note_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'create_meta',
+                description: 'Crea una meta con titulo y descripcion opcional.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        title: { type: 'string', description: 'Titulo de la meta' },
+                        description: { type: 'string', description: 'Descripcion de la meta' }
+                    },
+                    required: ['title']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'update_meta',
+                description: 'Actualiza una meta existente por id.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta' },
+                        title: { type: 'string', description: 'Nuevo titulo (opcional)' },
+                        description: { type: 'string', description: 'Nueva descripcion (opcional)' }
+                    },
+                    required: ['meta_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'delete_meta',
+                description: 'Elimina una meta por id.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta' }
+                    },
+                    required: ['meta_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'attach_note_to_meta',
+                description: 'Anida una nota dentro de una meta.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta' },
+                        note_id: { type: 'string', description: 'ID de la nota' }
+                    },
+                    required: ['meta_id', 'note_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'detach_note_from_meta',
+                description: 'Desanida una nota de una meta.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta' },
+                        note_id: { type: 'string', description: 'ID de la nota' }
+                    },
+                    required: ['meta_id', 'note_id']
+                }
+            }
+        }
+    ];
+}
+
+function describeMeta(meta) {
+    if (!meta) return 'meta';
+    const title = String(meta.title || '').trim() || 'meta';
+    return `"${title}"`;
+}
+
+function describeNote(note) {
+    if (!note) return 'nota';
+    const title = String(note.title || '').trim() || 'nota';
+    return `"${title}"`;
+}
+
+function executeKnowledgeToolCall(call) {
+    if (!call?.function?.name) return null;
+    const name = String(call.function.name || '').trim();
+    let args = {};
+    try {
+        args = JSON.parse(call.function.arguments || '{}');
+    } catch (_) {
+        args = {};
+    }
+
+    if (name === 'create_note') {
+        LoggingSwitch.execution('KnowledgeTool', `create_note title="${safeSliceText(args.title || '', 80)}"`);
+        const created = knowledgeService.createNote({
+            title: String(args.title || '').trim(),
+            body: args.body !== undefined ? String(args.body || '') : ''
+        });
+        if (!created?.note) return { error: 'No pude crear la nota.' };
+        return {
+            reply: `Listo. Creé la nota ${describeNote(created.note)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'update_note') {
+        LoggingSwitch.execution('KnowledgeTool', `update_note id="${String(args.note_id || '').trim()}"`);
+        const updated = knowledgeService.updateNote(String(args.note_id || '').trim(), {
+            title: args.title,
+            body: args.body
+        });
+        if (!updated?.note) return { error: 'No encontré esa nota para actualizar.' };
+        return {
+            reply: `Actualicé la nota ${describeNote(updated.note)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'delete_note') {
+        LoggingSwitch.execution('KnowledgeTool', `delete_note id="${String(args.note_id || '').trim()}"`);
+        const noteId = String(args.note_id || '').trim();
+        const deleted = knowledgeService.deleteNote(noteId);
+        if (!deleted) return { error: 'No pude eliminar esa nota.' };
+        return {
+            reply: 'Listo. Eliminé esa nota.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'create_meta') {
+        LoggingSwitch.execution('KnowledgeTool', `create_meta title="${safeSliceText(args.title || '', 80)}"`);
+        const meta = knowledgeService.createMeta({
+            title: String(args.title || '').trim(),
+            description: String(args.description || '').trim()
+        });
+        if (!meta?.id) return { error: 'No pude crear la meta.' };
+        return {
+            reply: `Listo. Creé la meta ${describeMeta(meta)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'update_meta') {
+        LoggingSwitch.execution('KnowledgeTool', `update_meta id="${String(args.meta_id || '').trim()}"`);
+        const meta = knowledgeService.updateMeta(String(args.meta_id || '').trim(), {
+            title: args.title,
+            description: args.description
+        });
+        if (!meta?.id) return { error: 'No encontré esa meta para actualizar.' };
+        return {
+            reply: `Actualicé la meta ${describeMeta(meta)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'delete_meta') {
+        LoggingSwitch.execution('KnowledgeTool', `delete_meta id="${String(args.meta_id || '').trim()}"`);
+        const ok = knowledgeService.deleteMeta(String(args.meta_id || '').trim());
+        if (!ok) return { error: 'No encontré esa meta para eliminar.' };
+        return {
+            reply: 'Meta eliminada.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'attach_note_to_meta') {
+        LoggingSwitch.execution('KnowledgeTool', `attach_note_to_meta meta="${String(args.meta_id || '').trim()}" note="${String(args.note_id || '').trim()}"`);
+        const meta = knowledgeService.attachNoteToMeta(String(args.meta_id || '').trim(), String(args.note_id || '').trim(), { source: 'manual' });
+        if (!meta?.id) return { error: 'No pude anidar la nota en esa meta.' };
+        return {
+            reply: `Anidé la nota en la meta ${describeMeta(meta)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'detach_note_from_meta') {
+        LoggingSwitch.execution('KnowledgeTool', `detach_note_from_meta meta="${String(args.meta_id || '').trim()}" note="${String(args.note_id || '').trim()}"`);
+        const meta = knowledgeService.detachNoteFromMeta(String(args.meta_id || '').trim(), String(args.note_id || '').trim());
+        if (!meta?.id) return { error: 'No pude desanidar la nota de esa meta.' };
+        return {
+            reply: `Quité la nota de la meta ${describeMeta(meta)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    return null;
+}
+
 async function inferLearningLinksForNote(noteTitle, noteBody, options = {}) {
     const maxLinks = Math.max(1, Math.min(6, Number(options.maxLinks || 4)));
     if (!String(noteBody || '').trim()) return [];
@@ -1314,6 +1621,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
     }
 
     try {
+        emit('planning', 'Entendí tu instrucción. Voy a analizar metas y notas.', { visibility: 'public' });
         const notebookState = notebookManager.getState();
         const notes = Array.isArray(notebookState?.tabs)
             ? notebookState.tabs
@@ -1325,7 +1633,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
                 .filter((tab) => tab.id)
             : [];
         const noteIds = new Set(notes.map((tab) => tab.id));
-        const metas = sanitizePromptMetas(payload?.metas, noteIds);
+        const metas = sanitizePromptMetas(knowledgeService.getMetas(), noteIds);
         const notesById = new Map(notes.map((tab) => [tab.id, tab]));
         const noteDiscoveryIndex = buildNoteDiscoveryIndex(notes, 220);
         const metaCatalog = metas.map((meta) => ({
@@ -1335,7 +1643,56 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             noteIds: meta.noteIds,
             sampleNoteTitles: meta.noteIds.slice(0, 4).map((id) => notesById.get(id)?.title || 'Sin titulo')
         }));
+        emit('planning', `Contexto cargado: ${metas.length} metas y ${notes.length} notas.`, { visibility: 'public' });
 
+        const mutationProbe = await ModelSwitch.chatCompletion({
+            messages: [
+                {
+                    role: 'system',
+                    content: [
+                        'Evalua si el usuario pide una mutacion directa de conocimiento (notas/metas).',
+                        'Si el usuario pide crear/editar/borrar/anidar, llama exactamente una funcion.',
+                        'Si no aplica, responde solo texto corto sin tool_calls.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: prompt
+                }
+            ],
+            tools: getKnowledgeTools(),
+            tool_choice: 'auto'
+        });
+        const mutationMessage = mutationProbe?.choices?.[0]?.message || {};
+        if (Array.isArray(mutationMessage.tool_calls) && mutationMessage.tool_calls.length > 0) {
+            emit('execution', 'Detecté una instrucción de edición. La estoy aplicando.', { visibility: 'public' });
+            const result = executeKnowledgeToolCall(mutationMessage.tool_calls[0]);
+            if (result?.error) {
+                emit('error', result.error);
+                return {
+                    success: false,
+                    runId,
+                    error: result.error,
+                    userMessages: [],
+                    assistantReply: ''
+                };
+            }
+            const assistantReply = String(result?.reply || 'Listo. Actualicé tu conocimiento.').trim();
+            return {
+                success: true,
+                runId,
+                mode: 'knowledge_mutation',
+                userMessages: [],
+                assistantReply,
+                selectedMetaIds: [],
+                selectedNotes: [],
+                learningLinkSuggestions: [],
+                actionPlan: null,
+                actionBlockedAsInternal: false
+            };
+        }
+
+        emit('planning', 'Decidiendo la ruta óptima para responderte.', { visibility: 'public' });
         const { parsed: route } = await chatCompletionJson([
             {
                 role: 'system',
@@ -1405,6 +1762,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             metasCount: metas.length,
             notesCount: notes.length
         });
+        emit('planning', `Ruta seleccionada: ${routeIntent}.`, { visibility: 'public' });
 
         if (routeIntent === 'respond') {
             const assistantReply = routeReply || 'Te leo. ¿Qué necesitas?';
@@ -1465,6 +1823,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
         const orderedPool = new Set([...sourceNoteIds, ...initialCandidates]);
         const orderedCandidates = sanitizeNoteIdSelection(shortlist?.readOrder, orderedPool, 16);
         const readQueue = sanitizeNoteIdSelection([...sourceNoteIds, ...selectedFromMetas, ...orderedCandidates, ...initialCandidates], noteIds, 16);
+        emit('scanning', `Voy a revisar ${readQueue.length} nota(s) relevantes.`, { visibility: 'public' });
 
         if (readQueue.length === 0 && noteDiscoveryIndex.length > 0) {
             const { parsed: forcedSelection } = await chatCompletionJson([
@@ -1534,6 +1893,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
                 howToUse: String(evaluation?.howToUse || '').trim()
             });
         }
+        emit('synthesis', 'Generando respuesta final con el contexto encontrado.', { visibility: 'public' });
 
         const keptNotes = evaluations
             .filter((item) => item.keep)
@@ -1557,6 +1917,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
                 ? sourceNoteIds.map((id) => notesById.get(id)).filter(Boolean)
                 : keptNotes.slice(0, 3);
             const learningLinkSuggestions = [];
+            emit('execution', 'Creando puntos de profundización y anidaciones.', { visibility: 'public' });
 
             for (const note of sourceNotes) {
                 try {
@@ -1605,12 +1966,13 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             return {
                 success: true,
                 runId,
-                mode: 'knowledge',
+                mode: 'knowledge_depth',
                 userMessages: [],
                 assistantReply: String(depthReply?.assistant_reply || routeReply || 'Ya dejé listos los puntos de profundización.').trim(),
                 selectedMetaIds,
                 selectedNotes: sourceNotes.map((note) => ({ id: note.id, title: note.title })),
                 learningLinkSuggestions,
+                applyLearningLinks: true,
                 actionPlan: null,
                 actionBlockedAsInternal: false
             };
@@ -1646,9 +2008,17 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             schemaHint: '{"assistant_reply":"...","action_plan":{"goal":"...","app":"...","steps_hint":"...","confidence":72}}'
         });
 
-        const assistantReply = String(synthesis?.assistant_reply || '').trim();
+        let assistantReply = String(synthesis?.assistant_reply || '').trim();
         if (!assistantReply) {
             throw new Error('La síntesis del agente no devolvió una respuesta suficiente');
+        }
+        if (looksLikeLowQualityReply(assistantReply) && isSummaryRequest(prompt)) {
+            assistantReply = buildSummaryFallbackFromKnowledge({
+                metas,
+                notes,
+                keptNotes
+            });
+            emit('synthesis', 'Apliqué un resumen robusto para evitar respuesta genérica.', { visibility: 'public' });
         }
 
         const actionPlanRaw = synthesis?.action_plan && typeof synthesis.action_plan === 'object'
@@ -1659,7 +2029,12 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
                 goal: String(actionPlanRaw.goal || '').trim(),
                 app: String(actionPlanRaw.app || '').trim(),
                 steps_hint: String(actionPlanRaw.steps_hint || '').trim(),
-                confidence: Math.max(0, Math.min(100, Number(actionPlanRaw.confidence || 0)))
+                confidence: (() => {
+                    const parsed = Number(actionPlanRaw.confidence || 0);
+                    if (!Number.isFinite(parsed)) return 0;
+                    const normalized = parsed > 0 && parsed <= 1 ? parsed * 100 : parsed;
+                    return Math.max(0, Math.min(100, normalized));
+                })()
             }
             : null;
 
@@ -1738,6 +2113,7 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             runId,
             suggestions: learningLinkSuggestions.length
         });
+        LoggingSwitch.execution('PromptAgent', `run=${runId} intent=${routeIntent} metas=${metas.length} notes=${notes.length} readQueue=${readQueue.length} kept=${keptNotes.length} links=${learningLinkSuggestions.length}`);
         return {
             success: true,
             runId,
@@ -1746,7 +2122,8 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             assistantReply,
             selectedMetaIds,
             selectedNotes: keptNotes.map((item) => ({ id: item.id, title: item.title })),
-            learningLinkSuggestions,
+            learningLinkSuggestions: [],
+            applyLearningLinks: false,
             actionPlan: validAction ? actionPlan : null,
             actionBlockedAsInternal: Boolean(blockedInternalAction)
         };
@@ -1764,7 +2141,11 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
 });
 
 ipcMain.handle('chat-bootstrap', async () => {
-    return notebookManager.bootstrap();
+    const snapshot = notebookManager.bootstrap();
+    return {
+        ...snapshot,
+        metas: knowledgeService.bootstrap()
+    };
 });
 
 ipcMain.handle('get-ui-theme', async () => {
@@ -1778,14 +2159,15 @@ ipcMain.handle('set-ui-theme', async (event, payload = {}) => {
 });
 
 ipcMain.handle('chat-create-tab', async (event, payload = {}) => {
-    return notebookManager.createTab(payload);
+    return knowledgeService.createNote(payload);
 });
 
 ipcMain.handle('chat-update-tab', async (event, payload = {}) => {
-    const tab = notebookManager.updateTab(payload.tabId, payload);
+    const updated = knowledgeService.updateNote(payload.tabId, payload);
+    const tab = updated?.note || null;
     return {
         tab,
-        state: notebookManager.getState()
+        state: knowledgeService.getKnowledgeState()
     };
 });
 
@@ -1794,7 +2176,8 @@ ipcMain.handle('chat-set-active-tab', async (event, payload = {}) => {
 });
 
 ipcMain.handle('chat-archive-tab', async (event, payload = {}) => {
-    return notebookManager.archiveTab(payload.tabId);
+    const result = knowledgeService.deleteNote(payload.tabId);
+    return result?.state || knowledgeService.getKnowledgeState();
 });
 
 ipcMain.handle('chat-create-execution', async (event, payload = {}) => {
@@ -1822,7 +2205,44 @@ ipcMain.handle('chat-request-inference', async (event, payload = {}) => {
 });
 
 ipcMain.handle('notes-bootstrap', async () => {
-    return notebookManager.getState();
+    return knowledgeService.getKnowledgeState();
+});
+
+ipcMain.handle('chat-get-metas', async () => {
+    return { metas: knowledgeService.getMetas() };
+});
+
+ipcMain.handle('chat-save-metas', async (event, payload = {}) => {
+    return { metas: knowledgeService.setMetas(payload?.metas) };
+});
+
+ipcMain.handle('knowledge-get-state', async () => {
+    return knowledgeService.getKnowledgeState();
+});
+
+ipcMain.handle('knowledge-create-meta', async (event, payload = {}) => {
+    const meta = knowledgeService.createMeta(payload);
+    return { meta, metas: knowledgeService.getMetas() };
+});
+
+ipcMain.handle('knowledge-update-meta', async (event, payload = {}) => {
+    const meta = knowledgeService.updateMeta(payload.metaId, payload.patch || {});
+    return { meta, metas: knowledgeService.getMetas() };
+});
+
+ipcMain.handle('knowledge-delete-meta', async (event, payload = {}) => {
+    const ok = knowledgeService.deleteMeta(payload.metaId);
+    return { ok, metas: knowledgeService.getMetas() };
+});
+
+ipcMain.handle('knowledge-attach-note', async (event, payload = {}) => {
+    const meta = knowledgeService.attachNoteToMeta(payload.metaId, payload.noteId, { source: payload.source || 'manual' });
+    return { meta, metas: knowledgeService.getMetas() };
+});
+
+ipcMain.handle('knowledge-detach-note', async (event, payload = {}) => {
+    const meta = knowledgeService.detachNoteFromMeta(payload.metaId, payload.noteId);
+    return { meta, metas: knowledgeService.getMetas() };
 });
 
 ipcMain.handle('notes-generate-injected-chat', async (event, payload = {}) => {
@@ -2344,7 +2764,7 @@ ipcMain.handle('meta-agent-run', async (event, payload = {}) => {
 ipcMain.handle('chat-send-message', async (event, payload = {}) => {
     const text = String(payload.text || '').trim();
     if (!text) {
-        return { error: 'Mensaje vacio', state: notebookManager.getState() };
+        return { error: 'Mensaje vacio', state: knowledgeService.getKnowledgeState() };
     }
     LoggingSwitch.execution('Chat', `User sent: ${text.substring(0, 60)}`);
     LoggingSwitch.uiux('chat', 'user_message', {
@@ -2381,7 +2801,7 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
         }
         return {
             error: 'Provider de texto no inicializado',
-            state: notebookManager.getState(),
+            state: knowledgeService.getKnowledgeState(),
             execution: userExecution
         };
     }
@@ -2407,7 +2827,7 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
             return {
                 clarification: clarificationText,
                 updatedVariables: variableAnalysis.variables,
-                state: notebookManager.getState(),
+                state: knowledgeService.getKnowledgeState(),
                 execution: clarificationExecution
             };
         }
@@ -2427,8 +2847,11 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
         // Send to active model (OpenAI or Gemini via ModelSwitch)
         const response = await ModelSwitch.chatCompletion({
             messages: promptPayload.messages,
-            tools: actionPlanner ? actionPlanner.tools : undefined,
-            tool_choice: actionPlanner ? "auto" : undefined
+            tools: [
+                ...(actionPlanner ? actionPlanner.tools : []),
+                ...getKnowledgeTools()
+            ],
+            tool_choice: 'auto'
         });
 
         const message = response.choices[0].message;
@@ -2436,7 +2859,47 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
 
         // Check for function call (action)
         if (message.tool_calls && message.tool_calls.length > 0) {
-                const call = message.tool_calls[0];
+            const call = message.tool_calls[0];
+            const knowledgeResult = executeKnowledgeToolCall(call);
+            if (knowledgeResult) {
+                if (knowledgeResult.error) {
+                    const assistantExecution = notebookManager.appendMessage(executionId, {
+                        role: 'assistant',
+                        text: knowledgeResult.error,
+                        kind: 'knowledge',
+                        status: 'error'
+                    });
+                    contextManager.addMessage('assistant', knowledgeResult.error, 'chat_api');
+                    return {
+                        error: knowledgeResult.error,
+                        updatedVariables: variableAnalysis.variables,
+                        state: knowledgeService.getKnowledgeState(),
+                        execution: assistantExecution
+                    };
+                }
+
+                const visibleReply = String(knowledgeResult.reply || 'Listo. Actualicé tu conocimiento.').trim();
+                const assistantExecution = notebookManager.appendMessage(executionId, {
+                    role: 'assistant',
+                    text: visibleReply,
+                    kind: 'knowledge',
+                    status: 'answered'
+                });
+                contextManager.addMessage('assistant', visibleReply, 'chat_api', {
+                    tool_calls: message.tool_calls
+                });
+                contextManager.addMessage('tool', visibleReply, 'knowledge_result', {
+                    tool_call_id: call.id,
+                    name: call.function?.name || 'knowledge_tool'
+                });
+                return {
+                    reply: visibleReply,
+                    updatedVariables: variableAnalysis.variables,
+                    state: knowledgeResult.state || knowledgeService.getKnowledgeState(),
+                    execution: assistantExecution
+                };
+            }
+
             if (call.function.name === 'execute_screen_action') {
                 const args = JSON.parse(call.function.arguments);
                 LoggingSwitch.execution('Chat', `Action planned: ${args.goal}`);
@@ -2485,7 +2948,7 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
                     reply: visibleReply,
                     action: args,
                     updatedVariables: variableAnalysis.variables,
-                    state: notebookManager.getState(),
+                    state: knowledgeService.getKnowledgeState(),
                     execution: actionExecution
                 };
             }
@@ -2510,7 +2973,7 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
         return {
             reply,
             updatedVariables: variableAnalysis.variables,
-            state: notebookManager.getState(),
+            state: knowledgeService.getKnowledgeState(),
             execution: assistantExecution
         };
 
@@ -2522,7 +2985,7 @@ ipcMain.handle('chat-send-message', async (event, payload = {}) => {
         notebookManager.updateExecutionStatus(executionId, 'error');
         return {
             error: e.message,
-            state: notebookManager.getState(),
+            state: knowledgeService.getKnowledgeState(),
             execution: notebookManager.getState().executions.find((execution) => execution.id === executionId) || null
         };
     }

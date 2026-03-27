@@ -2305,19 +2305,26 @@ function setPromptVoiceButtonState(state) {
     }
 }
 
-function loadPromptMetasForAgent() {
-    const keys = ['iu_metas_v4', 'iu_metas_v3'];
-    for (const key of keys) {
+async function loadPromptMetasForAgent() {
+    if (window.iuOS?.invoke) {
         try {
-            const raw = localStorage.getItem(key);
-            if (!raw) continue;
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-                return parsed;
+            const payload = await window.iuOS.invoke('chat-get-metas');
+            if (Array.isArray(payload?.metas)) {
+                return payload.metas;
             }
         } catch (_) { }
     }
     return [];
+}
+
+async function persistPromptMetas(metas) {
+    if (window.iuOS?.invoke) {
+        try {
+            await window.iuOS.invoke('chat-save-metas', { metas });
+        } catch (error) {
+            console.warn('[PromptChat] Failed persisting metas in main process:', error);
+        }
+    }
 }
 
 function normalizePromptKey(value) {
@@ -2334,7 +2341,7 @@ async function applyPromptLearningLinks(result) {
     if (!suggestions.length) return { attached: 0, createdNotes: 0 };
     if (!window.iuOS?.invoke || !window.iuOS?.notesBootstrap) return { attached: 0, createdNotes: 0 };
 
-    const metas = loadPromptMetasForAgent();
+    const metas = await loadPromptMetasForAgent();
     if (!Array.isArray(metas) || metas.length === 0) return { attached: 0, createdNotes: 0 };
 
     const state = await window.iuOS.notesBootstrap();
@@ -2445,7 +2452,7 @@ async function applyPromptLearningLinks(result) {
         ]));
     }
 
-    localStorage.setItem('iu_metas_v4', JSON.stringify(metas));
+    await persistPromptMetas(metas);
     return { attached, createdNotes };
 }
 
@@ -2517,13 +2524,17 @@ async function runPromptInjectionFlow(prompt) {
 
         pushPromptChatMessage('user', cleanPrompt);
 
-        const result = window.iuOS.promptAgentRun
-            ? await window.iuOS.promptAgentRun({
+        let result;
+        if (window.iuOS.promptAgentRun) {
+            const metas = await loadPromptMetasForAgent();
+            result = await window.iuOS.promptAgentRun({
                 prompt: cleanPrompt,
                 runId,
-                metas: loadPromptMetasForAgent()
-            })
-            : await window.iuOS.notesGenerateInjectedChat({ prompt: cleanPrompt });
+                metas
+            });
+        } else {
+            result = await window.iuOS.notesGenerateInjectedChat({ prompt: cleanPrompt });
+        }
         if (!result || !result.success) {
             const err = result?.error || 'No se pudo preparar la ejecucion.';
             emitPromptChatUiUx('run_failed', {
@@ -2549,7 +2560,7 @@ async function runPromptInjectionFlow(prompt) {
             pushPromptChatMessage('assistant', assistantReply);
         }
 
-        if (String(result?.mode || '').trim() === 'knowledge') {
+        if (result?.applyLearningLinks === true) {
             try {
                 const linksResult = await applyPromptLearningLinks(result);
                 if (linksResult.attached > 0) {

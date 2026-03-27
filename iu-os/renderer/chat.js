@@ -1,4 +1,3 @@
-const METAS_STORAGE_KEY = 'iu_metas_v4';
 const META_VIEW_MODE_KEY = 'iu_meta_view_mode_v1';
 
 const state = {
@@ -259,20 +258,11 @@ function sanitizeMeta(meta) {
   };
 }
 
-function loadMetas() {
-  try {
-    const raw = localStorage.getItem(METAS_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map(sanitizeMeta).filter((meta) => meta.id);
-  } catch (_) {
-    return [];
-  }
-}
-
 function saveMetas() {
-  localStorage.setItem(METAS_STORAGE_KEY, JSON.stringify(state.metas));
+  if (!window.uChat?.saveMetas) return;
+  window.uChat.saveMetas(state.metas).catch((error) => {
+    console.error('[chat] saveMetas failed', error);
+  });
 }
 
 function cleanupMetasAgainstTabs() {
@@ -348,6 +338,9 @@ function applySnapshot(snapshot, options = {}) {
 
   state.tabs = Array.isArray(snapshot.tabs) ? snapshot.tabs : state.tabs;
   state.executions = Array.isArray(snapshot.executions) ? snapshot.executions : state.executions;
+  if (Array.isArray(snapshot.metas)) {
+    state.metas = snapshot.metas.map(sanitizeMeta).filter((meta) => meta.id);
+  }
   state.activeTabId = snapshot.activeTabId || state.activeTabId;
   state.activeExecutionId = snapshot.activeExecutionId || state.activeExecutionId;
 
@@ -1638,10 +1631,6 @@ function bindEvents() {
 async function init() {
   await initThemeSync();
   state.metaViewMode = loadMetaViewMode();
-  state.metas = loadMetas();
-  if (state.metas[0]) {
-    state.activeMetaId = state.metas[0].id;
-  }
   bindEvents();
 
   if (window.uChat?.onMetaAgentProgress) {

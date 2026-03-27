@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('uChat', {
     suggestNotesForMeta: (payload) => ipcRenderer.invoke('meta-suggest-notes', payload),
     inferLearningLinks: (payload) => ipcRenderer.invoke('note-infer-learning-links', payload),
     runMetaAgent: (payload) => ipcRenderer.invoke('meta-agent-run', payload),
+    getMetas: () => ipcRenderer.invoke('chat-get-metas'),
+    saveMetas: (metas) => ipcRenderer.invoke('chat-save-metas', { metas }),
     getUiTheme: () => ipcRenderer.invoke('get-ui-theme'),
     getLoggingMode: () => ipcRenderer.invoke('logging-get-mode'),
     setLoggingMode: (mode) => ipcRenderer.invoke('logging-set-mode', { mode }),
