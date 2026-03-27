@@ -309,11 +309,39 @@
         </div>
     </div>
 
+    <!-- Steps modal for Windows install -->
+    <div class="steps-overlay" id="steps-modal-win">
+        <div class="steps-box">
+            <button class="steps-close" id="steps-close-win">&times;</button>
+            <h2>Instalar I&amp;&Uuml; en Windows</h2>
+            <ol class="steps-list">
+                <li>
+                    <span class="step-num">1</span>
+                    <span>El archivo <strong>IU-1.0.0-win-arm64.zip</strong> ya se descarg&oacute;. Descompr&iacute;melo en una carpeta permanente (ej. <code>C:\Programas\IU</code>).</span>
+                </li>
+                <li>
+                    <span class="step-num">2</span>
+                    <span>Dentro de la carpeta encontrar&aacute;s <strong>IU.exe</strong>. Ejec&uacute;talo directamente &mdash; no requiere instalaci&oacute;n.</span>
+                </li>
+                <li>
+                    <span class="step-num">3</span>
+                    <span>Si Windows muestra una advertencia de SmartScreen, haz clic en <strong>"M&aacute;s informaci&oacute;n"</strong> &rarr; <strong>"Ejecutar de todas formas"</strong>.</span>
+                </li>
+                <li>
+                    <span class="step-num">4</span>
+                    <span>&#10003; Listo. Para acceso r&aacute;pido, crea un acceso directo de <strong>IU.exe</strong> en el escritorio.</span>
+                </li>
+            </ol>
+        </div>
+    </div>
+
     <script>
         (function () {
             var actionsEl = document.getElementById('actions');
             var modal = document.getElementById('steps-modal');
             var closeBtn = document.getElementById('steps-close');
+            var modalWin = document.getElementById('steps-modal-win');
+            var closeBtnWin = document.getElementById('steps-close-win');
 
             var devices = [];
             try { devices = JSON.parse(localStorage.getItem('iu_last_devices') || '[]'); } catch (e) { }
@@ -325,14 +353,14 @@
             var html = '';
 
             if (showMac) {
-                html += '<a href="#" class="btn-primary" id="btn-mac">' +
+                html += '<a href="/assets/IU-1.0.0-arm64.dmg" download class="btn-primary" id="btn-mac">' +
                     '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>' +
-                    'Descargar para Mac</a>';
+                    'Descargar para Mac (DMG)</a>';
             }
             if (showWin) {
-                html += '<a href="#" class="btn-primary" id="btn-win">' +
+                html += '<a href="/assets/IU-1.0.0-win-arm64.zip" download class="btn-primary" id="btn-win">' +
                     '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.557L10.373 4.5v7.13H3V5.557zm0 12.886L10.373 19.5V12.37H3v6.073zm8.24-14.064L21 2.5v9.13H11.24V4.379zm0 9.621H21V22.5l-9.76-1.379V14z"/></svg>' +
-                    'Descargar para Windows</a>';
+                    'Descargar para Windows (ZIP)</a>';
             }
 
             html += '<hr class="divider">' +
@@ -343,6 +371,13 @@
 
             actionsEl.innerHTML = html;
 
+            // Win button: download + show steps modal
+            if (showWin) {
+                document.getElementById('btn-win').addEventListener('click', function () {
+                    modalWin.classList.add('active');
+                });
+            }
+
             // Extension button → download + show steps
             document.getElementById('btn-extension').addEventListener('click', function () {
                 modal.classList.add('active');
@@ -351,9 +386,15 @@
             closeBtn.addEventListener('click', function () {
                 modal.classList.remove('active');
             });
+            closeBtnWin.addEventListener('click', function () {
+                modalWin.classList.remove('active');
+            });
 
             modal.addEventListener('click', function (e) {
                 if (e.target === modal) modal.classList.remove('active');
+            });
+            modalWin.addEventListener('click', function (e) {
+                if (e.target === modalWin) modalWin.classList.remove('active');
             });
         })();
     </script>

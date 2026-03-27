@@ -9,6 +9,7 @@ const path = require('path');
 const { app } = require('electron');
 const memoryFS = require('./MemoryFileSystem');
 const ModelSwitch = require('./ModelSwitch');
+const LoggingSwitch = require('./LoggingSwitch');
 // Removed OpenAI instance dependency for embeddings, now using ModelSwitch.
 
 class VectorIndex {
@@ -18,6 +19,7 @@ class VectorIndex {
         this.indexPath = path.join(app.getPath('userData'), 'brain_index.json');
         this.index = []; // Array of { text, embedding, source, timestamp }
         this.isDirty = false;
+        this.quotaErrorsSuppressed = 0;
     }
 
     init(openaiInstance) {
@@ -30,7 +32,7 @@ class VectorIndex {
             try {
                 const data = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'));
                 this.index = data;
-                console.log(`🧠 [VectorIndex] Loaded ${this.index.length} chunks.`);
+                LoggingSwitch.execution('VectorIndex', `Loaded ${this.index.length} chunks.`);
             } catch (e) {
                 console.error('❌ [VectorIndex] Failed to load index:', e);
                 this.index = [];
@@ -43,7 +45,7 @@ class VectorIndex {
         try {
             fs.writeFileSync(this.indexPath, JSON.stringify(this.index, null, 2));
             this.isDirty = false;
-            console.log(`💾 [VectorIndex] Saved index (${this.index.length} chunks).`);
+            LoggingSwitch.execution('VectorIndex', `Saved index (${this.index.length} chunks).`);
         } catch (e) {
             console.error('❌ [VectorIndex] Failed to save index:', e);
         }
@@ -68,7 +70,15 @@ class VectorIndex {
             const embedding = await ModelSwitch.embedding(text);
             return embedding;
         } catch (e) {
-            console.error('❌ [VectorIndex] Embedding failed:', e.message);
+            const message = String(e?.message || e || '');
+            const normalized = message.toLowerCase();
+            const isQuotaLike = normalized.includes('429') || normalized.includes('quota') || normalized.includes('billing');
+            if (isQuotaLike) {
+                // Silent fail for quota/billing noise during runtime indexing.
+                this.quotaErrorsSuppressed += 1;
+                return null;
+            }
+            console.error('❌ [VectorIndex] Embedding failed:', message);
             return null;
         }
     }
@@ -82,7 +92,7 @@ class VectorIndex {
     async rebuildIndex() {
         // if (!this.openai) return; // Removed, now using ModelSwitch
 
-        console.log('🔄 [VectorIndex] Rebuilding index from files...');
+        LoggingSwitch.execution('VectorIndex', 'Rebuilding index from files...');
         const files = memoryFS.getAllMemoryFiles();
         const newIndex = [];
 
@@ -115,7 +125,7 @@ class VectorIndex {
         this.index = newIndex;
         this.isDirty = true;
         this.saveIndex();
-        console.log(`✅ [VectorIndex] Rebuild complete. Index size: ${this.index.length}`);
+        LoggingSwitch.execution('VectorIndex', `Rebuild complete. Index size: ${this.index.length}`);
     }
 
     /**

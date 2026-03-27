@@ -446,6 +446,10 @@ function setTheme(theme, shouldBroadcast = true) {
         applyVisualMode(window.currentActiveWindowMode);
     }
 
+    if (window.iuOS && window.iuOS.setUiTheme) {
+        window.iuOS.setUiTheme(theme).catch(() => { });
+    }
+
     // Broadcast theme change
     if (shouldBroadcast && deviceSync && deviceSync.isConnected()) {
         deviceSync.broadcastSharedState({ theme });
@@ -1536,6 +1540,8 @@ function init() {
         console.error('[DEBUG] Could NOT find #btn-transfer-top in the DOM');
     }
 
+    setupPromptChatDock();
+
     // --- NAVIGATION HUD & VIEW SWITCHING ---
 
     function showNavHud(view) {
@@ -1601,6 +1607,7 @@ function init() {
     // Trackpad / Wheel Navigation (Horizontal only)
     let wheelTimeout;
     window.addEventListener('wheel', (e) => {
+        if (promptChatInteractionLock || isPromptChatEventTarget(e.target)) return;
         // Horizontal: Intents / Transfer
         if (Math.abs(e.deltaX) > 40 && Math.abs(e.deltaY) < 30) {
             if (isCarouselActive && currentIntents.length > 0) {
@@ -1732,7 +1739,7 @@ function setupManualDrag() {
 
     const shouldSkipDrag = (target) => {
         if (!(target instanceof Element)) return false;
-        return !!target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #learnings-modal');
+        return !!target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #prompt-chat-dock, #learnings-modal');
     };
 
     const endDrag = () => {
@@ -1757,10 +1764,10 @@ function setupManualDrag() {
     window.addEventListener('mousemove', (e) => {
         if (!isDragging) {
             // Determine if mouse is over an interactive element or the face
-            const isInteractive = !!e.target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #face-container, .boot-btn, #learnings-modal');
+            const isInteractive = !!e.target.closest('button, a, input, textarea, select, [data-no-drag], #controls-panel, #prompt-chat-dock, #face-container, .boot-btn, #learnings-modal');
             if (window.iuOS && window.iuOS.setClickThrough) {
                 // Ignore general mouse clicks (pass through to OS) EXCEPT when hovering our active elements
-                window.iuOS.setClickThrough(!isInteractive);
+                window.iuOS.setClickThrough(promptChatInteractionLock ? false : !isInteractive);
             }
             return;
         }
@@ -1815,6 +1822,7 @@ function setupWindowModes() {
 
     // 1. Detect Pinch (Wheel + Ctrl) — only fires when NOT in a native gesture
     window.addEventListener('wheel', (e) => {
+        if (promptChatInteractionLock || isPromptChatEventTarget(e.target)) return;
         if (e.ctrlKey) {
             e.preventDefault();
             if (inNativeGesture) return; // Native gesture takes priority
@@ -1978,6 +1986,7 @@ function showToast(message, duration = 3000, variant = 'default') {
 
 // Conversation Logic
 let conversationState = 'idle'; // idle | active
+let isConversationActive = false;
 
 async function toggleConversation() {
     console.log('🎤 [App] Button clicked');
@@ -2015,6 +2024,7 @@ async function toggleConversation() {
 
 function updateConversationUI(state) {
     const btn = document.getElementById('btn-transfer-top');
+    setPromptVoiceButtonState(state);
 
     if (state === 'active') {
         // Stop state
@@ -2092,6 +2102,586 @@ function updateConnectionStatus(connected, devices) {
             statusText.textContent = 'Not connected';
         }
     }
+}
+
+const promptChatState = {
+    busy: false,
+    activeRunId: null,
+    streamedUserCount: 0,
+    lastProgressKey: ''
+};
+let promptChatInteractionLock = false;
+
+function getPromptChatRefs() {
+    return {
+        dock: document.getElementById('prompt-chat-dock'),
+        empty: document.getElementById('prompt-chat-empty'),
+        history: document.getElementById('prompt-chat-history'),
+        input: document.getElementById('prompt-chat-input'),
+        sendBtn: document.getElementById('prompt-chat-send-btn'),
+        voiceBtn: document.getElementById('prompt-chat-voice-btn'),
+        floatingVoiceBtn: document.getElementById('prompt-chat-voice-floating-btn')
+    };
+}
+
+function emitPromptChatUiUx(event, data = {}) {
+    if (!window.iuOS?.logUiUx) return;
+    window.iuOS.logUiUx({
+        scope: 'main_prompt_chat',
+        event,
+        data
+    });
+}
+
+function previewText(value, max = 120) {
+    const text = String(value || '').trim().replace(/\s+/g, ' ');
+    if (!text) return '';
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function autoResizePromptInput(input) {
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 126)}px`;
+}
+
+function scrollPromptHistoryToEnd(history) {
+    if (!history) return;
+    history.scrollTop = history.scrollHeight;
+}
+
+function isPromptChatEventTarget(target) {
+    return target instanceof Element && !!target.closest('#prompt-chat-dock');
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatPromptInline(value) {
+    const escaped = escapeHtml(value);
+    return escaped
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noreferrer">$1</a>');
+}
+
+function renderPromptTextBlocks(container, text) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+    if (!normalized) return;
+
+    const blocks = normalized.split(/\n{2,}/);
+    for (const block of blocks) {
+        const lines = block.split('\n').map((line) => line.trimEnd());
+        if (!lines.length) continue;
+
+        if (lines.every((line) => /^\s*[-*]\s+/.test(line))) {
+            const ul = document.createElement('ul');
+            for (const line of lines) {
+                const li = document.createElement('li');
+                li.innerHTML = formatPromptInline(line.replace(/^\s*[-*]\s+/, ''));
+                ul.appendChild(li);
+            }
+            container.appendChild(ul);
+            continue;
+        }
+
+        if (lines.every((line) => /^\s*\d+\.\s+/.test(line))) {
+            const ol = document.createElement('ol');
+            for (const line of lines) {
+                const li = document.createElement('li');
+                li.innerHTML = formatPromptInline(line.replace(/^\s*\d+\.\s+/, ''));
+                ol.appendChild(li);
+            }
+            container.appendChild(ol);
+            continue;
+        }
+
+        if (lines.every((line) => /^\s*>\s?/.test(line))) {
+            const blockquote = document.createElement('blockquote');
+            blockquote.innerHTML = formatPromptInline(lines.map((line) => line.replace(/^\s*>\s?/, '')).join('\n')).replace(/\n/g, '<br>');
+            container.appendChild(blockquote);
+            continue;
+        }
+
+        const paragraph = document.createElement('p');
+        paragraph.innerHTML = formatPromptInline(lines.join('\n')).replace(/\n/g, '<br>');
+        container.appendChild(paragraph);
+    }
+}
+
+function renderPromptRichText(container, text) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n');
+    const rich = document.createElement('div');
+    rich.className = 'prompt-chat-rich-text';
+
+    const codeFencePattern = /```([a-z0-9_-]+)?\n([\s\S]*?)```/gi;
+    let lastIndex = 0;
+    let match = null;
+
+    while ((match = codeFencePattern.exec(normalized))) {
+        const before = normalized.slice(lastIndex, match.index);
+        renderPromptTextBlocks(rich, before);
+
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        if (match[1]) code.setAttribute('data-language', match[1].trim());
+        code.textContent = match[2].replace(/\n$/, '');
+        pre.appendChild(code);
+        rich.appendChild(pre);
+        lastIndex = match.index + match[0].length;
+    }
+
+    renderPromptTextBlocks(rich, normalized.slice(lastIndex));
+    container.appendChild(rich);
+}
+
+function setPromptChatHasMessages(hasMessages) {
+    const refs = getPromptChatRefs();
+    if (!refs.dock) return;
+    refs.dock.classList.toggle('has-messages', Boolean(hasMessages));
+    if (refs.empty) {
+        refs.empty.setAttribute('aria-hidden', hasMessages ? 'true' : 'false');
+    }
+}
+
+function createPromptMessageElement(role, text, options = {}) {
+    const roleClass = role === 'assistant' ? 'from-assistant' : 'from-user';
+
+    const el = document.createElement('article');
+    el.className = `prompt-chat-message ${roleClass}${options.noteTitle ? ' note-title' : ''}${options.status ? ' status' : ''}`;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'prompt-chat-message-bubble';
+    if (options.noteTitle) {
+        bubble.textContent = text;
+    } else if (options.status) {
+        bubble.textContent = text;
+    } else {
+        renderPromptRichText(bubble, text);
+    }
+    el.appendChild(bubble);
+    return el;
+}
+
+function trimPromptHistory(history, keep = 48) {
+    if (!history) return;
+    while (history.children.length > keep) {
+        history.removeChild(history.firstChild);
+    }
+}
+
+function pushPromptChatMessage(role, text, options = {}) {
+    const refs = getPromptChatRefs();
+    if (!refs.history) return;
+    const element = createPromptMessageElement(role, text, options);
+    refs.history.appendChild(element);
+    trimPromptHistory(refs.history, 48);
+    setPromptChatHasMessages(refs.history.children.length > 0);
+    scrollPromptHistoryToEnd(refs.history);
+    if (!options.status) {
+        emitPromptChatUiUx('message_rendered', {
+            role,
+            isNoteTitle: Boolean(options.noteTitle),
+            textLength: String(text || '').length,
+            preview: previewText(text, 140)
+        });
+    }
+}
+
+function setPromptVoiceButtonState(state) {
+    const refs = getPromptChatRefs();
+    if (refs.voiceBtn) {
+        refs.voiceBtn.classList.toggle('active', state === 'active');
+    }
+    if (refs.floatingVoiceBtn) {
+        refs.floatingVoiceBtn.classList.toggle('active', state === 'active');
+    }
+}
+
+function loadPromptMetasForAgent() {
+    const keys = ['iu_metas_v4', 'iu_metas_v3'];
+    for (const key of keys) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                return parsed;
+            }
+        } catch (_) { }
+    }
+    return [];
+}
+
+function normalizePromptKey(value) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+async function applyPromptLearningLinks(result) {
+    const suggestions = Array.isArray(result?.learningLinkSuggestions) ? result.learningLinkSuggestions : [];
+    if (!suggestions.length) return { attached: 0, createdNotes: 0 };
+    if (!window.iuOS?.invoke || !window.iuOS?.notesBootstrap) return { attached: 0, createdNotes: 0 };
+
+    const metas = loadPromptMetasForAgent();
+    if (!Array.isArray(metas) || metas.length === 0) return { attached: 0, createdNotes: 0 };
+
+    const state = await window.iuOS.notesBootstrap();
+    const tabs = Array.isArray(state?.tabs) ? state.tabs : [];
+    const notesByTitle = new Map(
+        tabs
+            .map((tab) => [normalizePromptKey(tab?.title || ''), String(tab?.id || '')])
+            .filter((entry) => entry[0] && entry[1])
+    );
+
+    const selectedMetaIds = Array.isArray(result?.selectedMetaIds)
+        ? result.selectedMetaIds.map((id) => String(id || '')).filter(Boolean)
+        : [];
+
+    const ensureMetaShape = (meta) => {
+        meta.manualNoteIds = Array.isArray(meta.manualNoteIds) ? meta.manualNoteIds.map(String) : [];
+        meta.agentNoteIds = Array.isArray(meta.agentNoteIds) ? meta.agentNoteIds.map(String) : [];
+        meta.noteIds = Array.isArray(meta.noteIds) ? meta.noteIds.map(String) : [];
+        meta.learningLinks = Array.isArray(meta.learningLinks) ? meta.learningLinks : [];
+        return meta;
+    };
+
+    const resolveMetaForSourceNote = (sourceNoteId) => {
+        const sourceId = String(sourceNoteId || '').trim();
+        if (!sourceId) return null;
+
+        const explicit = metas.find((meta) => selectedMetaIds.includes(String(meta?.id || '')) && [
+            ...(Array.isArray(meta?.noteIds) ? meta.noteIds : []),
+            ...(Array.isArray(meta?.manualNoteIds) ? meta.manualNoteIds : []),
+            ...(Array.isArray(meta?.agentNoteIds) ? meta.agentNoteIds : [])
+        ].map(String).includes(sourceId));
+        if (explicit) return ensureMetaShape(explicit);
+
+        const containing = metas.find((meta) => [
+            ...(Array.isArray(meta?.noteIds) ? meta.noteIds : []),
+            ...(Array.isArray(meta?.manualNoteIds) ? meta.manualNoteIds : []),
+            ...(Array.isArray(meta?.agentNoteIds) ? meta.agentNoteIds : [])
+        ].map(String).includes(sourceId));
+        if (containing) return ensureMetaShape(containing);
+
+        const selected = metas.find((meta) => selectedMetaIds.includes(String(meta?.id || '')));
+        if (selected) return ensureMetaShape(selected);
+
+        return metas[0] ? ensureMetaShape(metas[0]) : null;
+    };
+
+    let createdNotes = 0;
+    let attached = 0;
+
+    for (const suggestion of suggestions) {
+        const sourceNoteId = String(suggestion?.sourceNoteId || '').trim();
+        if (!sourceNoteId) continue;
+        const targetMeta = resolveMetaForSourceNote(sourceNoteId);
+        if (!targetMeta) continue;
+
+        if (!targetMeta.agentNoteIds.includes(sourceNoteId) && !targetMeta.manualNoteIds.includes(sourceNoteId)) {
+            targetMeta.agentNoteIds.push(sourceNoteId);
+        }
+
+        for (const link of (Array.isArray(suggestion?.links) ? suggestion.links : [])) {
+            const keyword = String(link?.keyword || '').trim();
+            const noteTitle = String(link?.noteTitle || '').trim();
+            if (!keyword || !noteTitle) continue;
+
+            const titleKey = normalizePromptKey(noteTitle);
+            let linkedNoteId = notesByTitle.get(titleKey) || '';
+            if (!linkedNoteId) {
+                try {
+                    const created = await window.iuOS.invoke('chat-create-tab', { templateId: 'blank', title: noteTitle });
+                    linkedNoteId = String(created?.tab?.id || created?.state?.activeTabId || '').trim();
+                    if (linkedNoteId) {
+                        notesByTitle.set(titleKey, linkedNoteId);
+                        createdNotes += 1;
+                    }
+                } catch (error) {
+                    console.warn('[PromptChat] Failed creating depth note:', error);
+                }
+            }
+            if (!linkedNoteId) continue;
+
+            if (!targetMeta.agentNoteIds.includes(linkedNoteId) && !targetMeta.manualNoteIds.includes(linkedNoteId)) {
+                targetMeta.agentNoteIds.push(linkedNoteId);
+            }
+
+            const exists = targetMeta.learningLinks.some((item) =>
+                String(item?.sourceNoteId || '') === sourceNoteId &&
+                String(item?.linkedNoteId || '') === linkedNoteId &&
+                normalizePromptKey(item?.keyword || '') === normalizePromptKey(keyword)
+            );
+            if (exists) continue;
+
+            targetMeta.learningLinks.push({
+                id: `link_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+                sourceNoteId,
+                linkedNoteId,
+                keyword,
+                noteTitle
+            });
+            attached += 1;
+        }
+    }
+
+    for (const meta of metas) {
+        ensureMetaShape(meta);
+        meta.noteIds = Array.from(new Set([
+            ...(Array.isArray(meta.manualNoteIds) ? meta.manualNoteIds : []),
+            ...(Array.isArray(meta.agentNoteIds) ? meta.agentNoteIds : [])
+        ]));
+    }
+
+    localStorage.setItem('iu_metas_v4', JSON.stringify(metas));
+    return { attached, createdNotes };
+}
+
+function handlePromptAgentProgress(payload = {}) {
+    const runId = String(payload?.runId || '').trim();
+    if (promptChatState.activeRunId && runId && runId !== promptChatState.activeRunId) {
+        return;
+    }
+
+    const type = String(payload?.type || '').trim();
+    const message = String(payload?.message || '').trim();
+    if (!message) return;
+
+    const visibility = String(payload?.visibility || '').trim().toLowerCase();
+    if (type === 'user_message') {
+        promptChatState.streamedUserCount += 1;
+        emitPromptChatUiUx('progress_user_message', {
+            runId,
+            phase: String(payload?.phase || ''),
+            messageType: String(payload?.messageType || ''),
+            textLength: message.length,
+            preview: previewText(message, 140)
+        });
+        pushPromptChatMessage('user', message, {
+            noteTitle: payload?.messageType === 'note_title'
+        });
+        return;
+    }
+
+    if (String(payload?.phase || '').trim() !== 'error' && visibility !== 'public') {
+        return;
+    }
+
+    const key = `${payload?.phase || 'status'}::${message}`;
+    if (promptChatState.lastProgressKey === key) return;
+    promptChatState.lastProgressKey = key;
+    emitPromptChatUiUx('progress_status', {
+        runId,
+        phase: String(payload?.phase || 'status'),
+        textLength: message.length,
+        preview: previewText(message, 140)
+    });
+    pushPromptChatMessage('assistant', message, { status: true });
+}
+
+async function runPromptInjectionFlow(prompt) {
+    const cleanPrompt = String(prompt || '').trim();
+    if (!cleanPrompt || promptChatState.busy) return;
+    if (!window.iuOS || (!window.iuOS.promptAgentRun && !window.iuOS.notesGenerateInjectedChat)) {
+        showToast('Notas no disponibles', 2200, 'subtle');
+        return;
+    }
+
+    const refs = getPromptChatRefs();
+    promptChatState.busy = true;
+    emitPromptChatUiUx('run_started', {
+        promptLength: cleanPrompt.length,
+        promptPreview: previewText(cleanPrompt, 180)
+    });
+    if (refs.sendBtn) refs.sendBtn.disabled = true;
+    if (refs.voiceBtn) refs.voiceBtn.disabled = true;
+    if (refs.input) refs.input.disabled = true;
+
+    try {
+        const runId = `prompt_run_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`;
+        promptChatState.activeRunId = runId;
+        promptChatState.streamedUserCount = 0;
+        promptChatState.lastProgressKey = '';
+
+        pushPromptChatMessage('user', cleanPrompt);
+
+        const result = window.iuOS.promptAgentRun
+            ? await window.iuOS.promptAgentRun({
+                prompt: cleanPrompt,
+                runId,
+                metas: loadPromptMetasForAgent()
+            })
+            : await window.iuOS.notesGenerateInjectedChat({ prompt: cleanPrompt });
+        if (!result || !result.success) {
+            const err = result?.error || 'No se pudo preparar la ejecucion.';
+            emitPromptChatUiUx('run_failed', {
+                error: String(err || '').substring(0, 140)
+            });
+            pushPromptChatMessage('assistant', err);
+            return;
+        }
+
+        const userMessages = Array.isArray(result.userMessages) ? result.userMessages : [];
+        if (promptChatState.streamedUserCount === 0) {
+            for (const message of userMessages) {
+                const text = String(message?.text || '').trim();
+                if (!text) continue;
+                pushPromptChatMessage('user', text, {
+                    noteTitle: message?.type === 'note_title'
+                });
+            }
+        }
+
+        const assistantReply = String(result.assistantReply || '').trim();
+        if (assistantReply) {
+            pushPromptChatMessage('assistant', assistantReply);
+        }
+
+        if (String(result?.mode || '').trim() === 'knowledge') {
+            try {
+                const linksResult = await applyPromptLearningLinks(result);
+                if (linksResult.attached > 0) {
+                    pushPromptChatMessage('assistant', `Anidé ${linksResult.attached} puntos de profundización en tus notas.`);
+                }
+            } catch (error) {
+                console.warn('[PromptChat] applyPromptLearningLinks failed:', error);
+            }
+        }
+        emitPromptChatUiUx('run_succeeded', {
+            runId,
+            userMessagesCount: userMessages.length,
+            assistantReplyLength: assistantReply.length,
+            assistantReplyPreview: previewText(assistantReply, 180)
+        });
+    } catch (error) {
+        console.error('❌ [PromptChat] flow failed:', error);
+        emitPromptChatUiUx('run_exception', {
+            error: String(error?.message || error || '').substring(0, 140)
+        });
+        pushPromptChatMessage('assistant', 'Error preparando la ejecucion desde tus notas.');
+    } finally {
+        promptChatState.activeRunId = null;
+        promptChatState.busy = false;
+        emitPromptChatUiUx('run_finished');
+        if (refs.sendBtn) refs.sendBtn.disabled = false;
+        if (refs.voiceBtn) refs.voiceBtn.disabled = false;
+        if (refs.input) {
+            refs.input.disabled = false;
+            refs.input.value = '';
+            autoResizePromptInput(refs.input);
+            refs.input.focus();
+        }
+    }
+}
+
+function setupPromptChatDock() {
+    const refs = getPromptChatRefs();
+    if (!refs.dock || !refs.input || !refs.sendBtn) return;
+    if (refs.dock.dataset.bound === '1') return;
+    refs.dock.dataset.bound = '1';
+    emitPromptChatUiUx('dock_bound');
+
+    const stopPromptEvent = (event) => {
+        event.stopPropagation();
+    };
+
+    const disableClickThroughForPrompt = () => {
+        promptChatInteractionLock = true;
+        window.iuOS?.setClickThrough?.(false);
+    };
+
+    const releasePromptInteractionLock = () => {
+        promptChatInteractionLock = false;
+    };
+
+    ['mouseenter', 'mousemove', 'mousedown', 'mouseup', 'click', 'dblclick', 'pointerdown', 'pointerup', 'touchstart', 'touchmove'].forEach((eventName) => {
+        refs.dock.addEventListener(eventName, (event) => {
+            disableClickThroughForPrompt();
+            stopPromptEvent(event);
+        }, { passive: true });
+    });
+
+    ['mouseleave', 'focusout'].forEach((eventName) => {
+        refs.dock.addEventListener(eventName, () => {
+            const activeInsidePrompt = refs.dock.contains(document.activeElement);
+            if (!activeInsidePrompt) {
+                releasePromptInteractionLock();
+            }
+        });
+    });
+
+    if (refs.history) {
+        refs.history.addEventListener('wheel', (event) => {
+            disableClickThroughForPrompt();
+            stopPromptEvent(event);
+        }, { passive: true, capture: true });
+
+        refs.history.addEventListener('scroll', disableClickThroughForPrompt, { passive: true });
+    }
+
+    refs.input.addEventListener('input', () => {
+        autoResizePromptInput(refs.input);
+    });
+
+    refs.input.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            emitPromptChatUiUx('submit_enter', {
+                promptLength: String(refs.input?.value || '').trim().length,
+                promptPreview: previewText(refs.input?.value || '', 180)
+            });
+            runPromptInjectionFlow(refs.input.value);
+        }
+    });
+
+    refs.sendBtn.addEventListener('click', () => {
+        emitPromptChatUiUx('submit_click', {
+            promptLength: String(refs.input?.value || '').trim().length,
+            promptPreview: previewText(refs.input?.value || '', 180)
+        });
+        runPromptInjectionFlow(refs.input.value);
+    });
+
+    if (refs.voiceBtn) {
+        refs.voiceBtn.addEventListener('click', async () => {
+            emitPromptChatUiUx('voice_toggle_click', {
+                currentState: conversationState
+            });
+            await toggleConversation();
+        });
+    }
+
+    if (refs.floatingVoiceBtn) {
+        refs.floatingVoiceBtn.addEventListener('click', async () => {
+            emitPromptChatUiUx('voice_toggle_click', {
+                currentState: conversationState,
+                source: 'floating_button'
+            });
+            await toggleConversation();
+        });
+    }
+
+    if (window.iuOS?.onPromptAgentProgress) {
+        window.iuOS.onPromptAgentProgress((payload) => {
+            handlePromptAgentProgress(payload);
+        });
+    }
+
+    autoResizePromptInput(refs.input);
+    setPromptVoiceButtonState(conversationState);
+    setPromptChatHasMessages(Boolean(refs.history.children.length));
 }
 
 // Conversation Text state
@@ -2634,6 +3224,8 @@ if (window.iuOS && window.iuOS.onSystemReady) {
 if (window.iuOS && window.iuOS.onVoiceStateChanged) {
     window.iuOS.onVoiceStateChanged((state) => {
         console.log('🎙️ [VoiceState] Received state:', state);
+        emitPromptChatUiUx('voice_state_changed', { state: String(state || '') });
+        setPromptVoiceButtonState(state);
         const btn = document.getElementById('btn-transfer-top');
         if (!btn) return;
 
@@ -2661,7 +3253,14 @@ let pendingActionPlan = null;
 if (window.iuOS && window.iuOS.onActionConfirmRequest) {
     window.iuOS.onActionConfirmRequest((data) => {
         console.log('[App] Action confirmation requested:', data);
+        emitPromptChatUiUx('action_confirmation_requested', {
+            source: String(data?.source || ''),
+            goalLength: String(data?.goal || '').length
+        });
         pendingActionPlan = data;
+
+        const source = String(data?.source || '').trim().toLowerCase();
+        const shouldAutoConfirm = source !== 'prompt_agent';
 
         // ACTIVATE COMPACT ACTION MODE - Trigger transition
         const app = document.getElementById('app');
@@ -2670,13 +3269,34 @@ if (window.iuOS && window.iuOS.onActionConfirmRequest) {
         // Show popup with action description
         showCompactPopup(data.goal);
 
-        // In compact mode: auto-confirm immediately (no button)
-        // The transition happens, then action executes
-        setTimeout(() => {
-            if (window.iuOS && window.iuOS.confirmAction) {
-                window.iuOS.confirmAction(data);
-            }
-        }, 800); // Wait for transition to settle
+        if (shouldAutoConfirm) {
+            console.log('[App] Auto-confirm enabled for action request', {
+                source,
+                requestId: data?.requestId || null,
+                goal: data?.goal || ''
+            });
+            setTimeout(() => {
+                if (window.iuOS && window.iuOS.confirmAction) {
+                    emitPromptChatUiUx('action_auto_confirmed', {
+                        source,
+                        requestId: data?.requestId || null
+                    });
+                    window.iuOS.confirmAction(data);
+                }
+            }, 800); // Wait for transition to settle
+            return;
+        }
+
+        console.log('[App] Manual confirmation required for prompt_agent action', {
+            source,
+            requestId: data?.requestId || null,
+            goal: data?.goal || ''
+        });
+        emitPromptChatUiUx('action_manual_confirmation_shown', {
+            source,
+            requestId: data?.requestId || null
+        });
+        showActionConfirmation(data);
     });
 }
 

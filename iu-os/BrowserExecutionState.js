@@ -84,12 +84,41 @@ function detectBrowserExecutionState(input = {}) {
         'espere',
         'esperando'
     ];
+    const platformChoicePatterns = [
+        'canvas',
+        'moodle',
+        'blackboard',
+        'aula virtual',
+        'lms',
+        'campus virtual'
+    ];
+    const assignmentTargetPatterns = [
+        'curso',
+        'clase',
+        'asignatura',
+        'materia',
+        'tarea',
+        'actividad',
+        'entrega',
+        'archivo',
+        'adjunto'
+    ];
+    const sharepointHubPatterns = [
+        'sharepoint',
+        'ubflex',
+        'ubeflex',
+        'ceipaeduco'
+    ];
 
     const loginSignalCount = countMatches(signalText, loginPatterns);
     const fileSignalCount = countMatches(elementsText, filePatterns);
     const metadataSignalCount = countMatches(elementsText, metadataPatterns);
     const successSignals = includesAny(signalText, successPatterns);
     const waitingSignals = includesAny(signalText, waitingPatterns);
+    const platformExplicitInGoal = includesAny(goalText, platformChoicePatterns);
+    const assignmentExplicitInGoal = includesAny(goalText, assignmentTargetPatterns);
+    const sharepointHubVisible = includesAny(urlText, ['sharepoint', 'ceipaeduco', 'sites ubflex esic']);
+    const canvasVisible = includesAny(signalText, ['canvas']);
     const loginSignals =
         loginSignalCount >= 2 ||
         includesAny(urlText, ['login microsoftonline com', 'signin', 'saml2', 'oauth2', 'auth']);
@@ -141,6 +170,23 @@ function detectBrowserExecutionState(input = {}) {
             summary: 'La interfaz muestra el formulario de entrega y faltan datos del trabajo.',
             userMessage: 'Ya llegué al formulario de entrega. Necesito título, descripción, asignatura y profesor si aplica para continuar.',
             confidence: 0.82
+        };
+    }
+
+    if (wantsUpload && sharepointHubVisible && !loginSignals && !canvasVisible && fileSignalCount === 0 && metadataSignalCount === 0 && !platformExplicitInGoal) {
+        return {
+            stage: 'portal_choice_required',
+            blocker: 'portal_choice_required',
+            turn: 'user',
+            requiresUserTurn: true,
+            missingFields: assignmentExplicitInGoal
+                ? 'siguiente_plataforma_o_seccion'
+                : 'siguiente_plataforma_o_seccion, curso, tarea',
+            summary: 'La tarea llegó a un portal intermedio y la siguiente plataforma o sección no está suficientemente clara.',
+            userMessage: assignmentExplicitInGoal
+                ? 'Ya llegué al portal intermedio, pero no es claro qué sección debo abrir ahora. Dime qué opción sigue exactamente.'
+                : 'Ya llegué al portal intermedio. Dime qué opción sigue ahora, por ejemplo Canvas, y si ya lo sabes también el curso y la tarea.',
+            confidence: 0.86
         };
     }
 

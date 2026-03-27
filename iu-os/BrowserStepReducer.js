@@ -166,7 +166,11 @@ function shouldSkipRedundantBrowserAction(element, progress) {
     if (completed.has('menu_open') && includesAny(label, ['menu', 'hamburguesa']) && !states.loginVisible) {
         return { skip: true, reason: 'menu_already_open' };
     }
-    if (completed.has('students_visible') && includesAny(label, ['estudiantes'])) {
+    if (
+        completed.has('students_visible') &&
+        includesAny(label, ['estudiantes']) &&
+        (states.ubeflexVisible || states.ubeflexReached || states.sharepointVisible || states.canvasVisible)
+    ) {
         return { skip: true, reason: 'students_step_already_visible' };
     }
     if (completed.has('ubeflex_reached') && includesAny(label, ['ubeflex', 'ubflex', 'ube flex'])) {

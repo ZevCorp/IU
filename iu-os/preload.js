@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('iuOS', {
     // Background luminance detection (for face color contrast in SMALL mode)
     sampleBgLuminance: () => ipcRenderer.invoke('sample-bg-luminance'),
     onBgLuminanceChanged: (callback) => ipcRenderer.on('bg-luminance-changed', (event, data) => callback(data)),
+    setUiTheme: (theme) => ipcRenderer.invoke('set-ui-theme', { theme }),
+    getUiTheme: () => ipcRenderer.invoke('get-ui-theme'),
+    getLoggingMode: () => ipcRenderer.invoke('logging-get-mode'),
+    setLoggingMode: (mode) => ipcRenderer.invoke('logging-set-mode', { mode }),
+    logUiUx: (payload) => ipcRenderer.send('uiux-log', payload),
 
     // Event Listeners
     onConversationText: (callback) => ipcRenderer.on('conversation-text', (event, text) => callback(text)),
@@ -49,6 +54,10 @@ contextBridge.exposeInMainWorld('iuOS', {
 
     // Chat Window
     toggleChatWindow: () => ipcRenderer.invoke('toggle-chat-window'),
+    notesBootstrap: () => ipcRenderer.invoke('notes-bootstrap'),
+    notesGenerateInjectedChat: (payload) => ipcRenderer.invoke('notes-generate-injected-chat', payload),
+    promptAgentRun: (payload) => ipcRenderer.invoke('prompt-agent-run', payload),
+    onPromptAgentProgress: (callback) => ipcRenderer.on('prompt-agent-progress', (event, payload) => callback(payload)),
     toggleHandWindow: () => ipcRenderer.invoke('toggle-hand-window'),
     getHandWindowState: () => ipcRenderer.invoke('get-hand-window-state'),
     toggleHandMeshWindow: () => ipcRenderer.invoke('toggle-hand-mesh-window'),

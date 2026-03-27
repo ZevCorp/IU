@@ -7,8 +7,11 @@ const { app, BrowserWindow, screen, ipcMain, systemPreferences, desktopCapturer,
 const path = require('path');
 const fs = require('fs');
 const { exec } = require('child_process');
+const LoggingSwitch = require('./LoggingSwitch');
 const { resolveInceptionConfig } = require('./InceptionEnv');
 const InceptionBootstrapper = require('./InceptionBootstrapper');
+
+LoggingSwitch.install();
 
 // Load .env from multiple locations (dev and production)
 const envPaths = [
@@ -21,16 +24,18 @@ const envPaths = [
 let envLoaded = false;
 for (const envPath of envPaths) {
     if (fs.existsSync(envPath)) {
-        require('dotenv').config({ path: envPath });
-        console.log(`📁 Loaded .env from: ${envPath}`);
+        require('dotenv').config({ path: envPath, override: true });
+        LoggingSwitch.execution('Main', `Loaded .env from: ${envPath}`);
         envLoaded = true;
         break;
     }
 }
 
 if (!envLoaded) {
-    console.log('⚠️ No .env file found. Some features may be disabled.');
+    LoggingSwitch.execution('Main', 'No .env file found. Some features may be disabled.');
 }
+
+LoggingSwitch.setMode(process.env.IU_LOG_MODE || LoggingSwitch.getMode(), { persistEnv: true });
 
 // IPC: Get Device ID from env
 ipcMain.handle('get-env-device-id', () => {
@@ -44,30 +49,70 @@ ipcMain.handle('get-picovoice-config', () => {
     };
 });
 
+ipcMain.handle('logging-get-mode', () => {
+    return { mode: LoggingSwitch.getMode() };
+});
+
+ipcMain.handle('logging-set-mode', (event, payload = {}) => {
+    const requestedMode = String(payload.mode || '').trim();
+    const mode = LoggingSwitch.setMode(requestedMode || 'execution');
+    return { mode };
+});
+
+ipcMain.on('uiux-log', (event, payload = {}) => {
+    const scope = String(payload?.scope || payload?.surface || 'renderer').trim() || 'renderer';
+    const eventName = String(payload?.event || '').trim() || 'event';
+    const data = payload?.data !== undefined ? payload.data : undefined;
+    LoggingSwitch.uiux(scope, eventName, data);
+});
+
+const OpenAI = require('openai');
+
 // Initialize OpenAI (handle missing API key gracefully)
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
-    const OpenAI = require('openai');
     openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    console.log('✅ OpenAI initialized');
+    LoggingSwitch.execution('Main', 'OpenAI initialized');
 } else {
-    console.log('⚠️ OPENAI_API_KEY not set. Voice features disabled.');
+    LoggingSwitch.execution('Main', 'OPENAI_API_KEY not set. Voice features disabled.');
 }
 
-// ModelSwitch: permite alternar entre OpenAI y Gemini con una sola línea
-// ModelSwitch: permite alternar entre OpenAI y Gemini con una sola línea
+let openrouter = null;
+if (process.env.OPENROUTER_API_KEY) {
+    const openrouterBaseURL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    const openrouterHeaders = {};
+    if (process.env.OPENROUTER_HTTP_REFERER) openrouterHeaders['HTTP-Referer'] = process.env.OPENROUTER_HTTP_REFERER;
+    if (process.env.OPENROUTER_X_TITLE) openrouterHeaders['X-Title'] = process.env.OPENROUTER_X_TITLE;
+
+    openrouter = new OpenAI({
+        apiKey: process.env.OPENROUTER_API_KEY,
+        baseURL: openrouterBaseURL,
+        defaultHeaders: Object.keys(openrouterHeaders).length ? openrouterHeaders : undefined
+    });
+    LoggingSwitch.execution('Main', `OpenRouter initialized @ ${openrouterBaseURL}`);
+} else {
+    LoggingSwitch.execution('Main', 'OPENROUTER_API_KEY not set. OpenRouter provider disabled.');
+}
+
+// ModelSwitch: seleccion por modelo y provider automatico
 const ModelSwitch = require('./ModelSwitch');
 if (openai) ModelSwitch.initOpenAI(openai);
+if (openrouter) {
+    ModelSwitch.initOpenRouter(openrouter, {
+        source: 'env',
+        baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'
+    });
+}
 if (process.env.GOOGLE_API_KEY) {
     ModelSwitch.initGemini(process.env.GOOGLE_API_KEY);
 } else {
-    console.log('⚠️ GOOGLE_API_KEY not set. Gemini provider disabled.');
+    LoggingSwitch.execution('Main', 'GOOGLE_API_KEY not set. Gemini provider disabled.');
 }
 
 if (process.env.ANTHROPIC_API_KEY) {
     ModelSwitch.initAnthropic(process.env.ANTHROPIC_API_KEY);
 } else {
-    console.log('⚠️ ANTHROPIC_API_KEY not set. Anthropic provider disabled.');
+    LoggingSwitch.execution('Main', 'ANTHROPIC_API_KEY not set. Anthropic provider disabled.');
 }
 
 const inceptionConfig = resolveInceptionConfig(process.env);
@@ -77,17 +122,18 @@ if (inceptionConfig.activeKey) {
         baseURL: inceptionConfig.baseUrl
     });
 } else {
-    console.log('⚠️ INCEPTION_API_KEY / IU_BOOTSTRAP_INCEPTION_API_KEY not set. Inception provider disabled.');
+    LoggingSwitch.execution('Main', 'INCEPTION_API_KEY / IU_BOOTSTRAP_INCEPTION_API_KEY not set. Inception provider disabled.');
 }
 
 const providerSummary = ModelSwitch.getProviderSummary();
-console.log(`🔀 [ModelSwitch] Chat: ${providerSummary.chatProvider} (${providerSummary.models[providerSummary.chatProvider]?.chat || 'n/a'}) | Vision: ${providerSummary.visionProvider} (${providerSummary.models[providerSummary.visionProvider]?.vision || 'n/a'})`);
+LoggingSwitch.execution('ModelSwitch', `Modelo: ${providerSummary.selectedModel?.displayName || providerSummary.selectedModel?.key || 'n/a'} | Chat: ${providerSummary.chatProvider} (${providerSummary.models[providerSummary.chatProvider]?.chat || 'n/a'}) | Vision: ${providerSummary.visionProvider} (${providerSummary.models[providerSummary.visionProvider]?.vision || 'n/a'})`);
 
 // Action System: Planner + Screen Agent + Brain
 const ActionPlanner = require('./ActionPlanner');
 const ScreenAgent = require('./ScreenAgent');
 const Brain = require('./Brain');
 const ExecutionSessionManager = require('./ExecutionSessionManager');
+const NotebookExecutionManager = require('./NotebookExecutionManager');
 // Browser Agent: control transversal de páginas web via CDP
 const BrowserAgent = require('./BrowserAgent');
 const { startBrowserCoreService, createBrowserCoreClient, toClientOptions } = require('./browser-core/dist');
@@ -117,6 +163,20 @@ function isMissingUpdateConfigError(err) {
     return msg.includes('app-update.yml') && msg.includes('ENOENT');
 }
 
+function isQuotaOrBillingError(err) {
+    const message = String(err?.message || err || '').toLowerCase();
+    const code = String(err?.code || '').toLowerCase();
+    const type = String(err?.type || err?.error?.type || '').toLowerCase();
+    return (
+        message.includes('429') ||
+        message.includes('quota') ||
+        message.includes('billing') ||
+        message.includes('rate limit') ||
+        code === 'insufficient_quota' ||
+        type === 'insufficient_quota'
+    );
+}
+
 // Fix for OpenAI File/Blob upload in Node environments without globals
 if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefined') {
     const { File, Blob } = require('node:buffer');
@@ -126,11 +186,17 @@ if (typeof globalThis.File === 'undefined' || typeof globalThis.Blob === 'undefi
 
 
 const LearningAgent = require('./LearningAgent');
+const notebookManager = new NotebookExecutionManager({
+    storageDir: path.join(app.getPath('userData'), 'chat-notebooks'),
+    modelSwitch: ModelSwitch,
+    isModelReady: () => ModelSwitch.isReady({ capability: 'chat' })
+});
 
 let mainWindow = null;
 let chatWindow = null;
 let isLearningChatPinned = false;
 let chatWindowBoundsBeforeLearning = null;
+let currentUiTheme = 'light';
 let compactWindow = null; // Mini circular window for action mode
 let handWindow = null; // Floating hand-tracking window (camera source + skeleton)
 let handMeshWindow = null; // 3D bone-mesh visualization window
@@ -286,7 +352,7 @@ function saveSettings() {
 loadSettings();
 
 const COMPACT_SIZE = 150;  // Legacy compact mode size
-const SIDEBAR_WIDTH = 300; // Expanded mode: full sidebar
+const SIDEBAR_WIDTH = 420; // Slightly narrower for more usable desktop space
 const CHAT_GAP = 7;
 const HAND_WINDOW_WIDTH = 420;
 const HAND_WINDOW_HEIGHT = 560;
@@ -366,7 +432,7 @@ function syncChatWindowPosition(animate = false) {
 
 function getFloatingChatBounds() {
     const { workArea } = screen.getPrimaryDisplay();
-    const width = 420;
+    const width = SIDEBAR_WIDTH;
     const height = Math.min(560, workArea.height - 40);
     const x = workArea.x + workArea.width - width - 20;
     const y = workArea.y + 20;
@@ -459,10 +525,10 @@ function getWindowBounds(mode) {
             y = areaY + 20;
             break;
         case WINDOW_MODES.MEDIUM:
-            w = 260;
-            h = Math.floor(height * 0.38);
-            x = width - w - 20;
-            y = 20;
+            w = 240;
+            h = Math.floor(height * 0.35);
+            x = areaX + width - w - 20;
+            y = areaY + 24;
             break;
         case WINDOW_MODES.FULLSCREEN:
             w = width;
@@ -473,9 +539,9 @@ function getWindowBounds(mode) {
         case WINDOW_MODES.LARGE:
         default:
             w = SIDEBAR_WIDTH;
-            h = height;
-            x = width - w - 20;
-            y = 0;
+            h = Math.floor(height * 0.9);
+            x = areaX + width - w - 20;
+            y = areaY + Math.floor((height - h) / 2);
             break;
     }
 
@@ -653,6 +719,15 @@ function createWindow() {
 // Chat Window (Direct text to GPT-5-Mini)
 // ============================================
 
+function normalizeUiTheme(theme) {
+    return String(theme || '').trim().toLowerCase() === 'light' ? 'light' : 'dark';
+}
+
+function pushUiThemeToChatWindow() {
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+    chatWindow.webContents.send('chat-ui-theme', { theme: currentUiTheme });
+}
+
 function createChatWindow(options = {}) {
     if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.focus();
@@ -700,6 +775,7 @@ function createChatWindow(options = {}) {
             syncChatWindowPosition(false);
         }
         chatWindow.show();
+        pushUiThemeToChatWindow();
     });
 
     chatWindow.on('closed', () => {
@@ -953,8 +1029,1345 @@ ipcMain.on('chat-close', () => {
     }
 });
 
-ipcMain.on('chat-send-message', async (event, text) => {
-    console.log('💬 [Chat] User sent:', text.substring(0, 60));
+function buildChatSystemPrompt(relevantLearned, relevantContext) {
+    let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
+
+Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que haras y llama la funcion execute_screen_action.
+
+Si solo conversa o pregunta algo, responde de forma breve y util. Maximo 2-3 oraciones.
+Responde en espanol.`;
+
+    let learnedWorkflowsText = '';
+    if (relevantLearned && relevantLearned.length > 0) {
+        learnedWorkflowsText = relevantLearned.map((wf, i) => {
+            return `${i + 1}. ${wf.workflowName}\n   Resumen: ${wf.summary}\n   Estilo: ${wf.executionStyle}`;
+        }).join('\n');
+        systemPrompt += `\n\nAPRENDIZAJES RELEVANTES DEL USUARIO:\n${learnedWorkflowsText}
+\nSi vas a usar uno, di explicitamente en la PRIMERA linea:
+"Perfecto, lo voy a hacer como me ensenaste en <nombre del aprendizaje>."
+Si no estas seguro cual aplicar, pregunta una sola aclaracion corta antes de ejecutar.`;
+    }
+
+    if (relevantContext.longTerm) {
+        systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
+    }
+
+    return { systemPrompt, learnedWorkflowsText };
+}
+
+function shouldAskChatClarification(userText, variableAnalysis) {
+    if (!variableAnalysis || !variableAnalysis.needsClarification) return false;
+    const hasConflict = (variableAnalysis.variables || []).some((variable) => variable.conflict);
+    if (hasConflict) return true;
+
+    const needsConcreteTask = /(?:haz|hace|ayuda|ayudame|necesito|quiero|prepara|redacta|escribe|resuelve|sube|envia|entrega)/i.test(String(userText || ''));
+    return needsConcreteTask;
+}
+
+function safeSliceText(value, max = 1200) {
+    const text = String(value || '').trim();
+    if (text.length <= max) return text;
+    return `${text.slice(0, max).trim()}...`;
+}
+
+function parseModelJsonPayload(rawText) {
+    const raw = String(rawText || '').trim();
+    if (!raw) return null;
+
+    const directTry = (() => {
+        try {
+            return JSON.parse(raw);
+        } catch (_) {
+            return null;
+        }
+    })();
+    if (directTry && typeof directTry === 'object') return directTry;
+
+    const fenced = raw.match(/```json\s*([\s\S]*?)```/i) || raw.match(/```\s*([\s\S]*?)```/i);
+    if (fenced && fenced[1]) {
+        try {
+            return JSON.parse(fenced[1].trim());
+        } catch (_) { }
+    }
+
+    const firstBrace = raw.indexOf('{');
+    const lastBrace = raw.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        const candidate = raw.slice(firstBrace, lastBrace + 1);
+        try {
+            return JSON.parse(candidate);
+        } catch (_) { }
+    }
+
+    return null;
+}
+
+async function chatCompletionJson(messages, repairLabel = 'payload', options = {}) {
+    const maxAttempts = Math.max(2, Math.min(8, Number(options.maxAttempts || 5)));
+    const schemaHint = String(options.schemaHint || '').trim();
+
+    let attemptMessages = messages;
+    const previousOutputs = [];
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const response = await ModelSwitch.chatCompletion({ messages: attemptMessages });
+        const raw = String(response?.choices?.[0]?.message?.content || '').trim();
+        previousOutputs.push(raw);
+
+        const parsed = parseModelJsonPayload(raw);
+        if (parsed && typeof parsed === 'object') {
+            return { parsed, raw, attempt };
+        }
+
+        attemptMessages = [
+            {
+                role: 'system',
+                content: [
+                    'Devuelve UNICAMENTE JSON válido UTF-8.',
+                    `Objetivo: ${repairLabel}.`,
+                    'Sin markdown, sin bloques de código, sin texto adicional.',
+                    schemaHint ? `Esquema esperado: ${schemaHint}` : '',
+                    'Si dudas, responde con el objeto mínimo válido del esquema.'
+                ].filter(Boolean).join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    objective: repairLabel,
+                    schemaHint,
+                    original_messages: messages,
+                    previous_outputs: previousOutputs.slice(-3)
+                })
+            }
+        ];
+    }
+
+    throw new Error(`No se pudo parsear JSON para ${repairLabel} tras ${maxAttempts} intentos`);
+}
+
+function extractNoteOutline(body, maxItems = 8) {
+    const lines = String(body || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    if (!lines.length) return [];
+
+    const structural = [];
+    for (const line of lines) {
+        if (/^#{1,6}\s+/.test(line) || /^[-*]\s+/.test(line) || /^\d+\.\s+/.test(line)) {
+            structural.push(line.replace(/^#{1,6}\s+/, '').slice(0, 110));
+        }
+        if (structural.length >= maxItems) break;
+    }
+
+    if (structural.length >= 3) {
+        return structural.slice(0, maxItems);
+    }
+
+    const fallback = [];
+    for (const line of lines) {
+        if (line.length < 16) continue;
+        fallback.push(line.slice(0, 110));
+        if (fallback.length >= Math.min(3, maxItems)) break;
+    }
+    return fallback;
+}
+
+function buildNoteDiscoveryIndex(notes, maxNotes = 220) {
+    return (Array.isArray(notes) ? notes : [])
+        .slice(0, maxNotes)
+        .map((tab) => ({
+            id: String(tab?.id || '').trim(),
+            title: String(tab?.title || '').trim() || 'Sin titulo',
+            outline: extractNoteOutline(tab?.body || '', 8),
+            charCount: String(tab?.body || '').trim().length
+        }))
+        .filter((item) => item.id);
+}
+
+function sanitizeNoteIdSelection(rawIds, validIds, limit = 12) {
+    const list = Array.isArray(rawIds) ? rawIds : [];
+    const unique = [];
+    for (const value of list) {
+        const id = String(value || '').trim();
+        if (!id || !validIds.has(id) || unique.includes(id)) continue;
+        unique.push(id);
+        if (unique.length >= limit) break;
+    }
+    return unique;
+}
+
+function normalizeFocus(focus, limit = 6) {
+    if (!Array.isArray(focus)) return [];
+    return focus
+        .map((item, index) => ({
+            id: String(item?.id || `f${index + 1}`).trim() || `f${index + 1}`,
+            title: String(item?.title || '').trim(),
+            query: String(item?.query || '').trim(),
+            intent: String(item?.intent || '').trim(),
+            goal: String(item?.goal || '').trim()
+        }))
+        .filter((item) => item.title)
+        .slice(0, limit);
+}
+
+function isInternalKnowledgeActionApp(appName) {
+    const value = String(appName || '').trim().toLowerCase();
+    return ['chat', 'notes', 'notas', 'knowledge', 'knowledge base', 'prompt chat'].includes(value);
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sanitizePromptMetas(rawMetas, validNoteIds) {
+    if (!Array.isArray(rawMetas)) return [];
+    return rawMetas
+        .map((meta) => ({
+            id: String(meta?.id || '').trim(),
+            title: String(meta?.title || '').trim(),
+            description: String(meta?.description || '').trim(),
+            noteIds: Array.isArray(meta?.noteIds)
+                ? Array.from(new Set(meta.noteIds.map((id) => String(id)).filter((id) => validNoteIds.has(id))))
+                : []
+        }))
+        .filter((meta) => meta.id && (meta.title || meta.description || meta.noteIds.length > 0))
+        .slice(0, 40);
+}
+
+function normalizeAgentIntent(rawIntent) {
+    const value = String(rawIntent || '').trim().toLowerCase();
+    if (value === 'search_notes') return 'search_notes';
+    if (value === 'answer_from_knowledge') return 'answer_from_knowledge';
+    if (value === 'create_depth_links') return 'create_depth_links';
+    if (value === 'action') return 'action';
+    return 'respond';
+}
+
+async function inferLearningLinksForNote(noteTitle, noteBody, options = {}) {
+    const maxLinks = Math.max(1, Math.min(6, Number(options.maxLinks || 4)));
+    if (!String(noteBody || '').trim()) return [];
+
+    const { parsed } = await chatCompletionJson([
+        {
+            role: 'system',
+            content: [
+                'Extrae variables de aprendizaje que el usuario deberia profundizar desde una nota.',
+                'Responde SOLO JSON valido con formato:',
+                '{"links":[{"keyword":"...","noteTitle":"...","reason":"...","confidence":0.0}]}',
+                'Reglas:',
+                `- links maximo ${maxLinks}.`,
+                '- keyword debe existir literalmente dentro del texto de la nota.',
+                '- noteTitle debe ser corto y accionable.',
+                '- confidence de 0.0 a 1.0.',
+                '- Incluye solo gaps reales de aprendizaje o expansion semantica valiosa.',
+                '- No incluyas markdown ni texto adicional.'
+            ].join('\n')
+        },
+        {
+            role: 'user',
+            content: JSON.stringify({
+                noteTitle,
+                noteBody: safeSliceText(noteBody, 4000)
+            })
+        }
+    ], `links de profundizacion para ${noteTitle || 'nota'}`, {
+        schemaHint: '{"links":[{"keyword":"...","noteTitle":"...","reason":"...","confidence":0.72}]}'
+    });
+
+    return Array.isArray(parsed?.links)
+        ? parsed.links
+            .map((item) => ({
+                keyword: String(item?.keyword || '').trim(),
+                noteTitle: String(item?.noteTitle || '').trim(),
+                reason: String(item?.reason || '').trim(),
+                confidence: Number(item?.confidence || 0)
+            }))
+            .filter((item) => item.keyword && item.noteTitle && String(noteBody || '').toLowerCase().includes(item.keyword.toLowerCase()))
+            .filter((item) => Number.isFinite(item.confidence) && item.confidence >= 0.62)
+            .slice(0, maxLinks)
+        : [];
+}
+
+ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
+    const prompt = String(payload?.prompt || '').trim();
+    const runId = String(payload?.runId || `run_${Date.now()}`).trim();
+
+    const emit = (phase, message, extra = {}) => {
+        event.sender.send('prompt-agent-progress', {
+            runId,
+            phase,
+            message: String(message || '').trim(),
+            timestamp: Date.now(),
+            ...extra
+        });
+    };
+
+    if (!prompt) {
+        emit('error', 'Prompt vacío');
+        return { success: false, error: 'Prompt vacio', userMessages: [], assistantReply: '' };
+    }
+
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        emit('error', 'Modelo no disponible');
+        return { success: false, error: 'Provider de texto no inicializado', userMessages: [], assistantReply: '' };
+    }
+
+    try {
+        const notebookState = notebookManager.getState();
+        const notes = Array.isArray(notebookState?.tabs)
+            ? notebookState.tabs
+                .map((tab) => ({
+                    id: String(tab?.id || '').trim(),
+                    title: String(tab?.title || '').trim() || 'Sin titulo',
+                    body: String(tab?.body || '').trim()
+                }))
+                .filter((tab) => tab.id)
+            : [];
+        const noteIds = new Set(notes.map((tab) => tab.id));
+        const metas = sanitizePromptMetas(payload?.metas, noteIds);
+        const notesById = new Map(notes.map((tab) => [tab.id, tab]));
+        const noteDiscoveryIndex = buildNoteDiscoveryIndex(notes, 220);
+        const metaCatalog = metas.map((meta) => ({
+            id: meta.id,
+            title: meta.title || 'Meta sin titulo',
+            description: safeSliceText(meta.description, 280),
+            noteIds: meta.noteIds,
+            sampleNoteTitles: meta.noteIds.slice(0, 4).map((id) => notesById.get(id)?.title || 'Sin titulo')
+        }));
+
+        const { parsed: route } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Eres un asistente de clase mundial.',
+                    'Tu trabajo es responder natural y bien, y usar las herramientas internas solo cuando hagan falta.',
+                    'Responde SOLO JSON:',
+                    '{"intent":"respond|search_notes|answer_from_knowledge|create_depth_links|action","assistant_reply":"...","objective":"...","search_query":"...","target_note_titles":["..."],"reason":"..."}',
+                    'Reglas:',
+                    '- intent="respond": conversación casual, conocimiento general o preguntas que puedes responder sin revisar notas/metas.',
+                    '- intent="search_notes": cuando el usuario quiere que inspecciones, resumas, busques o encuentres cosas dentro de sus notas.',
+                    '- intent="answer_from_knowledge": cuando necesitas metas/notas del usuario para contestar bien.',
+                    '- intent="create_depth_links": cuando pide crear notas de profundización, puntos o anidaciones sobre notas/metas.',
+                    '- intent="action": solo si el usuario pide ejecutar algo en el PC.',
+                    '- assistant_reply SIEMPRE obligatorio y user-ready. Nunca expliques tu pipeline interno.',
+                    '- objective debe explicar la tarea operativa a realizar si no es solo responder.',
+                    '- search_query resume que buscarías en notas/metas.',
+                    '- target_note_titles ayuda a ubicar notas concretas cuando aplique.',
+                    '- No ejecutes acciones del PC en esta fase.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    prompt,
+                    notesCount: notes.length,
+                    metasCount: metas.length,
+                    metasPreview: metas.slice(0, 6).map((meta) => ({
+                        id: meta.id,
+                        title: safeSliceText(meta.title, 80),
+                        description: safeSliceText(meta.description, 120),
+                        noteCount: meta.noteIds.length
+                    })),
+                    noteTitles: notes.slice(0, 24).map((note) => ({
+                        id: note.id,
+                        title: safeSliceText(note.title, 100)
+                    }))
+                })
+            }
+        ], 'decision del agente principal', {
+            schemaHint: '{"intent":"respond","assistant_reply":"...","objective":"...","search_query":"...","target_note_titles":["..."],"reason":"..."}'
+        });
+
+        const routeIntent = normalizeAgentIntent(route?.intent);
+        const routeReply = String(route?.assistant_reply || '').trim();
+        const routeObjective = String(route?.objective || prompt).trim() || prompt;
+        const routeQuery = String(route?.search_query || routeObjective || prompt).trim() || prompt;
+        const targetNoteTitles = Array.isArray(route?.target_note_titles)
+            ? route.target_note_titles
+                .map((item) => String(item || '').trim())
+                .filter(Boolean)
+                .slice(0, 6)
+            : [];
+        console.log('🧭 [PromptAgent] Route decision', {
+            runId,
+            intent: routeIntent,
+            reason: String(route?.reason || '').trim(),
+            prompt: safeSliceText(prompt, 160),
+            metas: metas.length,
+            notes: notes.length
+        });
+        LoggingSwitch.uiux('prompt_agent', 'route_decision', {
+            runId,
+            intent: routeIntent,
+            reason: safeSliceText(route?.reason || '', 180),
+            promptPreview: safeSliceText(prompt, 180),
+            metasCount: metas.length,
+            notesCount: notes.length
+        });
+
+        if (routeIntent === 'respond') {
+            const assistantReply = routeReply || 'Te leo. ¿Qué necesitas?';
+            LoggingSwitch.uiux('prompt_agent', 'chat_mode_reply', {
+                runId,
+                replyPreview: safeSliceText(assistantReply, 200)
+            });
+            return {
+                success: true,
+                runId,
+                mode: 'direct',
+                userMessages: [],
+                assistantReply,
+                selectedMetaIds: [],
+                selectedNotes: [],
+                actionPlan: null
+            };
+        }
+
+        const { parsed: shortlist } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Eres un agente de investigación para un knowledge base personal.',
+                    'Tu trabajo es decidir qué metas y notas mirar antes de responder o crear profundizaciones.',
+                    'Responde SOLO JSON:',
+                    '{"metaIds":["..."],"candidateNoteIds":["..."],"readOrder":["..."],"sourceNoteIds":["..."],"why":"..."}',
+                    'Reglas:',
+                    '- metaIds maximo 6.',
+                    '- candidateNoteIds maximo 16.',
+                    '- readOrder debe ser subconjunto ordenado de candidateNoteIds o sourceNoteIds.',
+                    '- sourceNoteIds sirve para identificar notas exactas que seran el origen de puntos de profundizacion.',
+                    '- Usa SOLO ids existentes.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    prompt,
+                    intent: routeIntent,
+                    objective: routeObjective,
+                    searchQuery: routeQuery,
+                    targetNoteTitles,
+                    metas: metaCatalog,
+                    notesIndex: noteDiscoveryIndex
+                })
+            }
+        ], 'seleccion de contexto del agente principal', {
+            schemaHint: '{"metaIds":["meta_1"],"candidateNoteIds":["tab_1"],"readOrder":["tab_1"],"sourceNoteIds":["tab_1"],"why":"..."}'
+        });
+
+        const validMetaIds = new Set(metaCatalog.map((meta) => meta.id));
+        const selectedMetaIds = sanitizeNoteIdSelection(shortlist?.metaIds, validMetaIds, 5);
+        const selectedFromMetas = selectedMetaIds
+            .flatMap((metaId) => metaCatalog.find((meta) => meta.id === metaId)?.noteIds || []);
+        const sourceNoteIds = sanitizeNoteIdSelection(shortlist?.sourceNoteIds, noteIds, 6);
+        const initialCandidates = sanitizeNoteIdSelection(shortlist?.candidateNoteIds, noteIds, 16);
+        const orderedPool = new Set([...sourceNoteIds, ...initialCandidates]);
+        const orderedCandidates = sanitizeNoteIdSelection(shortlist?.readOrder, orderedPool, 16);
+        const readQueue = sanitizeNoteIdSelection([...sourceNoteIds, ...selectedFromMetas, ...orderedCandidates, ...initialCandidates], noteIds, 16);
+
+        if (readQueue.length === 0 && noteDiscoveryIndex.length > 0) {
+            const { parsed: forcedSelection } = await chatCompletionJson([
+                {
+                    role: 'system',
+                    content: [
+                        'Debes seleccionar al menos 1 nota para inspección inicial si el objetivo depende de notas.',
+                        'Responde SOLO JSON: {"candidateNoteIds":["..."],"why":"..."}',
+                        '- Maximo 6 ids.',
+                        '- Solo ids del índice.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({
+                        prompt,
+                        intent: routeIntent,
+                        objective: routeObjective,
+                        targetNoteTitles,
+                        notesIndex: noteDiscoveryIndex
+                    })
+                }
+            ], 'seleccion inicial forzada', {
+                schemaHint: '{"candidateNoteIds":["tab_1"],"why":"..."}'
+            });
+
+            const forcedIds = sanitizeNoteIdSelection(forcedSelection?.candidateNoteIds, noteIds, 6);
+            readQueue.push(...forcedIds);
+        }
+
+        const evaluations = [];
+        for (const noteId of readQueue) {
+            const note = notesById.get(noteId);
+            if (!note) continue;
+            const { parsed: evaluation } = await chatCompletionJson([
+                {
+                    role: 'system',
+                    content: [
+                        'Evalúa si una nota es útil para ejecutar un objetivo.',
+                        'Responde SOLO JSON:',
+                        '{"noteId":"...","keep":true,"score":0,"why":"...","howToUse":"..."}',
+                        'Score de 0 a 100.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({
+                        prompt,
+                        intent: routeIntent,
+                        objective: routeObjective,
+                        note: {
+                            id: note.id,
+                            title: note.title,
+                            body: safeSliceText(note.body, 4500)
+                        }
+                    })
+                }
+            ], `evaluacion nota ${noteId}`, {
+                schemaHint: '{"noteId":"tab_1","keep":true,"score":78,"why":"...","howToUse":"..."}'
+            });
+            evaluations.push({
+                noteId: note.id,
+                title: note.title,
+                keep: Boolean(evaluation?.keep),
+                score: Math.max(0, Math.min(100, Number(evaluation?.score || 0))),
+                why: String(evaluation?.why || '').trim(),
+                howToUse: String(evaluation?.howToUse || '').trim()
+            });
+        }
+
+        const keptNotes = evaluations
+            .filter((item) => item.keep)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, routeIntent === 'create_depth_links' ? 4 : 8)
+            .map((item) => {
+                const note = notesById.get(item.noteId);
+                return note ? {
+                    id: note.id,
+                    title: note.title,
+                    body: safeSliceText(note.body, routeIntent === 'create_depth_links' ? 3600 : 1400),
+                    score: item.score,
+                    why: item.why,
+                    howToUse: item.howToUse
+                } : null;
+            })
+            .filter(Boolean);
+
+        if (routeIntent === 'create_depth_links') {
+            const sourceNotes = sourceNoteIds.length > 0
+                ? sourceNoteIds.map((id) => notesById.get(id)).filter(Boolean)
+                : keptNotes.slice(0, 3);
+            const learningLinkSuggestions = [];
+
+            for (const note of sourceNotes) {
+                try {
+                    const links = await inferLearningLinksForNote(note.title, note.body, { maxLinks: 4 });
+                    if (links.length > 0) {
+                        learningLinkSuggestions.push({
+                            sourceNoteId: note.id,
+                            sourceNoteTitle: note.title || 'Sin titulo',
+                            links
+                        });
+                    }
+                } catch (linkErr) {
+                    console.warn('⚠️ [PromptAgent] Link suggestion failed for note', note.id, linkErr?.message || linkErr);
+                }
+            }
+
+            const { parsed: depthReply } = await chatCompletionJson([
+                {
+                    role: 'system',
+                    content: [
+                        'Redacta la respuesta final del asistente tras crear puntos de profundizacion.',
+                        'Responde SOLO JSON: {"assistant_reply":"..."}',
+                        'Reglas:',
+                        '- Explica brevemente qué nota(s) tomaste como origen.',
+                        '- Aclara que no editaste el texto de la nota.',
+                        '- Si creaste notas nuevas potenciales, dilo de forma natural.',
+                        '- No menciones reasoning interno, JSON ni pipeline.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({
+                        prompt,
+                        objective: routeObjective,
+                        sourceNotes: sourceNotes.map((note) => ({
+                            id: note.id,
+                            title: note.title
+                        })),
+                        suggestions: learningLinkSuggestions
+                    })
+                }
+            ], 'respuesta final de profundizacion', {
+                schemaHint: '{"assistant_reply":"..."}'
+            });
+
+            return {
+                success: true,
+                runId,
+                mode: 'knowledge',
+                userMessages: [],
+                assistantReply: String(depthReply?.assistant_reply || routeReply || 'Ya dejé listos los puntos de profundización.').trim(),
+                selectedMetaIds,
+                selectedNotes: sourceNotes.map((note) => ({ id: note.id, title: note.title })),
+                learningLinkSuggestions,
+                actionPlan: null,
+                actionBlockedAsInternal: false
+            };
+        }
+
+        const { parsed: synthesis } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Redacta la respuesta final del asistente para el chat principal.',
+                    'Responde SOLO JSON:',
+                    '{"assistant_reply":"...","action_plan":{"goal":"...","app":"...","steps_hint":"...","confidence":0}}',
+                    'Reglas:',
+                    '- assistant_reply debe responder directamente al usuario.',
+                    '- Si buscaste en notas, dilo con naturalidad y resume hallazgos concretos.',
+                    '- Si no encontraste evidencia suficiente, dilo sin pedir que pegue las notas cuando sí tenías acceso.',
+                    '- action_plan opcional.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    prompt,
+                    intent: routeIntent,
+                    objective: routeObjective,
+                    selected_metas: selectedMetaIds.map((id) => metaCatalog.find((meta) => meta.id === id)).filter(Boolean),
+                    notes_index: noteDiscoveryIndex,
+                    note_evaluations: evaluations,
+                    selected_notes: keptNotes
+                })
+            }
+        ], 'sintesis prompt principal', {
+            schemaHint: '{"assistant_reply":"...","action_plan":{"goal":"...","app":"...","steps_hint":"...","confidence":72}}'
+        });
+
+        const assistantReply = String(synthesis?.assistant_reply || '').trim();
+        if (!assistantReply) {
+            throw new Error('La síntesis del agente no devolvió una respuesta suficiente');
+        }
+
+        const actionPlanRaw = synthesis?.action_plan && typeof synthesis.action_plan === 'object'
+            ? synthesis.action_plan
+            : null;
+        const actionPlan = actionPlanRaw
+            ? {
+                goal: String(actionPlanRaw.goal || '').trim(),
+                app: String(actionPlanRaw.app || '').trim(),
+                steps_hint: String(actionPlanRaw.steps_hint || '').trim(),
+                confidence: Math.max(0, Math.min(100, Number(actionPlanRaw.confidence || 0)))
+            }
+            : null;
+
+        const validAction = actionPlan && actionPlan.goal && actionPlan.app && actionPlan.confidence >= 60;
+        const blockedInternalAction = validAction && isInternalKnowledgeActionApp(actionPlan.app);
+        const actionRequestId = `prompt_action_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
+        console.log('🧭 [PromptAgent] Action plan decision', {
+            runId,
+            actionRequestId,
+            prompt: safeSliceText(prompt, 220),
+            validAction: Boolean(validAction),
+            blockedInternalAction,
+            actionPlan: actionPlan || null
+        });
+        LoggingSwitch.uiux('prompt_agent', 'action_plan_decision', {
+            runId,
+            actionRequestId,
+            validAction: Boolean(validAction),
+            blockedInternalAction: Boolean(blockedInternalAction),
+            actionPlan: actionPlan
+                ? {
+                    app: actionPlan.app,
+                    goalPreview: safeSliceText(actionPlan.goal, 160),
+                    confidence: actionPlan.confidence
+                }
+                : null
+        });
+
+        if (validAction && mainWindow && !mainWindow.isDestroyed()) {
+            if (blockedInternalAction) {
+                console.log('⛔ [PromptAgent] Blocking external control for internal-knowledge action', {
+                    runId,
+                    actionRequestId,
+                    app: actionPlan.app,
+                    goal: actionPlan.goal
+                });
+                emit('execution', 'Plan interno detectado: no se activará control automático del PC');
+            } else {
+                const actionPayload = {
+                    goal: actionPlan.goal,
+                    app: actionPlan.app,
+                    stepsHint: actionPlan.steps_hint || '',
+                    source: 'prompt_agent',
+                    requestId: actionRequestId,
+                    runId,
+                    reason: 'Generated by prompt-agent action_plan'
+                };
+                console.log('📤 [PromptAgent] Sending action-confirm-request', actionPayload);
+                mainWindow.webContents.send('action-confirm-request', actionPayload);
+                LoggingSwitch.uiux('prompt_agent', 'action_confirm_requested', {
+                    runId,
+                    requestId: actionPayload.requestId,
+                    app: actionPayload.app,
+                    goalPreview: safeSliceText(actionPayload.goal, 160)
+                });
+                emit('execution', `Preparé ejecución en ${actionPlan.app} y la dejé lista para confirmar`);
+            }
+        }
+
+        const learningLinkSuggestions = [];
+        for (const note of keptNotes.slice(0, 3)) {
+            try {
+                const links = await inferLearningLinksForNote(note.title, note.body, { maxLinks: 3 });
+                if (links.length > 0) {
+                    learningLinkSuggestions.push({
+                        sourceNoteId: note.id,
+                        sourceNoteTitle: note.title || 'Sin titulo',
+                        links
+                    });
+                }
+            } catch (linkErr) {
+                console.warn('⚠️ [PromptAgent] Link suggestion failed for note', note.id, linkErr?.message || linkErr);
+            }
+        }
+        LoggingSwitch.uiux('prompt_agent', 'learning_link_suggestions', {
+            runId,
+            suggestions: learningLinkSuggestions.length
+        });
+        return {
+            success: true,
+            runId,
+            mode: 'knowledge',
+            userMessages: [],
+            assistantReply,
+            selectedMetaIds,
+            selectedNotes: keptNotes.map((item) => ({ id: item.id, title: item.title })),
+            learningLinkSuggestions,
+            actionPlan: validAction ? actionPlan : null,
+            actionBlockedAsInternal: Boolean(blockedInternalAction)
+        };
+    } catch (error) {
+        console.error('❌ [PromptAgent] Failed:', error);
+        emit('error', 'Falló el análisis del prompt principal');
+        return {
+            success: false,
+            runId,
+            error: error?.message || 'No se pudo ejecutar el agente principal',
+            userMessages: [],
+            assistantReply: ''
+        };
+    }
+});
+
+ipcMain.handle('chat-bootstrap', async () => {
+    return notebookManager.bootstrap();
+});
+
+ipcMain.handle('get-ui-theme', async () => {
+    return { theme: currentUiTheme };
+});
+
+ipcMain.handle('set-ui-theme', async (event, payload = {}) => {
+    currentUiTheme = normalizeUiTheme(payload?.theme);
+    pushUiThemeToChatWindow();
+    return { success: true, theme: currentUiTheme };
+});
+
+ipcMain.handle('chat-create-tab', async (event, payload = {}) => {
+    return notebookManager.createTab(payload);
+});
+
+ipcMain.handle('chat-update-tab', async (event, payload = {}) => {
+    const tab = notebookManager.updateTab(payload.tabId, payload);
+    return {
+        tab,
+        state: notebookManager.getState()
+    };
+});
+
+ipcMain.handle('chat-set-active-tab', async (event, payload = {}) => {
+    return notebookManager.setActiveTab(payload.tabId);
+});
+
+ipcMain.handle('chat-archive-tab', async (event, payload = {}) => {
+    return notebookManager.archiveTab(payload.tabId);
+});
+
+ipcMain.handle('chat-create-execution', async (event, payload = {}) => {
+    return notebookManager.createExecution(payload);
+});
+
+ipcMain.handle('chat-set-active-execution', async (event, payload = {}) => {
+    return notebookManager.setActiveExecution(payload.executionId);
+});
+
+ipcMain.handle('chat-move-execution', async (event, payload = {}) => {
+    return notebookManager.reassignExecution(payload.executionId, payload.tabId);
+});
+
+ipcMain.handle('chat-toggle-variable-persistence', async (event, payload = {}) => {
+    return notebookManager.toggleVariablePersistence(payload);
+});
+
+ipcMain.handle('chat-request-inference', async (event, payload = {}) => {
+    const analysis = await notebookManager.analyzeVariables(payload);
+    return {
+        ...analysis,
+        state: notebookManager.getState()
+    };
+});
+
+ipcMain.handle('notes-bootstrap', async () => {
+    return notebookManager.getState();
+});
+
+ipcMain.handle('notes-generate-injected-chat', async (event, payload = {}) => {
+    const prompt = String(payload.prompt || '').trim();
+    if (!prompt) {
+        return {
+            success: false,
+            error: 'Prompt vacio',
+            userMessages: [],
+            assistantReply: ''
+        };
+    }
+
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        return {
+            success: false,
+            error: 'Provider de texto no inicializado',
+            userMessages: [],
+            assistantReply: ''
+        };
+    }
+
+    try {
+        const state = notebookManager.getState();
+        const notes = (state.tabs || [])
+            .map((tab) => ({
+                id: String(tab?.id || '').trim(),
+                title: String(tab?.title || '').trim() || 'Sin titulo',
+                body: String(tab?.body || '').trim()
+            }))
+            .filter((tab) => tab.id);
+        const noteIds = new Set(notes.map((tab) => tab.id));
+        const notesById = new Map(notes.map((tab) => [tab.id, tab]));
+        const noteIndex = buildNoteDiscoveryIndex(notes, 220);
+
+        const { parsed: selection } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Eres un agente que decide qué notas leer para ejecutar un prompt.',
+                    'Responde SOLO JSON:',
+                    '{"candidateNoteIds":["..."],"readOrder":["..."],"why":"..."}',
+                    'Reglas: máximo 6 notas. Usa solo ids existentes.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({ prompt, notesIndex: noteIndex })
+            }
+        ], 'seleccion de notas para inyeccion', {
+            schemaHint: '{"candidateNoteIds":["tab_1"],"readOrder":["tab_1"],"why":"..."}'
+        });
+
+        const candidateIds = sanitizeNoteIdSelection(selection?.candidateNoteIds, noteIds, 6);
+        const orderedIds = sanitizeNoteIdSelection(selection?.readOrder, new Set(candidateIds), 6);
+        const selectedTabs = sanitizeNoteIdSelection([...orderedIds, ...candidateIds], noteIds, 6)
+            .map((id) => notesById.get(id))
+            .filter(Boolean);
+
+        const noteContext = selectedTabs
+            .map((tab, index) => {
+                return [
+                    `[Nota ${index + 1}]`,
+                    `id: ${tab.id}`,
+                    `titulo: ${tab.title || 'Sin titulo'}`,
+                    `contenido:`,
+                    safeSliceText(tab.body || '', 1800)
+                ].join('\n');
+            })
+            .join('\n\n');
+
+        const response = await ModelSwitch.chatCompletion({
+            messages: [
+                {
+                    role: 'system',
+                    content: [
+                        'Eres un orquestador UX de ejecucion.',
+                        'Debes responder SOLO JSON valido con esta forma:',
+                        '{"user_messages":[{"type":"note_title|instruction","text":"...","noteTitle":"..."}],"assistant_reply":"..."}',
+                        'Reglas:',
+                        '- user_messages son mensajes del lado del usuario, en primera persona, cortos y accionables.',
+                        '- Incluye titulos de notas como mensajes type="note_title".',
+                        '- Incluye varios parrafos cortos type="instruction" describiendo exactamente que se hara.',
+                        '- assistant_reply debe ser autentico, breve y aceptar ejecucion sin preguntas innecesarias.',
+                        '- No uses markdown, no uses bloques de codigo, solo JSON.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: [
+                        `Prompt inicial del usuario: ${prompt}`,
+                        '',
+                        'Notas disponibles para basar la ejecucion:',
+                        noteContext || '[Sin notas disponibles]'
+                    ].join('\n')
+                }
+            ]
+        });
+
+        const content = response?.choices?.[0]?.message?.content || '';
+        const parsed = parseModelJsonPayload(content);
+        const userMessages = Array.isArray(parsed?.user_messages)
+            ? parsed.user_messages
+                .map((message) => ({
+                    type: message?.type === 'note_title' ? 'note_title' : 'instruction',
+                    text: String(message?.text || '').trim(),
+                    noteTitle: String(message?.noteTitle || '').trim() || null,
+                    noteId: null
+                }))
+                .filter((message) => message.text.length > 0)
+            : [];
+        const assistantReply = String(parsed?.assistant_reply || '').trim();
+
+        if (!assistantReply || userMessages.length === 0) {
+            return {
+                success: false,
+                error: 'No fue posible generar una respuesta estructurada del agente',
+                userMessages,
+                assistantReply: ''
+            };
+        }
+
+        return {
+            success: true,
+            prompt,
+            selectedNotes: selectedTabs.map((tab) => ({
+                id: tab.id,
+                title: tab.title || 'Sin titulo'
+            })),
+            userMessages,
+            assistantReply
+        };
+    } catch (error) {
+        console.error('❌ [NotesInjection] Failed:', error);
+        return {
+            success: false,
+            error: error?.message || 'No se pudo preparar la ejecucion desde notas',
+            userMessages: [],
+            assistantReply: ''
+        };
+    }
+});
+
+ipcMain.handle('meta-suggest-notes', async (event, payload = {}) => {
+    const title = String(payload?.title || '').trim();
+    const description = String(payload?.description || '').trim();
+    const goalText = `${title}\n${description}`.trim();
+
+    if (!goalText) {
+        console.log('🧠 [MetaSuggest] Empty goal text');
+        return { success: true, noteIds: [] };
+    }
+
+    const currentState = notebookManager.getState();
+    const allTabs = Array.isArray(currentState?.tabs) ? currentState.tabs : [];
+    if (allTabs.length === 0) {
+        console.log('🧠 [MetaSuggest] No tabs available');
+        return { success: true, noteIds: [] };
+    }
+
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        console.log('🧠 [MetaSuggest] Model not ready');
+        return { success: false, noteIds: [], error: 'Modelo no disponible' };
+    }
+
+    const notes = allTabs.map((tab) => ({
+        id: String(tab?.id || '').trim(),
+        title: String(tab?.title || '').trim() || 'Sin titulo',
+        body: String(tab?.body || '').trim()
+    })).filter((tab) => tab.id);
+    const validIds = new Set(notes.map((tab) => tab.id));
+    const notesDigest = buildNoteDiscoveryIndex(notes, 220);
+
+    try {
+        const { parsed } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Selecciona notas claramente alineadas con la meta usando semántica profunda.',
+                    'Responde SOLO JSON con formato:',
+                    '{"matches":[{"noteId":"id","score":0-100,"why":"razon corta"}]}',
+                    'Reglas: maximo 4 notas, sin texto fuera del JSON.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    meta: { title, description },
+                    notesIndex: notesDigest
+                })
+            }
+        ], 'meta suggest notes', {
+            schemaHint: '{"matches":[{"noteId":"tab_1","score":84,"why":"..."}]}'
+        });
+
+        const modelMatches = Array.isArray(parsed?.matches) ? parsed.matches : [];
+        const noteIds = modelMatches
+            .map((item) => ({
+                noteId: String(item?.noteId || '').trim(),
+                score: Math.max(0, Math.min(100, Number(item?.score || 0)))
+            }))
+            .filter((item) => item.noteId && validIds.has(item.noteId))
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 4)
+            .map((item) => item.noteId);
+
+        console.log('🧠 [MetaSuggest] Selected by model', { metaTitle: title, noteIds });
+        return { success: true, noteIds };
+    } catch (error) {
+        console.error('❌ [MetaSuggest] Failed:', error);
+        return { success: false, noteIds: [], error: error?.message || 'No se pudo sugerir notas' };
+    }
+});
+
+ipcMain.handle('note-infer-learning-links', async (event, payload = {}) => {
+    const noteTitle = String(payload?.title || '').trim();
+    const noteBody = String(payload?.body || '').trim();
+    if (!noteBody) {
+        console.log('🧠 [LearningInfer] Empty note body');
+        return { success: true, links: [] };
+    }
+
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        console.log('🧠 [LearningInfer] Model not ready');
+        return { success: true, links: [] };
+    }
+
+    try {
+        const modelLinks = await inferLearningLinksForNote(noteTitle, noteBody, { maxLinks: 4 });
+
+        console.log('🧠 [LearningInfer] Model links', {
+            noteTitle,
+            bodyLength: noteBody.length,
+            count: modelLinks.length,
+            keywords: modelLinks.map((item) => item.keyword)
+        });
+        return { success: true, links: modelLinks };
+    } catch (error) {
+        console.error('❌ [NoteInferLinks] Failed:', error);
+        return { success: true, links: [] };
+    }
+});
+
+ipcMain.handle('meta-agent-run', async (event, payload = {}) => {
+    const metaId = String(payload?.metaId || '').trim();
+    const title = String(payload?.title || '').trim();
+    const description = String(payload?.description || '').trim();
+    const goal = `${title}\n${description}`.trim();
+
+    const emit = (phase, message, extra = {}) => {
+        event.sender.send('meta-agent-progress', {
+            metaId,
+            phase,
+            message,
+            timestamp: Date.now(),
+            ...extra
+        });
+    };
+
+    if (!goal) {
+        emit('error', 'La meta está vacía');
+        return { success: false, error: 'Meta vacía', existingNoteIds: [], depthNotes: [] };
+    }
+
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        emit('error', 'El modelo no está disponible');
+        return { success: false, error: 'Modelo de chat no disponible', existingNoteIds: [], depthNotes: [] };
+    }
+
+    try {
+        const currentState = notebookManager.getState();
+        const tabs = Array.isArray(currentState?.tabs) ? currentState.tabs : [];
+        const notes = tabs
+            .map((tab) => ({
+                id: String(tab.id || '').trim(),
+                title: String(tab.title || '').trim() || 'Sin titulo',
+                body: String(tab.body || '').trim()
+            }))
+            .filter((tab) => tab.id && (tab.title || tab.body));
+        const notesById = new Map(notes.map((tab) => [tab.id, tab]));
+        const validNoteIds = new Set(notes.map((tab) => tab.id));
+        const noteIndex = buildNoteDiscoveryIndex(notes, 240);
+
+        emit('planning', 'Analizaré la meta y trazaré un plan de investigación');
+        const { parsed: planning } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Eres un planner de investigación para una meta.',
+                    'Responde SOLO JSON:',
+                    '{"focus":[{"id":"f1","title":"...","query":"...","goal":"..."}],"strategy":["..."]}',
+                    'Reglas:',
+                    '- focus entre 2 y 6 elementos.',
+                    '- strategy entre 2 y 5 pasos cortos.',
+                    '- Sin texto fuera del JSON.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({ title, description })
+            }
+        ], 'plan de meta', {
+            schemaHint: '{"focus":[{"id":"f1","title":"...","query":"...","goal":"..."}],"strategy":["..."]}'
+        });
+
+        const focus = normalizeFocus(planning?.focus, 6);
+
+        emit('planning', `Definí ${focus.length || 1} focos de trabajo para la meta`);
+
+        if (notes.length === 0) {
+            emit('synthesis', 'No hay notas existentes; crearé notas de profundización desde la meta');
+            const { parsed: directDepth } = await chatCompletionJson([
+                {
+                    role: 'system',
+                    content: [
+                        'Genera solo notas de profundización para una meta sin contexto previo.',
+                        'Responde SOLO JSON:',
+                        '{"depthNotes":[{"keyword":"...","noteTitle":"...","reason":"...","focusId":"f1"}]}',
+                        'Reglas: maximo 6, keyword breve, noteTitle accionable.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({ title, description, focus })
+                }
+            ], 'profundizacion directa', {
+                schemaHint: '{"depthNotes":[{"keyword":"...","noteTitle":"...","reason":"...","focusId":"f1"}]}'
+            });
+
+            const depthNotes = Array.isArray(directDepth?.depthNotes)
+                ? directDepth.depthNotes
+                    .map((item) => ({
+                        keyword: String(item?.keyword || '').trim(),
+                        noteTitle: String(item?.noteTitle || '').trim(),
+                        reason: String(item?.reason || '').trim(),
+                        focusId: String(item?.focusId || '').trim()
+                    }))
+                    .filter((item) => item.keyword && item.noteTitle)
+                    .slice(0, 6)
+                : [];
+
+            emit('done', `Crearé ${depthNotes.length} notas de profundización`);
+            return {
+                success: true,
+                plan: { focus, strategy: Array.isArray(planning?.strategy) ? planning.strategy : [] },
+                existingNoteIds: [],
+                depthNotes,
+                evaluations: []
+            };
+        }
+
+        emit('scanning', `Exploraré ${noteIndex.length} notas indexadas para decidir candidatas`);
+
+        const { parsed: shortlist } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Eres un agente tipo Codex: decide qué notas leer completas sin revisar todo.',
+                    'Usa títulos y estructura para explorar primero, luego elige profundidad.',
+                    'Responde SOLO JSON:',
+                    '{"candidateNoteIds":["id1"],"readOrder":["id1"],"reason":"..."}',
+                    'Reglas:',
+                    '- maximo 14 ids.',
+                    '- readOrder debe ser subconjunto ordenado de candidateNoteIds.',
+                    '- Solo ids existentes.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    meta: { title, description },
+                    focus,
+                    notesIndex: noteIndex
+                })
+            }
+        ], 'seleccion de candidatas', {
+            schemaHint: '{"candidateNoteIds":["tab_1"],"readOrder":["tab_1"],"reason":"..."}'
+        });
+
+        const candidateIds = sanitizeNoteIdSelection(shortlist?.candidateNoteIds, validNoteIds, 14);
+        const orderedIds = sanitizeNoteIdSelection(shortlist?.readOrder, new Set(candidateIds), 14);
+        const readQueue = sanitizeNoteIdSelection([...orderedIds, ...candidateIds], validNoteIds, 14);
+
+        if (readQueue.length === 0 && noteIndex.length > 0) {
+            const { parsed: forced } = await chatCompletionJson([
+                {
+                    role: 'system',
+                    content: [
+                        'Selecciona mínimo 1 nota para lectura profunda inicial.',
+                        'Responde SOLO JSON: {"candidateNoteIds":["id1"],"reason":"..."}',
+                        '- máximo 4 ids.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({
+                        meta: { title, description },
+                        focus,
+                        notesIndex: noteIndex
+                    })
+                }
+            ], 'seleccion forzada meta', {
+                schemaHint: '{"candidateNoteIds":["tab_1"],"reason":"..."}'
+            });
+            readQueue.push(...sanitizeNoteIdSelection(forced?.candidateNoteIds, validNoteIds, 4));
+        }
+
+        emit('scanning', `Leeré ${readQueue.length} notas candidatas en profundidad`);
+
+        const evaluations = [];
+        for (const noteId of readQueue) {
+            const note = notesById.get(noteId);
+            if (!note) continue;
+
+            emit('reading', `Leeré "${note.title}"`);
+            const { parsed: evalResult } = await chatCompletionJson([
+                {
+                    role: 'system',
+                    content: [
+                        'Evalua si una nota apoya una meta.',
+                        'Responde SOLO JSON:',
+                        '{"noteId":"...","keep":true,"score":0,"supportedFocus":["f1"],"evidence":["..."]}',
+                        'Reglas:',
+                        '- score de 0 a 100.',
+                        '- keep true solo si aporta valor real a la meta.'
+                    ].join('\n')
+                },
+                {
+                    role: 'user',
+                    content: JSON.stringify({
+                        meta: { title, description },
+                        focus,
+                        note: {
+                            id: note.id,
+                            title: note.title,
+                            body: safeSliceText(note.body, 4000)
+                        }
+                    })
+                }
+            ], `evaluacion de nota ${noteId}`, {
+                schemaHint: '{"noteId":"tab_1","keep":true,"score":78,"supportedFocus":["f1"],"evidence":["..."]}'
+            });
+
+            evaluations.push({
+                noteId,
+                title: note.title,
+                keep: Boolean(evalResult?.keep),
+                score: Math.max(0, Math.min(100, Number(evalResult?.score || 0))),
+                supportedFocus: Array.isArray(evalResult?.supportedFocus) ? evalResult.supportedFocus.map((f) => String(f || '').trim()).filter(Boolean) : [],
+                evidence: Array.isArray(evalResult?.evidence) ? evalResult.evidence.map((e) => String(e || '').trim()).filter(Boolean).slice(0, 3) : []
+            });
+        }
+
+        emit('synthesis', 'Sintetizaré selección final y vacíos de aprendizaje');
+        const { parsed: synthesis } = await chatCompletionJson([
+            {
+                role: 'system',
+                content: [
+                    'Sintetiza selección final para una meta.',
+                    'Responde SOLO JSON:',
+                    '{"existingNoteIds":["id1"],"depthNotes":[{"keyword":"...","noteTitle":"...","reason":"...","focusId":"f1"}],"summary":"..."}',
+                    'Reglas:',
+                    '- existingNoteIds maximo 8 y deben ser ids evaluados.',
+                    '- depthNotes maximo 6, orientadas a vacíos reales.'
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    meta: { title, description },
+                    focus,
+                    evaluations
+                })
+            }
+        ], 'sintesis final', {
+            schemaHint: '{"existingNoteIds":["tab_1"],"depthNotes":[{"keyword":"...","noteTitle":"...","reason":"...","focusId":"f1"}],"summary":"..."}'
+        });
+
+        const evaluatedIds = new Set(evaluations.map((item) => item.noteId));
+        const existingNoteIds = Array.isArray(synthesis?.existingNoteIds)
+            ? synthesis.existingNoteIds
+                .map((id) => String(id || '').trim())
+                .filter((id) => evaluatedIds.has(id))
+                .slice(0, 8)
+            : [];
+
+        const depthNotes = Array.isArray(synthesis?.depthNotes)
+            ? synthesis.depthNotes
+                .map((item) => ({
+                    keyword: String(item?.keyword || '').trim(),
+                    noteTitle: String(item?.noteTitle || '').trim(),
+                    reason: String(item?.reason || '').trim(),
+                    focusId: String(item?.focusId || '').trim()
+                }))
+                .filter((item) => item.keyword && item.noteTitle)
+                .slice(0, 6)
+            : [];
+
+        emit('done', `Listo: ${existingNoteIds.length} notas existentes + ${depthNotes.length} notas de profundización`);
+        return {
+            success: true,
+            plan: { focus, strategy: Array.isArray(planning?.strategy) ? planning.strategy : [] },
+            existingNoteIds,
+            depthNotes,
+            evaluations
+        };
+    } catch (error) {
+        console.error('❌ [MetaAgent] Failed:', error);
+        emit('error', 'Falló el análisis de la meta');
+        return {
+            success: false,
+            error: error?.message || 'No se pudo ejecutar el agente de meta',
+            existingNoteIds: [],
+            depthNotes: []
+        };
+    }
+});
+
+ipcMain.handle('chat-send-message', async (event, payload = {}) => {
+    const text = String(payload.text || '').trim();
+    if (!text) {
+        return { error: 'Mensaje vacio', state: notebookManager.getState() };
+    }
+    LoggingSwitch.execution('Chat', `User sent: ${text.substring(0, 60)}`);
+    LoggingSwitch.uiux('chat', 'user_message', {
+        tabId: String(payload.activeTabId || notebookManager.getState().activeTabId || ''),
+        executionId: String(payload.activeExecutionId || notebookManager.getState().activeExecutionId || ''),
+        textPreview: safeSliceText(text, 220)
+    });
+
+    const tabId = payload.activeTabId || notebookManager.getState().activeTabId;
+    const executionId = payload.activeExecutionId || notebookManager.getState().activeExecutionId;
+    if (payload.noteSnapshot) {
+        notebookManager.updateTab(tabId, {
+            title: payload.noteSnapshot.title,
+            body: payload.noteSnapshot.body
+        });
+    }
+    notebookManager.setActiveTab(tabId);
+    notebookManager.setActiveExecution(executionId);
+    const userExecution = notebookManager.appendMessage(executionId, {
+        role: 'user',
+        text,
+        status: 'thinking'
+    });
 
     // 1. Add to Central Context
     contextManager.addMessage('user', text, 'chat_ui');
@@ -966,47 +2379,54 @@ ipcMain.on('chat-send-message', async (event, text) => {
         if (chatWindow && !chatWindow.isDestroyed()) {
             chatWindow.webContents.send('chat-response', { error: 'Provider de texto no inicializado' });
         }
-        return;
+        return {
+            error: 'Provider de texto no inicializado',
+            state: notebookManager.getState(),
+            execution: userExecution
+        };
     }
 
     try {
+        const variableAnalysis = await notebookManager.analyzeVariables({
+            tabId,
+            executionId,
+            trigger: 'send'
+        });
+
+        if (shouldAskChatClarification(text, variableAnalysis)) {
+            const clarificationText = variableAnalysis.clarificationPrompt;
+            const clarificationExecution = notebookManager.appendMessage(executionId, {
+                role: 'assistant',
+                text: clarificationText,
+                status: 'waiting_clarification'
+            });
+            contextManager.addMessage('assistant', clarificationText, 'chat_api');
+            LoggingSwitch.uiux('chat', 'clarification_requested', {
+                clarificationPreview: safeSliceText(clarificationText, 220)
+            });
+            return {
+                clarification: clarificationText,
+                updatedVariables: variableAnalysis.variables,
+                state: notebookManager.getState(),
+                execution: clarificationExecution
+            };
+        }
+
         // Retrieve relevant context from disk/semantic memory
         const relevantContext = await contextManager.getRelevantContext(text);
         const relevantLearned = LearningAgent.findRelevantWorkflows(text, 3);
-
-        let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
-
-Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que harás y llama la función execute_screen_action.
-
-Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
-Responde en español.`;
-
-        if (relevantLearned && relevantLearned.length > 0) {
-            const list = relevantLearned.map((wf, i) => {
-                return `${i + 1}. ${wf.workflowName}\n   Resumen: ${wf.summary}\n   Estilo: ${wf.executionStyle}`;
-            }).join('\n');
-            systemPrompt += `\n\nAPRENDIZAJES RELEVANTES DEL USUARIO:\n${list}
-\nSi vas a usar uno, di explícitamente en la PRIMERA línea:
-"Perfecto, lo voy a hacer como me enseñaste en <nombre del aprendizaje>."
-Si no estás seguro cuál aplicar, pregunta una sola aclaración corta antes de ejecutar.`;
-        }
-
-        if (relevantContext.longTerm) {
-            systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
-        }
-
-        // Get full conversation history (includes the user message just added)
-        const history = contextManager.getHistoryForAPI(20);
+        const { systemPrompt, learnedWorkflowsText } = buildChatSystemPrompt(relevantLearned, relevantContext);
+        const promptPayload = notebookManager.buildChatPayload({
+            tabId,
+            executionId,
+            baseSystemPrompt: systemPrompt,
+            learnedWorkflowsText,
+            longTermContext: ''
+        });
 
         // Send to active model (OpenAI or Gemini via ModelSwitch)
         const response = await ModelSwitch.chatCompletion({
-            messages: [
-                {
-                    role: "system",
-                    content: systemPrompt
-                },
-                ...history
-            ],
+            messages: promptPayload.messages,
             tools: actionPlanner ? actionPlanner.tools : undefined,
             tool_choice: actionPlanner ? "auto" : undefined
         });
@@ -1016,10 +2436,15 @@ Si no estás seguro cuál aplicar, pregunta una sola aclaración corta antes de 
 
         // Check for function call (action)
         if (message.tool_calls && message.tool_calls.length > 0) {
-            const call = message.tool_calls[0];
+                const call = message.tool_calls[0];
             if (call.function.name === 'execute_screen_action') {
                 const args = JSON.parse(call.function.arguments);
-                console.log('🎯 [Chat] Action planned:', args.goal);
+                LoggingSwitch.execution('Chat', `Action planned: ${args.goal}`);
+                LoggingSwitch.uiux('chat', 'action_planned', {
+                    app: String(args?.app || ''),
+                    goalPreview: safeSliceText(args?.goal || '', 180),
+                    stepsPreview: safeSliceText(args?.steps_hint || '', 180)
+                });
 
                 // ── FIX: Cerrar el loop del tool_call en el historial ──────────
                 // 1. Guardar el mensaje del assistant CON su tool_call
@@ -1036,14 +2461,15 @@ Si no estás seguro cuál aplicar, pregunta una sola aclaración corta antes de 
                 // ───────────────────────────────────────────────────────────────
 
                 // Send reply + action to chat window
-                if (chatWindow && !chatWindow.isDestroyed()) {
-                    chatWindow.webContents.send('chat-response', {
-                        reply: reply || (relevantLearned && relevantLearned[0]
-                            ? `Perfecto, lo voy a hacer como me enseñaste en ${relevantLearned[0].workflowName}.`
-                            : `Entendido. Voy a ${args.goal.toLowerCase()}.`),
-                        action: args
-                    });
-                }
+                const visibleReply = reply || (relevantLearned && relevantLearned[0]
+                    ? `Perfecto, lo voy a hacer como me enseñaste en ${relevantLearned[0].workflowName}.`
+                    : `Entendido. Voy a ${args.goal.toLowerCase()}.`);
+                const actionExecution = notebookManager.appendMessage(executionId, {
+                    role: 'assistant',
+                    text: visibleReply,
+                    kind: 'action',
+                    status: 'action_pending'
+                });
 
                 // Send confirmation to main window
                 if (mainWindow) {
@@ -1055,25 +2481,50 @@ Si no estás seguro cuál aplicar, pregunta una sola aclaración corta antes de 
                     });
                 }
 
-                return;
+                return {
+                    reply: visibleReply,
+                    action: args,
+                    updatedVariables: variableAnalysis.variables,
+                    state: notebookManager.getState(),
+                    execution: actionExecution
+                };
             }
         }
 
         // Regular reply (no action)
-        if (chatWindow && !chatWindow.isDestroyed()) {
-            chatWindow.webContents.send('chat-response', { reply });
-        }
+        const assistantExecution = notebookManager.appendMessage(executionId, {
+            role: 'assistant',
+            text: reply,
+            status: 'answered'
+        });
+        LoggingSwitch.uiux('chat', 'assistant_reply', {
+            replyPreview: safeSliceText(reply, 220),
+            hasToolCalls: Boolean(message.tool_calls && message.tool_calls.length)
+        });
 
         // 2. Add reply to Central Context (conversational — no tool_call here)
         contextManager.addMessage('assistant', reply || null, 'chat_api', {
             tool_calls: message.tool_calls
         });
 
+        return {
+            reply,
+            updatedVariables: variableAnalysis.variables,
+            state: notebookManager.getState(),
+            execution: assistantExecution
+        };
+
     } catch (e) {
         console.error('❌ [Chat] Failed:', e.message);
-        if (chatWindow && !chatWindow.isDestroyed()) {
-            chatWindow.webContents.send('chat-response', { error: e.message });
-        }
+        LoggingSwitch.uiux('chat', 'chat_error', {
+            error: safeSliceText(e?.message || 'unknown', 220)
+        });
+        notebookManager.updateExecutionStatus(executionId, 'error');
+        return {
+            error: e.message,
+            state: notebookManager.getState(),
+            execution: notebookManager.getState().executions.find((execution) => execution.id === executionId) || null
+        };
     }
 });
 
@@ -3283,7 +4734,9 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
         return { success: true, predictions };
 
     } catch (e) {
-        console.error('❌ [Intent Prediction] Failed:', e);
+        if (!isQuotaOrBillingError(e)) {
+            console.error('❌ [Intent Prediction] Failed:', e);
+        }
         return { success: false, error: e.message };
     }
 });
@@ -3367,7 +4820,14 @@ ipcMain.handle('stop-action', async () => {
 
 // Confirm and execute action (from UI bubble)
 ipcMain.handle('confirm-action', async (event, data) => {
-    console.log('✅ [Action] User confirmed plan:', data);
+    console.log('✅ [Action] User confirmed plan:', {
+        requestId: data?.requestId || null,
+        source: data?.source || 'unknown',
+        goal: data?.goal || '',
+        app: data?.app || '',
+        stepsHint: data?.stepsHint || '',
+        reason: data?.reason || ''
+    });
 
     // Reset pending flag
     isActionPending = false;

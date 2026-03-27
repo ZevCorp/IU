@@ -36,6 +36,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { EventEmitter } = require('events');
 const { chromium } = require('playwright-core'); // Incorporado Playwright
+const LoggingSwitch = require('./LoggingSwitch');
 const {
     MANAGED_CHROME_APP,
     MANAGED_CHROME_PORT,
@@ -288,6 +289,8 @@ class BrowserAgent extends EventEmitter {
             targetId: '',        // Target CDP del tab cuando se conoce
         };
         this.lastRequestedUrl = '';
+        this._lastContextLogKey = '';
+        this._lastContextLogAt = 0;
 
         // Estado del cursor para AgarIO (pinch gesture → mouse move)
         this.agarIoCursor = {
@@ -501,16 +504,32 @@ class BrowserAgent extends EventEmitter {
      * Llamado cuando el usuario cambia de app nativa a browser.
      */
     setBrowserContext(url, meta = {}) {
+        const previous = { ...this.browserContext };
         const app = this._detectApp(url);
+        const nextTargetId = String(meta.targetId || '');
+        const nextWsUrl = String(meta.wsUrl || '');
         this.browserContext = {
             active: true,
             url,
             app,
-            wsUrl: meta.wsUrl || '',
-            targetId: meta.targetId || '',
+            wsUrl: nextWsUrl,
+            targetId: nextTargetId,
         };
         this.lastRequestedUrl = url || this.lastRequestedUrl || '';
-        console.log(`🌐 [BrowserAgent] Context set → ${app} (${url})`);
+
+        const now = Date.now();
+        const contextKey = `${String(url || '')}|${nextTargetId}|${nextWsUrl}`;
+        const changed =
+            !previous.active ||
+            String(previous.url || '') !== String(url || '') ||
+            String(previous.targetId || '') !== nextTargetId ||
+            String(previous.wsUrl || '') !== nextWsUrl;
+        const shouldEmit = changed || this._lastContextLogKey !== contextKey || (now - this._lastContextLogAt) > 15000;
+        if (shouldEmit) {
+            LoggingSwitch.execution('BrowserAgent', `Context set -> ${app} (${url})`);
+            this._lastContextLogKey = contextKey;
+            this._lastContextLogAt = now;
+        }
     }
 
     _normalizeUrlForMatch(url) {
@@ -553,7 +572,9 @@ class BrowserAgent extends EventEmitter {
     clearBrowserContext() {
         this.browserContext.active = false;
         this.agarIoCursor.active = false;
-        console.log('🌐 [BrowserAgent] Context cleared (native app mode)');
+        this._lastContextLogKey = '';
+        this._lastContextLogAt = 0;
+        LoggingSwitch.execution('BrowserAgent', 'Context cleared (native app mode)');
     }
 
     async syncActiveTabContext(preferredUrl = '') {
@@ -927,13 +948,13 @@ class BrowserAgent extends EventEmitter {
     async openUrl(url) {
         if (!url) return { success: false, error: 'missing_url' };
         this.lastRequestedUrl = url;
-        console.log(`🧭 [BrowserAgent] openUrl requested`, {
+        LoggingSwitch.execution('BrowserAgent', 'openUrl requested', {
             url,
             currentContext: this.browserContext?.url || '',
             extensionConnected: Boolean(this.extensionWebSocket && this.extensionWebSocket.readyState === 1)
         });
         if (this.browserContext?.active && this.browserContext.url === url) {
-            console.log(`🧭 [BrowserAgent] openUrl reusing current tab/context`, { url });
+            LoggingSwitch.execution('BrowserAgent', 'openUrl reusing current tab/context', { url });
             await this.focusManagedChrome();
             return {
                 success: true,
@@ -965,10 +986,10 @@ class BrowserAgent extends EventEmitter {
             let page = this._pickReusablePage(pages, url);
 
             if (!page) {
-                console.log(`🧭 [BrowserAgent] openUrl creating dedicated automation tab`, { url });
+                LoggingSwitch.execution('BrowserAgent', 'openUrl creating dedicated automation tab', { url });
                 page = await context.newPage();
             } else {
-                console.log(`🧭 [BrowserAgent] openUrl reusing page`, {
+                LoggingSwitch.execution('BrowserAgent', 'openUrl reusing page', {
                     from: page.url() || 'about:blank',
                     to: url
                 });
@@ -996,7 +1017,7 @@ class BrowserAgent extends EventEmitter {
         const config = this.managedChrome || getManagedChromeConfig();
         const extensionDir = config.extensionDir;
         this.extensionOnboardingShown = true;
-        console.log(`🧭 [BrowserAgent] openExtensionOnboarding requested`, {
+        LoggingSwitch.execution('BrowserAgent', 'openExtensionOnboarding requested', {
             currentContext: this.browserContext?.url || '',
             extensionDir
         });
@@ -1015,7 +1036,7 @@ class BrowserAgent extends EventEmitter {
             execFile('open', [extensionDir], () => resolve());
         });
 
-        console.log(`🧩 [BrowserAgent] Extension onboarding opened. Folder: ${extensionDir}`);
+        LoggingSwitch.execution('BrowserAgent', `Extension onboarding opened. Folder: ${extensionDir}`);
     }
 
     _shouldAutoOpenExtensionOnboarding() {
@@ -1038,12 +1059,12 @@ class BrowserAgent extends EventEmitter {
             source: options.source || 'BrowserAgent._openInChrome',
             caller: options.caller || `target=${url || 'managed-home'} context=${this.browserContext?.url || 'none'}`
         });
-        console.log(`🌐 [BrowserAgent] Opened ${url || 'managed Chrome home'} in ${MANAGED_CHROME_APP}`);
+        LoggingSwitch.execution('BrowserAgent', `Opened ${url || 'managed Chrome home'} in ${MANAGED_CHROME_APP}`);
     }
 
     async focusManagedChrome() {
         await focusManagedChromeInstance();
-        console.log(`🌐 [BrowserAgent] Focused ${MANAGED_CHROME_APP}`);
+        LoggingSwitch.execution('BrowserAgent', `Focused ${MANAGED_CHROME_APP}`);
     }
 
     /**
@@ -1078,7 +1099,7 @@ class BrowserAgent extends EventEmitter {
         }
 
         if (VERBOSE_BROWSER_LOGS) {
-            console.log(`🧭 [BrowserAgent] extractAffordances start`, {
+            LoggingSwitch.execution('BrowserAgent', 'extractAffordances start', {
                 url: this.browserContext.url,
                 app: this.browserContext.app,
                 hasExtension: Boolean(this.extensionWebSocket && this.extensionWebSocket.readyState === 1),

@@ -14,6 +14,7 @@
 const EventEmitter = require('events');
 const memoryFS = require('./MemoryFileSystem');
 const vectorIndex = require('./VectorIndex');
+const LoggingSwitch = require('./LoggingSwitch');
 
 class ContextManager extends EventEmitter {
     constructor() {
@@ -57,7 +58,7 @@ class ContextManager extends EventEmitter {
             this.history.shift();
         }
 
-        console.log(`🧠 [Context] Added ${role} message from ${source}: "${(message.text || '').substring(0, 40)}..."`);
+        LoggingSwitch.execution('Context', `Added ${role} message from ${source}: "${(message.text || '').substring(0, 40)}..."`);
         this.emit('history-updated', this.history);
 
         // 2. Persist to Disk (Episodic Memory)

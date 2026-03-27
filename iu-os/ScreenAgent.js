@@ -1278,6 +1278,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                     const toolCall = toolCalls[i];
                     const fnName = toolCall.function.name;
                     const args = JSON.parse(toolCall.function.arguments);
+                    let shouldWaitForUi = true;
 
                     console.log(`🎯 [ScreenAgent] SoM decision (${i + 1}/${toolCalls.length}): ${fnName}: ${JSON.stringify(args)}`);
 
@@ -1304,7 +1305,34 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                         let missingFields = String(args.missing_fields || '').trim();
                         let msg = question || `Necesito estos datos para continuar: ${missingFields}`;
                         const normalizedRequest = this._normalizeText(`${msg} ${missingFields}`);
+                        const normalizedStepsHint = this._normalizeText(String(stepsHint || ''));
                         const hasRecentExplicitContinuation = /ACLARACI[ÓO]N DEL USUARIO:/i.test(String(stepsHint || ''));
+                        const looksLikeRouteQuestion =
+                            normalizedRequest.includes('which link') ||
+                            normalizedRequest.includes('what link') ||
+                            normalizedRequest.includes('where') ||
+                            normalizedRequest.includes('que enlace') ||
+                            normalizedRequest.includes('cual enlace') ||
+                            normalizedRequest.includes('donde') ||
+                            normalizedRequest.includes('que opcion') ||
+                            normalizedRequest.includes('cual opcion');
+                        const actionVerbMatches = normalizedStepsHint.match(/\b(click|clic|abrir|open|luego|despues|then|entra|entrar|ir|ve)\b/g) || [];
+                        const hasExplicitRouteInPlan =
+                            /[>→]/.test(String(stepsHint || '')) ||
+                            actionVerbMatches.length >= 3;
+
+                        if (looksLikeRouteQuestion && hasExplicitRouteInPlan) {
+                            const autoRoute = 'AUTO_RESUELTO: sigue la ruta explícita en PASOS SUGERIDOS; no se requiere pedir confirmación al usuario.';
+                            console.log(`🧭 [ScreenAgent] Auto-resolving route clarification from explicit plan: ${msg}`);
+                            somMessages.push({
+                                role: "tool",
+                                tool_call_id: toolCall.id,
+                                content: autoRoute,
+                                _functionName: fnName
+                            });
+                            shouldWaitForUi = false;
+                            continue;
+                        }
 
                         if (hasRecentExplicitContinuation && (
                             normalizedRequest.includes('confirma') ||
@@ -1320,6 +1348,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                                 content: autoConfirmation,
                                 _functionName: fnName
                             });
+                            shouldWaitForUi = false;
                             continue;
                         }
 
@@ -1354,22 +1383,24 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                     let actionSummary = '';
 
                     if (fnName === 'select_element') {
-                        let targetElement = elements.find(e => e.id == args.element_id);
-                        const resolved = this._resolveElementByAnchor(elements, targetElement);
-                        if (resolved) targetElement = resolved;
-                        if (!targetElement) {
-                            console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
-                            actionSummary = `SELECT #${args.element_id} — NOT FOUND`;
-                        } else {
-                            const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
-                            if (skipDecision.skip) {
-                                console.log(`🧭 [ScreenAgent] Skipping redundant click on #${targetElement.id}: ${skipDecision.reason}`);
-                                actionSummary = `SELECT #${targetElement.id} — SKIPPED (${skipDecision.reason})`;
-                                somMessages.push({
-                                    role: "tool",
-                                    tool_call_id: toolCall.id,
-                                    content: actionSummary,
-                                    _functionName: fnName
+                            let targetElement = elements.find(e => e.id == args.element_id);
+                            const resolved = this._resolveElementByAnchor(elements, targetElement);
+                            if (resolved) targetElement = resolved;
+                            if (!targetElement) {
+                                console.warn(`⚠️ [ScreenAgent] Element #${args.element_id} not found in detection results`);
+                                actionSummary = `SELECT #${args.element_id} — NOT FOUND`;
+                                shouldWaitForUi = false;
+                            } else {
+                                const skipDecision = this._shouldSkipBrowserProgressAction(targetElement);
+                                if (skipDecision.skip) {
+                                    console.log(`🧭 [ScreenAgent] Skipping redundant click on #${targetElement.id}: ${skipDecision.reason}`);
+                                    actionSummary = `SELECT #${targetElement.id} — SKIPPED (${skipDecision.reason})`;
+                                    shouldWaitForUi = false;
+                                    somMessages.push({
+                                        role: "tool",
+                                        tool_call_id: toolCall.id,
+                                        content: actionSummary,
+                                        _functionName: fnName
                                 });
                                 continue;
                             }
@@ -1395,12 +1426,14 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                             if (!revalidated.ok || !revalidated.element) {
                                 console.warn(`⚠️ [ScreenAgent] Click aborted after fast revalidation: ${revalidated.reason}`);
                                 actionSummary = `SELECT #${args.element_id} — STALE UI (${revalidated.reason})`;
+                                shouldWaitForUi = false;
                             } else {
                                 targetElement = revalidated.element;
                                 const skipDecisionAfterRefresh = this._shouldSkipBrowserProgressAction(targetElement);
                                 if (skipDecisionAfterRefresh.skip) {
                                     console.log(`🧭 [ScreenAgent] Skipping redundant click after refresh on #${targetElement.id}: ${skipDecisionAfterRefresh.reason}`);
                                     actionSummary = `SELECT #${targetElement.id} — SKIPPED (${skipDecisionAfterRefresh.reason})`;
+                                    shouldWaitForUi = false;
                                 } else if (this._isBrowserCoreElement(targetElement)) {
                                     await this._clickBrowserElement(targetElement);
                                     actionSummary = `SELECT #${targetElement.id} [${targetElement.label || targetElement.type}]`;
@@ -1409,6 +1442,7 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                                     if (!point) {
                                         console.warn(`⚠️ [ScreenAgent] Click aborted: target revalidated but has no usable center`);
                                         actionSummary = `SELECT #${args.element_id} — NO CLICK POINT`;
+                                        shouldWaitForUi = false;
                                     } else {
                                         px = point.x;
                                         py = point.y;
@@ -1467,28 +1501,37 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
 
                         const fastBatch = await this._executeBrowserCoreBatchIfPossible(subActions, elements);
                         if (fastBatch.mode === 'executed') {
+                            const actualExecuted = Number(fastBatch.executed || 0);
+                            const skipped = Number(fastBatch.skipped || 0);
                             executedActions = Math.min(
                                 subActions.length,
-                                Number(fastBatch.executed || 0) + Number(fastBatch.skipped || 0)
+                                actualExecuted + skipped
                             );
-                            if (executedActions > 0) {
+                            if (actualExecuted > 0) {
                                 lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 900, 120);
+                            } else {
+                                shouldWaitForUi = false;
                             }
                             const batchElapsed = Date.now() - batchStartTime;
-                            const skippedStr = fastBatch.skipped > 0 ? `, ${fastBatch.skipped} skipped` : '';
-                            actionSummary = `BATCH(BROWSER_CORE): Executed ${executedActions}/${subActions.length} actions in ${batchElapsed}ms${skippedStr}${reasoningStr}`;
+                            const skippedStr = skipped > 0 ? `, ${skipped} skipped` : '';
+                            actionSummary = `BATCH(BROWSER_CORE): Ran ${actualExecuted}/${subActions.length} actions in ${batchElapsed}ms${skippedStr}${reasoningStr}`;
                             console.log(`⚡ [ScreenAgent] Browser-core batch complete in ${batchElapsed}ms${skippedStr}${reasoningStr}`);
                         }
                         else if (fastBatch.mode === 'partial') {
+                            const actualExecuted = Number(fastBatch.executed || 0);
+                            const skipped = Number(fastBatch.skipped || 0);
                             executedActions = Math.min(
                                 subActions.length,
-                                Number(fastBatch.executed || 0) + Number(fastBatch.skipped || 0)
+                                actualExecuted + skipped
                             );
+                            if (actualExecuted <= 0) {
+                                shouldWaitForUi = false;
+                            }
                             const batchElapsed = Date.now() - batchStartTime;
                             const firstError = Array.isArray(fastBatch.errors) && fastBatch.errors[0]
                                 ? String(fastBatch.errors[0].error || fastBatch.errors[0].message || '')
                                 : String(fastBatch.error || 'unknown_error');
-                            actionSummary = `BATCH(BROWSER_CORE): Partial ${executedActions}/${subActions.length} actions in ${batchElapsed}ms${reasoningStr}. Error: ${firstError}`;
+                            actionSummary = `BATCH(BROWSER_CORE): Partial ${actualExecuted}/${subActions.length} actions in ${batchElapsed}ms${reasoningStr}. Error: ${firstError}`;
                             console.warn(`⚠️ [ScreenAgent] Browser-core batch partial after ${batchElapsed}ms: ${firstError}`);
                         }
                         else {
@@ -1572,6 +1615,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
                                 }
                             }
                             const batchElapsed = Date.now() - batchStartTime;
+                            if (executedActions <= 0) {
+                                shouldWaitForUi = false;
+                            }
                             actionSummary = batchStoppedDueToStaleUi
                                 ? `BATCH: Stopped after ${executedActions}/${subActions.length} actions due to stale UI${reasoningStr}`
                                 : `BATCH: Executed ${subActions.length} actions in ${batchElapsed}ms${reasoningStr}`;
@@ -1593,6 +1639,9 @@ ${elementsText}${historyHint}${loopWarning}${appInstructions}${runtimeContextHin
 
                     // Wait between batched actions or sequentially
                     if (this.abortRequested) break;
+                    if (!shouldWaitForUi) {
+                        continue;
+                    }
                     if (i < toolCalls.length - 1) {
                         lastElementsHash = await this._waitForUIChange(this.currentApp, lastElementsHash, 1000, 150);
                     } else {

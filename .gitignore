@@ -30,6 +30,8 @@ lerna-debug.log*
 
 # Misc
 .DS_Store
+public/assets/IU-1.0.0-arm64.dmg
+public/assets/IU-1.0.0-win-arm64.zip
 
 # Editor directories and files
 .idea

@@ -78,3 +78,19 @@ test('does not trigger login handoff only because the plan mentions login', () =
     assert.equal(result.stage, 'navigating_to_upload');
     assert.equal(result.turn, 'assistant');
 });
+
+test('asks for clarification when upload flow reaches an intermediate portal without explicit next platform', () => {
+    const result = detectBrowserExecutionState({
+        goal: 'Entrar a ubeflex y ayudar a subir un trabajo',
+        url: 'https://ceipaeduco.sharepoint.com/sites/ubflex-esic',
+        elements: [
+            { label: 'Noticias', type: 'link' },
+            { label: 'Documentos', type: 'link' },
+            { label: 'Eventos', type: 'link' }
+        ]
+    });
+
+    assert.equal(result.stage, 'portal_choice_required');
+    assert.equal(result.turn, 'user');
+    assert.match(result.userMessage, /canvas|opci.n sigue/i);
+});

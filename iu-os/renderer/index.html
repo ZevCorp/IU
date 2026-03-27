@@ -108,7 +108,52 @@
       <div id="transcript-container" class="hidden">
         <p id="transcript-text"></p>
       </div>
+
+      <!-- Prompt Chat Dock -->
+      <div id="prompt-chat-dock" class="prompt-chat-dock" data-no-drag>
+        <div class="prompt-chat-panel">
+          <div class="prompt-chat-history-shell">
+            <div class="prompt-chat-fade" aria-hidden="true"></div>
+            <div id="prompt-chat-empty" class="prompt-chat-empty" aria-hidden="true"></div>
+            <div id="prompt-chat-history" class="prompt-chat-history" aria-live="polite"></div>
+          </div>
+          <div class="prompt-chat-composer">
+            <div class="prompt-chat-input-shell">
+              <textarea id="prompt-chat-input" class="prompt-chat-input" rows="1" maxlength="240"
+                placeholder="Escribe..."></textarea>
+              <div class="prompt-chat-actions">
+                <!--
+                <button id="prompt-chat-voice-btn" class="prompt-chat-voice-btn" type="button" aria-label="Activar voz">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 18a5 5 0 0 0 5-5V6a5 5 0 0 0-10 0v7a5 5 0 0 0 5 5Z"></path>
+                    <path d="M19 10v3a7 7 0 0 1-14 0v-3"></path>
+                    <path d="M12 22v-4"></path>
+                  </svg>
+                </button>
+                -->
+                <button id="prompt-chat-send-btn" class="prompt-chat-send-btn" type="button" aria-label="Enviar">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4 12h11"></path>
+                    <path d="m12 6 6 6-6 6"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <button id="prompt-chat-voice-floating-btn" class="chat-voice-fab" type="button" aria-label="Activar voz">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 18a5 5 0 0 0 5-5V6a5 5 0 0 0-10 0v7a5 5 0 0 0 5 5Z"></path>
+        <path d="M19 10v3a7 7 0 0 1-14 0v-3"></path>
+        <path d="M12 22v-4"></path>
+      </svg>
+    </button>
 
     <!-- Chat Toggle Button (top-right) -->
     <button id="btn-chat-toggle" class="chat-toggle-btn" aria-label="Open chat">
@@ -120,7 +165,11 @@
 
     <!-- Menu Toggle Button -->
     <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
-      <span class="menu-icon">☰</span>
+      <svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect>
+        <path d="M9.5 4.5v15"></path>
+      </svg>
     </button>
 
     <button id="btn-transfer-top" class="transfer-btn-top">

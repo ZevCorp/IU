@@ -5,8 +5,9 @@ const { BrowserRefCache } = require('../dist/ref-cache.js');
 
 test('BrowserRefCache keeps refs stable for the same target and element keys', () => {
     const cache = new BrowserRefCache();
-    const first = cache.apply('managed', 'target-1', [
+    const first = cache.store('managed', 'target-1', [
         {
+            ref: 'e1',
             key: '#submit',
             role: 'button',
             label: 'Submit',
@@ -15,8 +16,9 @@ test('BrowserRefCache keeps refs stable for the same target and element keys', (
         }
     ]);
 
-    const second = cache.apply('managed', 'target-1', [
+    const second = cache.store('managed', 'target-1', [
         {
+            ref: 'e1',
             key: '#submit',
             role: 'button',
             label: 'Submit',
