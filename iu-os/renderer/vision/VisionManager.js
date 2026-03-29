@@ -27,6 +27,8 @@ class VisionManager {
             targetZone: 'right',   // Where this app window is located
             headPose: { yaw: 0, pitch: 0, roll: 0 },
             gaze: { x: 0.5, y: 0.5 },
+            gazeUp: false,
+            mouthPartiallyOpen: false,
             lastEyebrowTime: 0,
             prevEyebrowRaised: false,
             screenContext: null    // Last captured screen context
@@ -184,6 +186,19 @@ class VisionManager {
 
         // Average
         let gazeX = (leftGazeX + rightGazeX) / 2;
+        const leftIrisTop = landmarks[159];
+        const leftIrisBottom = landmarks[145];
+        const rightIrisTop = landmarks[386];
+        const rightIrisBottom = landmarks[374];
+        const leftVerticalRange = Math.max(0.0001, Math.abs(leftIrisBottom.y - leftIrisTop.y));
+        const rightVerticalRange = Math.max(0.0001, Math.abs(rightIrisBottom.y - rightIrisTop.y));
+        const leftIrisVertical = (leftIris.y - leftIrisTop.y) / leftVerticalRange;
+        const rightIrisVertical = (rightIris.y - rightIrisTop.y) / rightVerticalRange;
+        const gazeY = (leftIrisVertical + rightIrisVertical) / 2;
+        // Deterministic center split calibrated to this setup:
+        // your neutral straight-ahead look is landing around 0.38-0.40, so
+        // we use that center baseline and activate from there upward.
+        const gazeUp = gazeY >= 0.38;
 
         // --- Head Pose & Proximity ---
         const nose = landmarks[1];
@@ -225,8 +240,18 @@ class VisionManager {
         const chin = landmarks[152];
         const topHead = landmarks[10];
         const pitch = (nose.y - (chin.y + topHead.y) / 2) * 100;
+        const upperLip = landmarks[13];
+        const lowerLip = landmarks[14];
+        const mouthWidthLeft = landmarks[61];
+        const mouthWidthRight = landmarks[291];
+        const mouthWidth = Math.max(0.0001, Math.abs(mouthWidthRight.x - mouthWidthLeft.x));
+        const mouthOpenRatio = Math.abs(lowerLip.y - upperLip.y) / mouthWidth;
+        const mouthPartiallyOpen = mouthOpenRatio > 0.09 && mouthOpenRatio < 0.42;
 
         this.state.headPose = { yaw, pitch, roll: 0 };
+        this.state.gaze = { x: gazeX, y: gazeY };
+        this.state.gazeUp = gazeUp;
+        this.state.mouthPartiallyOpen = mouthPartiallyOpen;
 
         // Pitch History for Velocity
         const now = Date.now();
@@ -283,6 +308,10 @@ class VisionManager {
                 currentZone: detectedZone,
                 targetZone: this.state.targetZone,
                 gazeX: gazeX.toFixed(2),
+                gazeY: gazeY.toFixed(2),
+                gazeUp,
+                mouthPartiallyOpen,
+                mouthOpenRatio: mouthOpenRatio.toFixed(3),
                 headPose: this.state.headPose
             });
         }

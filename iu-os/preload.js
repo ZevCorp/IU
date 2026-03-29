@@ -51,13 +51,19 @@ contextBridge.exposeInMainWorld('iuOS', {
     onExplicitPredictions: (callback) => ipcRenderer.on('explicit-predictions', (event, predictions) => callback(predictions)),
     onVoiceStateChanged: (callback) => ipcRenderer.on('voice-state-changed', (event, state) => callback(state)),
     onVoiceText: (callback) => ipcRenderer.on('voice-text', (event, data) => callback(data)),
+    onVoiceActivityHint: (callback) => ipcRenderer.on('voice-activity-hint', (event, data) => callback(data)),
+    setChatGPTSyntheticWait: (payload) => ipcRenderer.invoke('chatgpt-set-synthetic-wait', payload),
+    forceChatGPTInterrupt: () => ipcRenderer.invoke('chatgpt-force-interrupt'),
 
-    // Chat Window
+    // Prompt Chat + Notes/Metas window
     toggleChatWindow: () => ipcRenderer.invoke('toggle-chat-window'),
     notesBootstrap: () => ipcRenderer.invoke('notes-bootstrap'),
-    notesGenerateInjectedChat: (payload) => ipcRenderer.invoke('notes-generate-injected-chat', payload),
     promptAgentRun: (payload) => ipcRenderer.invoke('prompt-agent-run', payload),
     onPromptAgentProgress: (callback) => ipcRenderer.on('prompt-agent-progress', (event, payload) => callback(payload)),
+    timeManagerDecide: (payload) => ipcRenderer.invoke('time-manager-decide', payload),
+    timeManagerGetState: () => ipcRenderer.invoke('time-manager-get-state'),
+    onTimeManagerProgress: (callback) => ipcRenderer.on('time-manager-progress', (event, payload) => callback(payload)),
+    onTimeManagerDecision: (callback) => ipcRenderer.on('time-manager-decision', (event, payload) => callback(payload)),
     toggleHandWindow: () => ipcRenderer.invoke('toggle-hand-window'),
     getHandWindowState: () => ipcRenderer.invoke('get-hand-window-state'),
     toggleHandMeshWindow: () => ipcRenderer.invoke('toggle-hand-mesh-window'),

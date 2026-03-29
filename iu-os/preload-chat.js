@@ -23,9 +23,6 @@ contextBridge.exposeInMainWorld('uChat', {
     setLoggingMode: (mode) => ipcRenderer.invoke('logging-set-mode', { mode }),
     logUiUx: (payload) => ipcRenderer.send('uiux-log', payload),
     toggleVariablePersistence: (payload) => ipcRenderer.invoke('chat-toggle-variable-persistence', payload),
-    sendMessage: (payload) => ipcRenderer.invoke('chat-send-message', payload),
-    onVoiceText: (callback) => ipcRenderer.on('voice-text', (event, data) => callback(data)),
-    onVoiceState: (callback) => ipcRenderer.on('voice-state', (event, state) => callback(state)),
     onMetaAgentProgress: (callback) => ipcRenderer.on('meta-agent-progress', (event, payload) => callback(payload)),
     onUiThemeChanged: (callback) => ipcRenderer.on('chat-ui-theme', (event, payload) => callback(payload)),
     close: () => ipcRenderer.send('chat-close')

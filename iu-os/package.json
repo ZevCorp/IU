@@ -39,6 +39,7 @@
             "browser-core/dist/**/*",
             "preload.js",
             "renderer/**/*",
+            "time-manager/**/*",
             "node_modules/**/*",
             "!node_modules/playwright/.local-browsers/**/*"
         ],

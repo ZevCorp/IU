@@ -1057,18 +1057,25 @@ body:hover .prompt-chat-dock,
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding: 0 2px 4px;
-  display: grid;
-  gap: 8px;
-  align-content: end;
+  display: block;
   user-select: text;
   -webkit-user-select: text;
   scrollbar-gutter: stable;
+}
+
+.prompt-chat-history > * {
+  display: block;
+}
+
+.prompt-chat-history > * + * {
+  margin-top: 8px;
 }
 
 .prompt-chat-message {
   display: grid;
   gap: 0;
   max-width: min(100%, 500px);
+  flex-shrink: 0;
   user-select: text;
   -webkit-user-select: text;
 }
@@ -1138,6 +1145,75 @@ body:hover .prompt-chat-dock,
   color: rgba(22, 27, 35, 0.88);
   font-size: 12px;
   font-weight: 600;
+}
+
+.prompt-chat-event {
+  justify-self: start;
+  max-width: min(100%, 500px);
+  flex-shrink: 0;
+}
+
+.prompt-chat-event-card {
+  display: grid;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(17, 24, 39, 0.09);
+  background: linear-gradient(180deg, rgba(252, 254, 255, 0.92), rgba(243, 247, 252, 0.88));
+  box-shadow: 0 14px 26px rgba(18, 24, 34, 0.08);
+}
+
+.prompt-chat-event-eyebrow {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(21, 27, 35, 0.48);
+}
+
+.prompt-chat-event-title {
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 700;
+  color: #121723;
+}
+
+.prompt-chat-event-detail {
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(18, 23, 35, 0.72);
+}
+
+.prompt-chat-event-items {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(18, 23, 35, 0.78);
+}
+
+.prompt-chat-event-explored .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(247, 252, 255, 0.96), rgba(238, 247, 255, 0.92));
+}
+
+.prompt-chat-event-created .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(247, 255, 249, 0.96), rgba(236, 249, 240, 0.92));
+}
+
+.prompt-chat-event-edited .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(255, 252, 245, 0.96), rgba(251, 245, 231, 0.92));
+}
+
+.prompt-chat-event-deleted .prompt-chat-event-card,
+.prompt-chat-event-error .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(255, 247, 247, 0.96), rgba(251, 235, 235, 0.92));
+}
+
+.prompt-chat-event-action .prompt-chat-event-card,
+.prompt-chat-event-summary .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(248, 247, 255, 0.96), rgba(239, 237, 251, 0.92));
 }
 
 .prompt-chat-rich-text {
@@ -1386,6 +1462,47 @@ body.mode-medium .prompt-chat-voice-btn {
 [data-theme="dark"] .prompt-chat-message.note-title .prompt-chat-message-bubble {
   background: rgba(255, 255, 255, 0.08);
   color: rgba(245, 248, 252, 0.9);
+}
+
+[data-theme="dark"] .prompt-chat-event-card {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, rgba(18, 24, 33, 0.92), rgba(12, 16, 24, 0.88));
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
+}
+
+[data-theme="dark"] .prompt-chat-event-eyebrow {
+  color: rgba(236, 241, 247, 0.46);
+}
+
+[data-theme="dark"] .prompt-chat-event-title {
+  color: rgba(246, 248, 252, 0.94);
+}
+
+[data-theme="dark"] .prompt-chat-event-detail,
+[data-theme="dark"] .prompt-chat-event-items {
+  color: rgba(233, 238, 245, 0.72);
+}
+
+[data-theme="dark"] .prompt-chat-event-explored .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(16, 29, 42, 0.94), rgba(11, 22, 33, 0.9));
+}
+
+[data-theme="dark"] .prompt-chat-event-created .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(14, 33, 25, 0.94), rgba(10, 24, 19, 0.9));
+}
+
+[data-theme="dark"] .prompt-chat-event-edited .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(37, 28, 13, 0.94), rgba(24, 19, 10, 0.9));
+}
+
+[data-theme="dark"] .prompt-chat-event-deleted .prompt-chat-event-card,
+[data-theme="dark"] .prompt-chat-event-error .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(46, 20, 20, 0.94), rgba(28, 12, 12, 0.9));
+}
+
+[data-theme="dark"] .prompt-chat-event-action .prompt-chat-event-card,
+[data-theme="dark"] .prompt-chat-event-summary .prompt-chat-event-card {
+  background: linear-gradient(180deg, rgba(28, 22, 48, 0.94), rgba(18, 14, 31, 0.9));
 }
 
 [data-theme="dark"] .prompt-chat-rich-text code {

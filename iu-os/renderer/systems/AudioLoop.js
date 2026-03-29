@@ -16,6 +16,21 @@ class AudioLoop {
         this.webVoiceProcessor = null;
         this.speechRecognition = null;
         this.lastHeyDetection = 0;
+        this.audioContext = null;
+        this.analyser = null;
+        this.sourceNode = null;
+        this.speechFrame = null;
+        this.speechState = {
+            isSpeaking: false,
+            level: 0,
+            silenceMs: 0,
+            speakingSince: 0,
+            updatedAt: 0
+        };
+        this.speakingCallbacks = new Set();
+        this.speakingThreshold = 0.018;
+        this.silenceReleaseMs = 260;
+        this.minSpeechHoldMs = 70;
 
         // Keep previous cycle's blob for continuity
         this.previousBlob = null;
@@ -35,6 +50,7 @@ class AudioLoop {
         try {
             console.log('[AudioLoop] Requesting microphone access...');
             this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this._startSpeechMonitoring();
 
             this._startRecorder();
 
@@ -176,6 +192,157 @@ class AudioLoop {
         this.onWakeWord = callback;
     }
 
+    setOnSpeakingState(callback) {
+        if (typeof callback !== 'function') return () => {};
+        this.speakingCallbacks.add(callback);
+        try {
+            callback({ ...this.speechState });
+        } catch (_) {
+            // ignored
+        }
+        return () => {
+            this.speakingCallbacks.delete(callback);
+        };
+    }
+
+    getSpeakingState() {
+        return { ...this.speechState };
+    }
+
+    _emitSpeakingState(nextState) {
+        this.speechState = {
+            ...this.speechState,
+            ...nextState,
+            updatedAt: Date.now()
+        };
+
+        for (const callback of this.speakingCallbacks) {
+            try {
+                callback({ ...this.speechState });
+            } catch (_) {
+                // ignored
+            }
+        }
+    }
+
+    _startSpeechMonitoring() {
+        if (!this.stream || this.analyser) return;
+
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) {
+                console.warn('[AudioLoop] AudioContext not available for speaking detection.');
+                return;
+            }
+
+            this.audioContext = new AudioCtx();
+            this.sourceNode = this.audioContext.createMediaStreamSource(this.stream);
+            this.analyser = this.audioContext.createAnalyser();
+            this.analyser.fftSize = 1024;
+            this.analyser.smoothingTimeConstant = 0.78;
+            this.sourceNode.connect(this.analyser);
+            this._runSpeechLoop();
+        } catch (error) {
+            console.warn('[AudioLoop] Failed to initialize speaking detection:', error);
+            this._stopSpeechMonitoring();
+        }
+    }
+
+    _runSpeechLoop() {
+        if (!this.analyser) return;
+
+        const buffer = new Float32Array(this.analyser.fftSize);
+        let aboveThresholdSince = 0;
+        let belowThresholdSince = 0;
+
+        const tick = () => {
+            if (!this.analyser) return;
+
+            this.analyser.getFloatTimeDomainData(buffer);
+            let sum = 0;
+            for (let i = 0; i < buffer.length; i += 1) {
+                sum += buffer[i] * buffer[i];
+            }
+            const level = Math.sqrt(sum / buffer.length);
+            const now = performance.now();
+            const wasSpeaking = this.speechState.isSpeaking;
+            let isSpeaking = wasSpeaking;
+
+            if (level >= this.speakingThreshold) {
+                belowThresholdSince = 0;
+                if (!aboveThresholdSince) aboveThresholdSince = now;
+                if (!wasSpeaking && now - aboveThresholdSince >= this.minSpeechHoldMs) {
+                    isSpeaking = true;
+                }
+            } else {
+                aboveThresholdSince = 0;
+                if (!belowThresholdSince) belowThresholdSince = now;
+                if (wasSpeaking && now - belowThresholdSince >= this.silenceReleaseMs) {
+                    isSpeaking = false;
+                }
+            }
+
+            const speakingSince = isSpeaking
+                ? (wasSpeaking ? this.speechState.speakingSince : Date.now())
+                : 0;
+            const silenceMs = isSpeaking
+                ? 0
+                : Math.max(0, Math.round(belowThresholdSince ? now - belowThresholdSince : 0));
+
+            this._emitSpeakingState({
+                isSpeaking,
+                level: Number(level.toFixed(4)),
+                silenceMs,
+                speakingSince
+            });
+
+            this.speechFrame = requestAnimationFrame(tick);
+        };
+
+        this.speechFrame = requestAnimationFrame(tick);
+    }
+
+    _stopSpeechMonitoring() {
+        if (this.speechFrame) {
+            cancelAnimationFrame(this.speechFrame);
+            this.speechFrame = null;
+        }
+
+        if (this.sourceNode) {
+            try {
+                this.sourceNode.disconnect();
+            } catch (_) {
+                // ignored
+            }
+            this.sourceNode = null;
+        }
+
+        if (this.analyser) {
+            try {
+                this.analyser.disconnect();
+            } catch (_) {
+                // ignored
+            }
+            this.analyser = null;
+        }
+
+        if (this.audioContext) {
+            try {
+                this.audioContext.close();
+            } catch (_) {
+                // ignored
+            }
+            this.audioContext = null;
+        }
+
+        this._emitSpeakingState({
+            isSpeaking: false,
+            level: 0,
+            silenceMs: 0,
+            speakingSince: 0
+        });
+    }
+
     _startRecorder() {
         if (!this.stream) return;
 
@@ -234,6 +401,8 @@ class AudioLoop {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
         }
+
+        this._stopSpeechMonitoring();
 
         if (this.speechRecognition) {
             try {

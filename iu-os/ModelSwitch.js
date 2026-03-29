@@ -23,9 +23,9 @@ const LEGACY_MODEL_ALIASES = {
 
 const MODEL_CATALOG = {
     'nemotron-3-super': {
-        displayName: 'Nemotron 3 Super',
+        displayName: 'Nemotron 3 Super (free)',
         provider: 'openrouter',
-        chat: 'nvidia/nemotron-3-super-120b-a12b',
+        chat: 'nvidia/nemotron-3-super-120b-a12b:free',
         vision: null
     },
     'gpt-5-mini': {

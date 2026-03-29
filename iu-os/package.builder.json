@@ -31,7 +31,8 @@
             "**/*",
             "!**/*.ts",
             "!node_modules/@nut-tree-fork/nut-js/build",
-            "!.git"
+            "!.git",
+            "time-manager/**/*"
         ]
     },
     "devDependencies": {

@@ -132,9 +132,13 @@ LoggingSwitch.execution('ModelSwitch', `Modelo: ${providerSummary.selectedModel?
 const ActionPlanner = require('./ActionPlanner');
 const ScreenAgent = require('./ScreenAgent');
 const Brain = require('./Brain');
+const AgentRuntime = require('./AgentRuntime');
+const GPTActionBridge = require('./GPTActionBridge');
 const ExecutionSessionManager = require('./ExecutionSessionManager');
 const NotebookExecutionManager = require('./NotebookExecutionManager');
 const KnowledgeService = require('./KnowledgeService');
+const TimeManagerRuntime = require('./time-manager/TimeManagerRuntime');
+const TimeManagerStore = require('./time-manager/TimeManagerStore');
 // Browser Agent: control transversal de páginas web via CDP
 const BrowserAgent = require('./BrowserAgent');
 const { startBrowserCoreService, createBrowserCoreClient, toClientOptions } = require('./browser-core/dist');
@@ -144,6 +148,7 @@ let brain = null;
 let browserAgent = null; // Instanciado tras crear la mainWindow
 let browserCoreService = null;
 let browserCoreClient = null;
+let gptActionBridge = null;
 const executionSessions = new ExecutionSessionManager();
 let inceptionBootstrapper = null;
 
@@ -196,6 +201,7 @@ const knowledgeService = new KnowledgeService({
     notebookManager,
     storageDir: path.join(app.getPath('userData'), 'chat-notebooks')
 });
+const timeManagerStore = new TimeManagerStore();
 
 let mainWindow = null;
 let chatWindow = null;
@@ -1034,51 +1040,79 @@ ipcMain.on('chat-close', () => {
     }
 });
 
-function buildChatSystemPrompt(relevantLearned, relevantContext) {
-    let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe directamente.
-
-Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que haras y llama la funcion execute_screen_action.
-
-Si el usuario pide gestionar conocimiento personal, usa tools de CRUD:
-- create_note, update_note, delete_note
-- create_meta, update_meta, delete_meta
-- attach_note_to_meta, detach_note_from_meta
-Usa esas funciones cuando te pidan crear, editar, borrar o anidar notas/metas.
-
-Si solo conversa o pregunta algo, responde de forma breve y util. Maximo 2-3 oraciones.
-Responde en espanol.`;
-
-    let learnedWorkflowsText = '';
-    if (relevantLearned && relevantLearned.length > 0) {
-        learnedWorkflowsText = relevantLearned.map((wf, i) => {
-            return `${i + 1}. ${wf.workflowName}\n   Resumen: ${wf.summary}\n   Estilo: ${wf.executionStyle}`;
-        }).join('\n');
-        systemPrompt += `\n\nAPRENDIZAJES RELEVANTES DEL USUARIO:\n${learnedWorkflowsText}
-\nSi vas a usar uno, di explicitamente en la PRIMERA linea:
-"Perfecto, lo voy a hacer como me ensenaste en <nombre del aprendizaje>."
-Si no estas seguro cual aplicar, pregunta una sola aclaracion corta antes de ejecutar.`;
-    }
-
-    if (relevantContext.longTerm) {
-        systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
-    }
-
-    return { systemPrompt, learnedWorkflowsText };
-}
-
-function shouldAskChatClarification(userText, variableAnalysis) {
-    if (!variableAnalysis || !variableAnalysis.needsClarification) return false;
-    const hasConflict = (variableAnalysis.variables || []).some((variable) => variable.conflict);
-    if (hasConflict) return true;
-
-    const needsConcreteTask = /(?:haz|hace|ayuda|ayudame|necesito|quiero|prepara|redacta|escribe|resuelve|sube|envia|entrega)/i.test(String(userText || ''));
-    return needsConcreteTask;
-}
-
 function safeSliceText(value, max = 1200) {
     const text = String(value || '').trim();
     if (text.length <= max) return text;
     return `${text.slice(0, max).trim()}...`;
+}
+
+function buildTimeManagerState() {
+    return {
+        notifications: timeManagerStore.getRecentNotifications(20),
+        decisions: timeManagerStore.getRecentDecisions(20)
+    };
+}
+
+async function answerTimeManagerQuestion(question, notification) {
+    const prompt = String(question || '').trim();
+    if (!prompt) {
+        return {
+            ok: false,
+            error: 'Pregunta vacía para el agente principal'
+        };
+    }
+
+    if (!ModelSwitch.isReady({ capability: 'chat' })) {
+        return {
+            ok: false,
+            error: 'Modelo no disponible'
+        };
+    }
+
+    const relevantContext = await contextManager.getRelevantContext(prompt);
+    const workspace = knowledgeService.getKnowledgeState();
+    const notes = Array.isArray(workspace?.tabs) ? workspace.tabs.slice(0, 5) : [];
+    const metas = Array.isArray(workspace?.metas) ? workspace.metas.slice(0, 5) : [];
+
+    const response = await ModelSwitch.chatCompletion({
+        messages: [
+            {
+                role: 'system',
+                content: [
+                    'Eres el asistente principal de IÜ OS respondiendo a un agente hermano llamado Time Manager.',
+                    'Tu trabajo es dar contexto útil, corto y accionable para decidir si una notificación debe interrumpir al usuario.',
+                    'No menciones tool calls ni pipeline interno.',
+                    'Responde en español y en máximo 6 líneas.',
+                    `Fecha y hora actual: ${new Date().toLocaleString('es-ES')}`
+                ].join('\n')
+            },
+            {
+                role: 'user',
+                content: JSON.stringify({
+                    question: prompt,
+                    notification: notification || null,
+                    relevantLongTermContext: relevantContext?.longTerm || '',
+                    notes: notes.map((note) => ({
+                        id: String(note?.id || ''),
+                        title: String(note?.title || '').trim() || 'Sin titulo',
+                        preview: safeSliceText(note?.body || '', 160)
+                    })),
+                    metas: metas.map((meta) => ({
+                        id: String(meta?.id || ''),
+                        title: String(meta?.title || '').trim() || 'Meta sin titulo',
+                        description: safeSliceText(meta?.description || '', 160)
+                    }))
+                })
+            }
+        ]
+    });
+
+    const answer = String(response?.choices?.[0]?.message?.content || '').trim();
+    return {
+        ok: true,
+        answer,
+        summary: safeSliceText(answer, 220)
+    };
 }
 
 function parseModelJsonPayload(rawText) {
@@ -1229,83 +1263,6 @@ function isInternalKnowledgeActionApp(appName) {
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sanitizePromptMetas(rawMetas, validNoteIds) {
-    if (!Array.isArray(rawMetas)) return [];
-    return rawMetas
-        .map((meta) => ({
-            id: String(meta?.id || '').trim(),
-            title: String(meta?.title || '').trim(),
-            description: String(meta?.description || '').trim(),
-            noteIds: Array.isArray(meta?.noteIds)
-                ? Array.from(new Set(meta.noteIds.map((id) => String(id)).filter((id) => validNoteIds.has(id))))
-                : []
-        }))
-        .filter((meta) => meta.id && (meta.title || meta.description || meta.noteIds.length > 0))
-        .slice(0, 40);
-}
-
-function normalizeAgentIntent(rawIntent) {
-    const value = String(rawIntent || '').trim().toLowerCase();
-    if (value === 'search_notes') return 'search_notes';
-    if (value === 'answer_from_knowledge') return 'answer_from_knowledge';
-    if (value === 'create_depth_links') return 'create_depth_links';
-    if (value === 'action') return 'action';
-    return 'respond';
-}
-
-function looksLikeLowQualityReply(text) {
-    const value = String(text || '').trim();
-    if (!value) return true;
-    const lower = value.toLowerCase();
-    const badStarts = [
-        "i'm ready to help",
-        'i’m ready to help',
-        'how can i assist you',
-        'how can i help you today',
-        'how may i assist'
-    ];
-    return badStarts.some((item) => lower.includes(item));
-}
-
-function isSummaryRequest(prompt) {
-    const lower = String(prompt || '').toLowerCase();
-    const asksSummary = /(summary|resumen|resum[eé]|sintetiza|sintesis|sumariza)/i.test(lower);
-    const mentionsKnowledge = /(nota|notas|meta|metas|knowledge|contexto)/i.test(lower);
-    return asksSummary && mentionsKnowledge;
-}
-
-function buildSummaryFallbackFromKnowledge({ metas = [], notes = [], keptNotes = [] } = {}) {
-    const topMetas = (Array.isArray(metas) ? metas : []).slice(0, 6);
-    const topNotes = (Array.isArray(keptNotes) && keptNotes.length > 0 ? keptNotes : notes).slice(0, 8);
-
-    const metaLines = topMetas.length > 0
-        ? topMetas.map((meta, index) => {
-            const title = String(meta?.title || '').trim() || `Meta ${index + 1}`;
-            const desc = String(meta?.description || '').trim();
-            const noteCount = Array.isArray(meta?.noteIds) ? meta.noteIds.length : 0;
-            return `- ${title}${desc ? `: ${safeSliceText(desc, 120)}` : ''} (${noteCount} nota${noteCount === 1 ? '' : 's'})`;
-        }).join('\n')
-        : '- No encontré metas guardadas.';
-
-    const noteLines = topNotes.length > 0
-        ? topNotes.map((note) => {
-            const title = String(note?.title || '').trim() || 'Sin titulo';
-            const body = safeSliceText(String(note?.body || '').replace(/\s+/g, ' ').trim(), 110);
-            return `- ${title}${body ? `: ${body}` : ''}`;
-        }).join('\n')
-        : '- No encontré notas guardadas.';
-
-    return [
-        `Resumen rápido: tienes ${metas.length} meta${metas.length === 1 ? '' : 's'} y ${notes.length} nota${notes.length === 1 ? '' : 's'}.`,
-        '',
-        'Metas:',
-        metaLines,
-        '',
-        'Notas:',
-        noteLines
-    ].join('\n');
 }
 
 function getKnowledgeTools() {
@@ -1596,548 +1553,681 @@ async function inferLearningLinksForNote(noteTitle, noteBody, options = {}) {
         : [];
 }
 
+async function executePromptRuntimeActionTool({ name, args = {}, runId = '', source = 'prompt_agent_runtime', reason = 'Generated by AgentRuntime' } = {}) {
+    if (name === 'execute_screen_action') {
+        const goal = String(args.goal || '').trim();
+        const app = String(args.app || '').trim();
+        const stepsHint = String(args.steps_hint || '').trim();
+        const requestId = `prompt_action_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
+        const actionPayload = {
+            goal,
+            app,
+            stepsHint,
+            source,
+            requestId,
+            runId,
+            reason
+        };
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('action-confirm-request', actionPayload);
+        }
+
+        LoggingSwitch.uiux('prompt_agent', 'runtime_action_confirm_requested', {
+            runId,
+            requestId,
+            app,
+            goalPreview: safeSliceText(goal, 160)
+        });
+
+        return {
+            ok: true,
+            summary: `Prepared action in ${app || 'computer'}`,
+            detail: safeSliceText(goal || stepsHint || 'Acción lista para confirmar', 180),
+            action: {
+                type: 'screen_action',
+                requestId,
+                app,
+                goal
+            }
+        };
+    }
+
+    if (name === 'schedule_reminder') {
+        const task = String(args.task || '').trim();
+        const minutes = Math.max(1, Math.min(60 * 24 * 30, Number(args.minutes || 0)));
+        if (!task || !Number.isFinite(minutes) || !brain) {
+            return { ok: false, error: 'No pude programar ese recordatorio.' };
+        }
+        const date = new Date(Date.now() + (minutes * 60 * 1000));
+        const scheduled = brain.scheduleTask(task, date);
+        return {
+            ok: true,
+            summary: `Scheduled reminder in ${minutes} min`,
+            detail: task,
+            action: {
+                type: 'reminder',
+                taskId: scheduled?.id || '',
+                task
+            }
+        };
+    }
+
+    if (name === 'play_agario') {
+        const nickname = String(args.nickname || '').trim();
+        const requestId = `prompt_agario_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
+        const actionPayload = {
+            goal: nickname ? `Jugar Agar.io como ${nickname}` : 'Jugar Agar.io',
+            app: 'Browser',
+            stepsHint: nickname ? `Abrir Agar.io y usar nickname ${nickname}` : 'Abrir Agar.io y dejarlo listo para jugar',
+            source,
+            requestId,
+            runId,
+            reason
+        };
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('action-confirm-request', actionPayload);
+        }
+
+        return {
+            ok: true,
+            summary: 'Prepared Agar.io session',
+            detail: nickname || 'Nickname automático',
+            action: {
+                type: 'play_agario',
+                requestId,
+                nickname
+            }
+        };
+    }
+
+    return { ok: false, error: `Tool de acción no soportada: ${name}` };
+}
+
+const promptAgentRuntime = new AgentRuntime({
+    modelSwitch: ModelSwitch,
+    knowledgeService,
+    logging: LoggingSwitch,
+    safeSliceText,
+    getActionTools: () => (actionPlanner ? actionPlanner.tools : []),
+    executeActionTool: executePromptRuntimeActionTool
+});
+
+const timeManagerRuntime = new TimeManagerRuntime({
+    modelSwitch: ModelSwitch,
+    store: timeManagerStore,
+    safeSliceText,
+    askMainAssistant: async ({ question, notification }) => {
+        return answerTimeManagerQuestion(question, notification);
+    },
+    onDecision: async (decision, context = {}) => {
+        const payload = {
+            runId: context.runId || '',
+            notification: context.notification || null,
+            decision
+        };
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('time-manager-decision', payload);
+        }
+        if (chatWindow && !chatWindow.isDestroyed()) {
+            chatWindow.webContents.send('time-manager-decision', payload);
+        }
+
+        return { ok: true };
+    }
+});
+
+function getKnowledgeBridgeState() {
+    return knowledgeService.getKnowledgeState() || { tabs: [], metas: [] };
+}
+
+function summarizeBridgeNote(note) {
+    return {
+        id: String(note?.id || '').trim(),
+        title: String(note?.title || '').trim() || 'Sin titulo',
+        preview: safeSliceText(note?.body || '', 220),
+        updatedAt: note?.updatedAt || null
+    };
+}
+
+function summarizeBridgeMeta(meta, notes = []) {
+    const noteMap = new Map((Array.isArray(notes) ? notes : []).map((note) => [String(note?.id || '').trim(), note]));
+    const linkedTitles = (Array.isArray(meta?.noteIds) ? meta.noteIds : [])
+        .map((noteId) => noteMap.get(String(noteId || '').trim()))
+        .filter(Boolean)
+        .slice(0, 6)
+        .map((note) => ({ id: note.id, title: note.title || 'Sin titulo' }));
+
+    return {
+        id: String(meta?.id || '').trim(),
+        title: String(meta?.title || '').trim() || 'Meta sin titulo',
+        description: safeSliceText(meta?.description || '', 220),
+        noteIds: Array.isArray(meta?.noteIds) ? meta.noteIds.slice(0, 30) : [],
+        noteCount: Array.isArray(meta?.noteIds) ? meta.noteIds.length : 0,
+        noteTitles: linkedTitles
+    };
+}
+
+function searchBridgeNotes(query, limit = 8) {
+    const needle = String(query || '').trim().toLowerCase();
+    if (!needle) return [];
+    const terms = needle.split(/\s+/).filter(Boolean);
+    const state = getKnowledgeBridgeState();
+    const notes = Array.isArray(state.tabs) ? state.tabs : [];
+
+    return notes
+        .map((note) => {
+            const title = String(note?.title || '').toLowerCase();
+            const body = String(note?.body || '').toLowerCase();
+            let score = 0;
+            for (const term of terms) {
+                if (title.includes(term)) score += 5;
+                if (body.includes(term)) score += 2;
+            }
+            if (!score) return null;
+            return {
+                ...summarizeBridgeNote(note),
+                score
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, Math.max(1, Math.min(24, Number(limit || 8))));
+}
+
+function searchBridgeMetas(query, limit = 8) {
+    const needle = String(query || '').trim().toLowerCase();
+    if (!needle) return [];
+    const terms = needle.split(/\s+/).filter(Boolean);
+    const state = getKnowledgeBridgeState();
+    const metas = Array.isArray(state.metas) ? state.metas : [];
+
+    return metas
+        .map((meta) => {
+            const title = String(meta?.title || '').toLowerCase();
+            const description = String(meta?.description || '').toLowerCase();
+            let score = 0;
+            for (const term of terms) {
+                if (title.includes(term)) score += 5;
+                if (description.includes(term)) score += 2;
+            }
+            if (!score) return null;
+            return {
+                ...summarizeBridgeMeta(meta, state.tabs || []),
+                score
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, Math.max(1, Math.min(24, Number(limit || 8))));
+}
+
+function findBridgeNoteById(noteId) {
+    const id = String(noteId || '').trim();
+    const notes = Array.isArray(getKnowledgeBridgeState().tabs) ? getKnowledgeBridgeState().tabs : [];
+    return notes.find((note) => String(note?.id || '').trim() === id) || null;
+}
+
+function buildVoiceSummaryMemoryEntry(payload = {}) {
+    const summary = String(payload.summary || '').trim();
+    const userText = String(payload.user_text || payload.userText || '').trim();
+    const assistantText = String(payload.assistant_text || payload.assistantText || '').trim();
+    const bullets = [];
+    if (summary) bullets.push(`Resumen: ${summary}`);
+    if (userText) bullets.push(`Usuario: ${safeSliceText(userText, 280)}`);
+    if (assistantText) bullets.push(`Asistente de voz: ${safeSliceText(assistantText, 280)}`);
+    return bullets.join('\n');
+}
+
+async function ingestVoiceSummaryToBrain(payload = {}) {
+    const memoryEntry = buildVoiceSummaryMemoryEntry(payload);
+    if (!memoryEntry) {
+        return { ok: false, error: 'No summary payload provided' };
+    }
+
+    contextManager.addMessage('assistant', `[Resumen voz]\n${memoryEntry}`, 'voice_summary');
+    return {
+        ok: true,
+        recorded: true,
+        summaryPreview: safeSliceText(memoryEntry, 220)
+    };
+}
+
+function buildGptActionBridgeOperations() {
+    return [
+        {
+            name: 'list_notes',
+            summary: 'List notes',
+            description: 'Lista notas disponibles con titulo, preview y metadata basica.',
+            inputSchema: { type: 'object', properties: { limit: { type: 'integer' } } },
+            handler: async (body = {}) => {
+                const limit = Math.max(1, Math.min(60, Number(body.limit || 12)));
+                const notes = (getKnowledgeBridgeState().tabs || []).slice(0, limit).map(summarizeBridgeNote);
+                return { ok: true, count: notes.length, notes };
+            }
+        },
+        {
+            name: 'search_notes',
+            summary: 'Search notes',
+            description: 'Busca notas por titulo o contenido.',
+            inputSchema: {
+                type: 'object',
+                properties: { query: { type: 'string' }, limit: { type: 'integer' } },
+                required: ['query']
+            },
+            handler: async (body = {}) => {
+                const matches = searchBridgeNotes(body.query, body.limit);
+                return {
+                    ok: true,
+                    query: String(body.query || '').trim(),
+                    matches,
+                    count: matches.length
+                };
+            }
+        },
+        {
+            name: 'get_note',
+            summary: 'Get note',
+            description: 'Devuelve una nota completa por id.',
+            inputSchema: {
+                type: 'object',
+                properties: { note_id: { type: 'string' }, max_chars: { type: 'integer' } },
+                required: ['note_id']
+            },
+            handler: async (body = {}) => {
+                const note = findBridgeNoteById(body.note_id);
+                if (!note) return { ok: false, error: 'Note not found' };
+                const maxChars = Math.max(200, Math.min(24000, Number(body.max_chars || 12000)));
+                return {
+                    ok: true,
+                    note: {
+                        id: note.id,
+                        title: note.title || 'Sin titulo',
+                        body: safeSliceText(note.body || '', maxChars),
+                        updatedAt: note.updatedAt || null
+                    }
+                };
+            }
+        },
+        {
+            name: 'create_note',
+            summary: 'Create note',
+            description: 'Crea una nota nueva.',
+            inputSchema: {
+                type: 'object',
+                properties: { title: { type: 'string' }, body: { type: 'string' } },
+                required: ['title']
+            },
+            handler: async (body = {}) => {
+                const created = knowledgeService.createNote({
+                    title: String(body.title || '').trim(),
+                    body: body.body !== undefined ? String(body.body || '') : ''
+                });
+                if (!created?.note) return { ok: false, error: 'Could not create note' };
+                return { ok: true, note: summarizeBridgeNote(created.note), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'update_note',
+            summary: 'Update note',
+            description: 'Actualiza titulo o cuerpo completo de una nota.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    note_id: { type: 'string' },
+                    title: { type: 'string' },
+                    body: { type: 'string' }
+                },
+                required: ['note_id']
+            },
+            handler: async (body = {}) => {
+                const updated = knowledgeService.updateNote(String(body.note_id || '').trim(), {
+                    title: body.title,
+                    body: body.body
+                });
+                if (!updated?.note) return { ok: false, error: 'Could not update note' };
+                return { ok: true, note: summarizeBridgeNote(updated.note), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'delete_note',
+            summary: 'Delete note',
+            description: 'Elimina una nota existente.',
+            inputSchema: {
+                type: 'object',
+                properties: { note_id: { type: 'string' } },
+                required: ['note_id']
+            },
+            handler: async (body = {}) => {
+                const ok = knowledgeService.deleteNote(String(body.note_id || '').trim());
+                return ok ? { ok: true, deleted: true, state: getKnowledgeBridgeState() } : { ok: false, error: 'Could not delete note' };
+            }
+        },
+        {
+            name: 'list_metas',
+            summary: 'List metas',
+            description: 'Lista metas disponibles.',
+            inputSchema: { type: 'object', properties: { limit: { type: 'integer' } } },
+            handler: async (body = {}) => {
+                const limit = Math.max(1, Math.min(40, Number(body.limit || 12)));
+                const state = getKnowledgeBridgeState();
+                const metas = (state.metas || []).slice(0, limit).map((meta) => summarizeBridgeMeta(meta, state.tabs || []));
+                return { ok: true, count: metas.length, metas };
+            }
+        },
+        {
+            name: 'search_metas',
+            summary: 'Search metas',
+            description: 'Busca metas por titulo o descripcion.',
+            inputSchema: {
+                type: 'object',
+                properties: { query: { type: 'string' }, limit: { type: 'integer' } },
+                required: ['query']
+            },
+            handler: async (body = {}) => {
+                const matches = searchBridgeMetas(body.query, body.limit);
+                return {
+                    ok: true,
+                    query: String(body.query || '').trim(),
+                    matches,
+                    count: matches.length
+                };
+            }
+        },
+        {
+            name: 'get_meta',
+            summary: 'Get meta',
+            description: 'Devuelve una meta por id con sus notas vinculadas.',
+            inputSchema: {
+                type: 'object',
+                properties: { meta_id: { type: 'string' } },
+                required: ['meta_id']
+            },
+            handler: async (body = {}) => {
+                const state = getKnowledgeBridgeState();
+                const meta = (state.metas || []).find((item) => String(item?.id || '').trim() === String(body.meta_id || '').trim());
+                if (!meta) return { ok: false, error: 'Meta not found' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, state.tabs || []) };
+            }
+        },
+        {
+            name: 'create_meta',
+            summary: 'Create meta',
+            description: 'Crea una meta nueva.',
+            inputSchema: {
+                type: 'object',
+                properties: { title: { type: 'string' }, description: { type: 'string' } },
+                required: ['title']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.createMeta({
+                    title: String(body.title || '').trim(),
+                    description: String(body.description || '').trim()
+                });
+                if (!meta?.id) return { ok: false, error: 'Could not create meta' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'update_meta',
+            summary: 'Update meta',
+            description: 'Actualiza una meta existente.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    title: { type: 'string' },
+                    description: { type: 'string' }
+                },
+                required: ['meta_id']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.updateMeta(String(body.meta_id || '').trim(), {
+                    title: body.title,
+                    description: body.description
+                });
+                if (!meta?.id) return { ok: false, error: 'Could not update meta' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'delete_meta',
+            summary: 'Delete meta',
+            description: 'Elimina una meta existente.',
+            inputSchema: {
+                type: 'object',
+                properties: { meta_id: { type: 'string' } },
+                required: ['meta_id']
+            },
+            handler: async (body = {}) => {
+                const ok = knowledgeService.deleteMeta(String(body.meta_id || '').trim());
+                return ok ? { ok: true, deleted: true, state: getKnowledgeBridgeState() } : { ok: false, error: 'Could not delete meta' };
+            }
+        },
+        {
+            name: 'attach_note_to_meta',
+            summary: 'Attach note to meta',
+            description: 'Vincula una nota a una meta.',
+            inputSchema: {
+                type: 'object',
+                properties: { meta_id: { type: 'string' }, note_id: { type: 'string' } },
+                required: ['meta_id', 'note_id']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.attachNoteToMeta(String(body.meta_id || '').trim(), String(body.note_id || '').trim(), { source: 'manual' });
+                if (!meta?.id) return { ok: false, error: 'Could not attach note to meta' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'detach_note_from_meta',
+            summary: 'Detach note from meta',
+            description: 'Desvincula una nota de una meta.',
+            inputSchema: {
+                type: 'object',
+                properties: { meta_id: { type: 'string' }, note_id: { type: 'string' } },
+                required: ['meta_id', 'note_id']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.detachNoteFromMeta(String(body.meta_id || '').trim(), String(body.note_id || '').trim());
+                if (!meta?.id) return { ok: false, error: 'Could not detach note from meta' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'execute_screen_action',
+            summary: 'Prepare computer action',
+            description: 'Prepara una accion del computador usando goal, app y steps_hint.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    goal: { type: 'string' },
+                    app: { type: 'string' },
+                    steps_hint: { type: 'string' }
+                },
+                required: ['goal', 'app', 'steps_hint']
+            },
+            handler: async (body = {}) => executePromptRuntimeActionTool({
+                name: 'execute_screen_action',
+                args: body,
+                runId: `gpt_voice_${Date.now()}`,
+                source: 'chatgpt_custom_gpt',
+                reason: 'Generated by custom GPT action'
+            })
+        },
+        {
+            name: 'schedule_reminder',
+            summary: 'Schedule reminder',
+            description: 'Programa un recordatorio futuro.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    task: { type: 'string' },
+                    minutes: { type: 'integer' }
+                },
+                required: ['task', 'minutes']
+            },
+            handler: async (body = {}) => executePromptRuntimeActionTool({
+                name: 'schedule_reminder',
+                args: body,
+                runId: `gpt_voice_${Date.now()}`,
+                source: 'chatgpt_custom_gpt',
+                reason: 'Generated by custom GPT action'
+            })
+        },
+        {
+            name: 'play_agario',
+            summary: 'Prepare Agar.io session',
+            description: 'Prepara una sesion de Agar.io.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    nickname: { type: 'string' }
+                }
+            },
+            handler: async (body = {}) => executePromptRuntimeActionTool({
+                name: 'play_agario',
+                args: body,
+                runId: `gpt_voice_${Date.now()}`,
+                source: 'chatgpt_custom_gpt',
+                reason: 'Generated by custom GPT action'
+            })
+        },
+        {
+            name: 'voice_turn_summary',
+            summary: 'Send voice turn summary to main brain',
+            description: 'Entrega un resumen de la conversacion de voz al cerebro principal.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    summary: { type: 'string' },
+                    user_text: { type: 'string' },
+                    assistant_text: { type: 'string' }
+                },
+                required: ['summary']
+            },
+            handler: async (body = {}) => ingestVoiceSummaryToBrain(body)
+        }
+    ];
+}
+
+async function ensureGptActionBridge() {
+    if (gptActionBridge) {
+        return gptActionBridge.start();
+    }
+
+    gptActionBridge = new GPTActionBridge({
+        host: process.env.IU_GPT_ACTION_BRIDGE_HOST || '127.0.0.1',
+        port: Number(process.env.IU_GPT_ACTION_BRIDGE_PORT || 4318),
+        authToken: process.env.IU_GPT_ACTION_BRIDGE_TOKEN || '',
+        publicBaseUrl: process.env.IU_GPT_ACTION_PUBLIC_BASE_URL || '',
+        operations: buildGptActionBridgeOperations()
+    });
+
+    const started = await gptActionBridge.start();
+    LoggingSwitch.execution('GPTActionBridge', `Ready on ${gptActionBridge.getOpenApiUrl()}`);
+    return started;
+}
+
+async function planUnifiedActionIntent(userText, options = {}) {
+    const text = String(userText || '').trim();
+    if (!text) return null;
+
+    const recent = Array.isArray(options.recent)
+        ? options.recent
+        : contextManager.getHistoryForAPI(Number(options.recentLimit || 10));
+    const relevantContext = options.relevantContext || await contextManager.getRelevantContext(text);
+    const learnedWorkflows = Array.isArray(options.learnedWorkflows)
+        ? options.learnedWorkflows
+        : LearningAgent.findRelevantWorkflows(text, 3);
+
+    const result = await promptAgentRuntime.planActionIntent({
+        text,
+        recent,
+        longTerm: relevantContext?.longTerm || '',
+        learnedWorkflows,
+        allowReply: options.allowReply !== false,
+        mode: options.mode || 'general'
+    });
+
+    return result?.ok ? result : null;
+}
+
 ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
     const prompt = String(payload?.prompt || '').trim();
     const runId = String(payload?.runId || `run_${Date.now()}`).trim();
 
-    const emit = (phase, message, extra = {}) => {
-        event.sender.send('prompt-agent-progress', {
-            runId,
-            phase,
-            message: String(message || '').trim(),
-            timestamp: Date.now(),
-            ...extra
-        });
-    };
-
-    if (!prompt) {
-        emit('error', 'Prompt vacío');
-        return { success: false, error: 'Prompt vacio', userMessages: [], assistantReply: '' };
-    }
-
-    if (!ModelSwitch.isReady({ capability: 'chat' })) {
-        emit('error', 'Modelo no disponible');
-        return { success: false, error: 'Provider de texto no inicializado', userMessages: [], assistantReply: '' };
-    }
-
     try {
-        emit('planning', 'Entendí tu instrucción. Voy a analizar metas y notas.', { visibility: 'public' });
-        const notebookState = notebookManager.getState();
-        const notes = Array.isArray(notebookState?.tabs)
-            ? notebookState.tabs
-                .map((tab) => ({
-                    id: String(tab?.id || '').trim(),
-                    title: String(tab?.title || '').trim() || 'Sin titulo',
-                    body: String(tab?.body || '').trim()
-                }))
-                .filter((tab) => tab.id)
-            : [];
-        const noteIds = new Set(notes.map((tab) => tab.id));
-        const metas = sanitizePromptMetas(knowledgeService.getMetas(), noteIds);
-        const notesById = new Map(notes.map((tab) => [tab.id, tab]));
-        const noteDiscoveryIndex = buildNoteDiscoveryIndex(notes, 220);
-        const metaCatalog = metas.map((meta) => ({
-            id: meta.id,
-            title: meta.title || 'Meta sin titulo',
-            description: safeSliceText(meta.description, 280),
-            noteIds: meta.noteIds,
-            sampleNoteTitles: meta.noteIds.slice(0, 4).map((id) => notesById.get(id)?.title || 'Sin titulo')
-        }));
-        emit('planning', `Contexto cargado: ${metas.length} metas y ${notes.length} notas.`, { visibility: 'public' });
-
-        const mutationProbe = await ModelSwitch.chatCompletion({
-            messages: [
-                {
-                    role: 'system',
-                    content: [
-                        'Evalua si el usuario pide una mutacion directa de conocimiento (notas/metas).',
-                        'Si el usuario pide crear/editar/borrar/anidar, llama exactamente una funcion.',
-                        'Si no aplica, responde solo texto corto sin tool_calls.'
-                    ].join('\n')
-                },
-                {
-                    role: 'user',
-                    content: prompt
-                }
-            ],
-            tools: getKnowledgeTools(),
-            tool_choice: 'auto'
-        });
-        const mutationMessage = mutationProbe?.choices?.[0]?.message || {};
-        if (Array.isArray(mutationMessage.tool_calls) && mutationMessage.tool_calls.length > 0) {
-            emit('execution', 'Detecté una instrucción de edición. La estoy aplicando.', { visibility: 'public' });
-            const result = executeKnowledgeToolCall(mutationMessage.tool_calls[0]);
-            if (result?.error) {
-                emit('error', result.error);
-                return {
-                    success: false,
+        return await promptAgentRuntime.runPromptChat({
+            prompt,
+            runId,
+            emit: (entry = {}) => {
+                event.sender.send('prompt-agent-progress', {
                     runId,
-                    error: result.error,
-                    userMessages: [],
-                    assistantReply: ''
-                };
-            }
-            const assistantReply = String(result?.reply || 'Listo. Actualicé tu conocimiento.').trim();
-            return {
-                success: true,
-                runId,
-                mode: 'knowledge_mutation',
-                userMessages: [],
-                assistantReply,
-                selectedMetaIds: [],
-                selectedNotes: [],
-                learningLinkSuggestions: [],
-                actionPlan: null,
-                actionBlockedAsInternal: false
-            };
-        }
-
-        emit('planning', 'Decidiendo la ruta óptima para responderte.', { visibility: 'public' });
-        const { parsed: route } = await chatCompletionJson([
-            {
-                role: 'system',
-                content: [
-                    'Eres un asistente de clase mundial.',
-                    'Tu trabajo es responder natural y bien, y usar las herramientas internas solo cuando hagan falta.',
-                    'Responde SOLO JSON:',
-                    '{"intent":"respond|search_notes|answer_from_knowledge|create_depth_links|action","assistant_reply":"...","objective":"...","search_query":"...","target_note_titles":["..."],"reason":"..."}',
-                    'Reglas:',
-                    '- intent="respond": conversación casual, conocimiento general o preguntas que puedes responder sin revisar notas/metas.',
-                    '- intent="search_notes": cuando el usuario quiere que inspecciones, resumas, busques o encuentres cosas dentro de sus notas.',
-                    '- intent="answer_from_knowledge": cuando necesitas metas/notas del usuario para contestar bien.',
-                    '- intent="create_depth_links": cuando pide crear notas de profundización, puntos o anidaciones sobre notas/metas.',
-                    '- intent="action": solo si el usuario pide ejecutar algo en el PC.',
-                    '- assistant_reply SIEMPRE obligatorio y user-ready. Nunca expliques tu pipeline interno.',
-                    '- objective debe explicar la tarea operativa a realizar si no es solo responder.',
-                    '- search_query resume que buscarías en notas/metas.',
-                    '- target_note_titles ayuda a ubicar notas concretas cuando aplique.',
-                    '- No ejecutes acciones del PC en esta fase.'
-                ].join('\n')
-            },
-            {
-                role: 'user',
-                content: JSON.stringify({
-                    prompt,
-                    notesCount: notes.length,
-                    metasCount: metas.length,
-                    metasPreview: metas.slice(0, 6).map((meta) => ({
-                        id: meta.id,
-                        title: safeSliceText(meta.title, 80),
-                        description: safeSliceText(meta.description, 120),
-                        noteCount: meta.noteIds.length
-                    })),
-                    noteTitles: notes.slice(0, 24).map((note) => ({
-                        id: note.id,
-                        title: safeSliceText(note.title, 100)
-                    }))
-                })
-            }
-        ], 'decision del agente principal', {
-            schemaHint: '{"intent":"respond","assistant_reply":"...","objective":"...","search_query":"...","target_note_titles":["..."],"reason":"..."}'
-        });
-
-        const routeIntent = normalizeAgentIntent(route?.intent);
-        const routeReply = String(route?.assistant_reply || '').trim();
-        const routeObjective = String(route?.objective || prompt).trim() || prompt;
-        const routeQuery = String(route?.search_query || routeObjective || prompt).trim() || prompt;
-        const targetNoteTitles = Array.isArray(route?.target_note_titles)
-            ? route.target_note_titles
-                .map((item) => String(item || '').trim())
-                .filter(Boolean)
-                .slice(0, 6)
-            : [];
-        console.log('🧭 [PromptAgent] Route decision', {
-            runId,
-            intent: routeIntent,
-            reason: String(route?.reason || '').trim(),
-            prompt: safeSliceText(prompt, 160),
-            metas: metas.length,
-            notes: notes.length
-        });
-        LoggingSwitch.uiux('prompt_agent', 'route_decision', {
-            runId,
-            intent: routeIntent,
-            reason: safeSliceText(route?.reason || '', 180),
-            promptPreview: safeSliceText(prompt, 180),
-            metasCount: metas.length,
-            notesCount: notes.length
-        });
-        emit('planning', `Ruta seleccionada: ${routeIntent}.`, { visibility: 'public' });
-
-        if (routeIntent === 'respond') {
-            const assistantReply = routeReply || 'Te leo. ¿Qué necesitas?';
-            LoggingSwitch.uiux('prompt_agent', 'chat_mode_reply', {
-                runId,
-                replyPreview: safeSliceText(assistantReply, 200)
-            });
-            return {
-                success: true,
-                runId,
-                mode: 'direct',
-                userMessages: [],
-                assistantReply,
-                selectedMetaIds: [],
-                selectedNotes: [],
-                actionPlan: null
-            };
-        }
-
-        const { parsed: shortlist } = await chatCompletionJson([
-            {
-                role: 'system',
-                content: [
-                    'Eres un agente de investigación para un knowledge base personal.',
-                    'Tu trabajo es decidir qué metas y notas mirar antes de responder o crear profundizaciones.',
-                    'Responde SOLO JSON:',
-                    '{"metaIds":["..."],"candidateNoteIds":["..."],"readOrder":["..."],"sourceNoteIds":["..."],"why":"..."}',
-                    'Reglas:',
-                    '- metaIds maximo 6.',
-                    '- candidateNoteIds maximo 16.',
-                    '- readOrder debe ser subconjunto ordenado de candidateNoteIds o sourceNoteIds.',
-                    '- sourceNoteIds sirve para identificar notas exactas que seran el origen de puntos de profundizacion.',
-                    '- Usa SOLO ids existentes.'
-                ].join('\n')
-            },
-            {
-                role: 'user',
-                content: JSON.stringify({
-                    prompt,
-                    intent: routeIntent,
-                    objective: routeObjective,
-                    searchQuery: routeQuery,
-                    targetNoteTitles,
-                    metas: metaCatalog,
-                    notesIndex: noteDiscoveryIndex
-                })
-            }
-        ], 'seleccion de contexto del agente principal', {
-            schemaHint: '{"metaIds":["meta_1"],"candidateNoteIds":["tab_1"],"readOrder":["tab_1"],"sourceNoteIds":["tab_1"],"why":"..."}'
-        });
-
-        const validMetaIds = new Set(metaCatalog.map((meta) => meta.id));
-        const selectedMetaIds = sanitizeNoteIdSelection(shortlist?.metaIds, validMetaIds, 5);
-        const selectedFromMetas = selectedMetaIds
-            .flatMap((metaId) => metaCatalog.find((meta) => meta.id === metaId)?.noteIds || []);
-        const sourceNoteIds = sanitizeNoteIdSelection(shortlist?.sourceNoteIds, noteIds, 6);
-        const initialCandidates = sanitizeNoteIdSelection(shortlist?.candidateNoteIds, noteIds, 16);
-        const orderedPool = new Set([...sourceNoteIds, ...initialCandidates]);
-        const orderedCandidates = sanitizeNoteIdSelection(shortlist?.readOrder, orderedPool, 16);
-        const readQueue = sanitizeNoteIdSelection([...sourceNoteIds, ...selectedFromMetas, ...orderedCandidates, ...initialCandidates], noteIds, 16);
-        emit('scanning', `Voy a revisar ${readQueue.length} nota(s) relevantes.`, { visibility: 'public' });
-
-        if (readQueue.length === 0 && noteDiscoveryIndex.length > 0) {
-            const { parsed: forcedSelection } = await chatCompletionJson([
-                {
-                    role: 'system',
-                    content: [
-                        'Debes seleccionar al menos 1 nota para inspección inicial si el objetivo depende de notas.',
-                        'Responde SOLO JSON: {"candidateNoteIds":["..."],"why":"..."}',
-                        '- Maximo 6 ids.',
-                        '- Solo ids del índice.'
-                    ].join('\n')
-                },
-                {
-                    role: 'user',
-                    content: JSON.stringify({
-                        prompt,
-                        intent: routeIntent,
-                        objective: routeObjective,
-                        targetNoteTitles,
-                        notesIndex: noteDiscoveryIndex
-                    })
-                }
-            ], 'seleccion inicial forzada', {
-                schemaHint: '{"candidateNoteIds":["tab_1"],"why":"..."}'
-            });
-
-            const forcedIds = sanitizeNoteIdSelection(forcedSelection?.candidateNoteIds, noteIds, 6);
-            readQueue.push(...forcedIds);
-        }
-
-        const evaluations = [];
-        for (const noteId of readQueue) {
-            const note = notesById.get(noteId);
-            if (!note) continue;
-            const { parsed: evaluation } = await chatCompletionJson([
-                {
-                    role: 'system',
-                    content: [
-                        'Evalúa si una nota es útil para ejecutar un objetivo.',
-                        'Responde SOLO JSON:',
-                        '{"noteId":"...","keep":true,"score":0,"why":"...","howToUse":"..."}',
-                        'Score de 0 a 100.'
-                    ].join('\n')
-                },
-                {
-                    role: 'user',
-                    content: JSON.stringify({
-                        prompt,
-                        intent: routeIntent,
-                        objective: routeObjective,
-                        note: {
-                            id: note.id,
-                            title: note.title,
-                            body: safeSliceText(note.body, 4500)
-                        }
-                    })
-                }
-            ], `evaluacion nota ${noteId}`, {
-                schemaHint: '{"noteId":"tab_1","keep":true,"score":78,"why":"...","howToUse":"..."}'
-            });
-            evaluations.push({
-                noteId: note.id,
-                title: note.title,
-                keep: Boolean(evaluation?.keep),
-                score: Math.max(0, Math.min(100, Number(evaluation?.score || 0))),
-                why: String(evaluation?.why || '').trim(),
-                howToUse: String(evaluation?.howToUse || '').trim()
-            });
-        }
-        emit('synthesis', 'Generando respuesta final con el contexto encontrado.', { visibility: 'public' });
-
-        const keptNotes = evaluations
-            .filter((item) => item.keep)
-            .sort((a, b) => b.score - a.score)
-            .slice(0, routeIntent === 'create_depth_links' ? 4 : 8)
-            .map((item) => {
-                const note = notesById.get(item.noteId);
-                return note ? {
-                    id: note.id,
-                    title: note.title,
-                    body: safeSliceText(note.body, routeIntent === 'create_depth_links' ? 3600 : 1400),
-                    score: item.score,
-                    why: item.why,
-                    howToUse: item.howToUse
-                } : null;
-            })
-            .filter(Boolean);
-
-        if (routeIntent === 'create_depth_links') {
-            const sourceNotes = sourceNoteIds.length > 0
-                ? sourceNoteIds.map((id) => notesById.get(id)).filter(Boolean)
-                : keptNotes.slice(0, 3);
-            const learningLinkSuggestions = [];
-            emit('execution', 'Creando puntos de profundización y anidaciones.', { visibility: 'public' });
-
-            for (const note of sourceNotes) {
-                try {
-                    const links = await inferLearningLinksForNote(note.title, note.body, { maxLinks: 4 });
-                    if (links.length > 0) {
-                        learningLinkSuggestions.push({
-                            sourceNoteId: note.id,
-                            sourceNoteTitle: note.title || 'Sin titulo',
-                            links
-                        });
-                    }
-                } catch (linkErr) {
-                    console.warn('⚠️ [PromptAgent] Link suggestion failed for note', note.id, linkErr?.message || linkErr);
-                }
-            }
-
-            const { parsed: depthReply } = await chatCompletionJson([
-                {
-                    role: 'system',
-                    content: [
-                        'Redacta la respuesta final del asistente tras crear puntos de profundizacion.',
-                        'Responde SOLO JSON: {"assistant_reply":"..."}',
-                        'Reglas:',
-                        '- Explica brevemente qué nota(s) tomaste como origen.',
-                        '- Aclara que no editaste el texto de la nota.',
-                        '- Si creaste notas nuevas potenciales, dilo de forma natural.',
-                        '- No menciones reasoning interno, JSON ni pipeline.'
-                    ].join('\n')
-                },
-                {
-                    role: 'user',
-                    content: JSON.stringify({
-                        prompt,
-                        objective: routeObjective,
-                        sourceNotes: sourceNotes.map((note) => ({
-                            id: note.id,
-                            title: note.title
-                        })),
-                        suggestions: learningLinkSuggestions
-                    })
-                }
-            ], 'respuesta final de profundizacion', {
-                schemaHint: '{"assistant_reply":"..."}'
-            });
-
-            return {
-                success: true,
-                runId,
-                mode: 'knowledge_depth',
-                userMessages: [],
-                assistantReply: String(depthReply?.assistant_reply || routeReply || 'Ya dejé listos los puntos de profundización.').trim(),
-                selectedMetaIds,
-                selectedNotes: sourceNotes.map((note) => ({ id: note.id, title: note.title })),
-                learningLinkSuggestions,
-                applyLearningLinks: true,
-                actionPlan: null,
-                actionBlockedAsInternal: false
-            };
-        }
-
-        const { parsed: synthesis } = await chatCompletionJson([
-            {
-                role: 'system',
-                content: [
-                    'Redacta la respuesta final del asistente para el chat principal.',
-                    'Responde SOLO JSON:',
-                    '{"assistant_reply":"...","action_plan":{"goal":"...","app":"...","steps_hint":"...","confidence":0}}',
-                    'Reglas:',
-                    '- assistant_reply debe responder directamente al usuario.',
-                    '- Si buscaste en notas, dilo con naturalidad y resume hallazgos concretos.',
-                    '- Si no encontraste evidencia suficiente, dilo sin pedir que pegue las notas cuando sí tenías acceso.',
-                    '- action_plan opcional.'
-                ].join('\n')
-            },
-            {
-                role: 'user',
-                content: JSON.stringify({
-                    prompt,
-                    intent: routeIntent,
-                    objective: routeObjective,
-                    selected_metas: selectedMetaIds.map((id) => metaCatalog.find((meta) => meta.id === id)).filter(Boolean),
-                    notes_index: noteDiscoveryIndex,
-                    note_evaluations: evaluations,
-                    selected_notes: keptNotes
-                })
-            }
-        ], 'sintesis prompt principal', {
-            schemaHint: '{"assistant_reply":"...","action_plan":{"goal":"...","app":"...","steps_hint":"...","confidence":72}}'
-        });
-
-        let assistantReply = String(synthesis?.assistant_reply || '').trim();
-        if (!assistantReply) {
-            throw new Error('La síntesis del agente no devolvió una respuesta suficiente');
-        }
-        if (looksLikeLowQualityReply(assistantReply) && isSummaryRequest(prompt)) {
-            assistantReply = buildSummaryFallbackFromKnowledge({
-                metas,
-                notes,
-                keptNotes
-            });
-            emit('synthesis', 'Apliqué un resumen robusto para evitar respuesta genérica.', { visibility: 'public' });
-        }
-
-        const actionPlanRaw = synthesis?.action_plan && typeof synthesis.action_plan === 'object'
-            ? synthesis.action_plan
-            : null;
-        const actionPlan = actionPlanRaw
-            ? {
-                goal: String(actionPlanRaw.goal || '').trim(),
-                app: String(actionPlanRaw.app || '').trim(),
-                steps_hint: String(actionPlanRaw.steps_hint || '').trim(),
-                confidence: (() => {
-                    const parsed = Number(actionPlanRaw.confidence || 0);
-                    if (!Number.isFinite(parsed)) return 0;
-                    const normalized = parsed > 0 && parsed <= 1 ? parsed * 100 : parsed;
-                    return Math.max(0, Math.min(100, normalized));
-                })()
-            }
-            : null;
-
-        const validAction = actionPlan && actionPlan.goal && actionPlan.app && actionPlan.confidence >= 60;
-        const blockedInternalAction = validAction && isInternalKnowledgeActionApp(actionPlan.app);
-        const actionRequestId = `prompt_action_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
-        console.log('🧭 [PromptAgent] Action plan decision', {
-            runId,
-            actionRequestId,
-            prompt: safeSliceText(prompt, 220),
-            validAction: Boolean(validAction),
-            blockedInternalAction,
-            actionPlan: actionPlan || null
-        });
-        LoggingSwitch.uiux('prompt_agent', 'action_plan_decision', {
-            runId,
-            actionRequestId,
-            validAction: Boolean(validAction),
-            blockedInternalAction: Boolean(blockedInternalAction),
-            actionPlan: actionPlan
-                ? {
-                    app: actionPlan.app,
-                    goalPreview: safeSliceText(actionPlan.goal, 160),
-                    confidence: actionPlan.confidence
-                }
-                : null
-        });
-
-        if (validAction && mainWindow && !mainWindow.isDestroyed()) {
-            if (blockedInternalAction) {
-                console.log('⛔ [PromptAgent] Blocking external control for internal-knowledge action', {
-                    runId,
-                    actionRequestId,
-                    app: actionPlan.app,
-                    goal: actionPlan.goal
+                    timestamp: Date.now(),
+                    ...entry
                 });
-                emit('execution', 'Plan interno detectado: no se activará control automático del PC');
-            } else {
-                const actionPayload = {
-                    goal: actionPlan.goal,
-                    app: actionPlan.app,
-                    stepsHint: actionPlan.steps_hint || '',
-                    source: 'prompt_agent',
-                    requestId: actionRequestId,
-                    runId,
-                    reason: 'Generated by prompt-agent action_plan'
-                };
-                console.log('📤 [PromptAgent] Sending action-confirm-request', actionPayload);
-                mainWindow.webContents.send('action-confirm-request', actionPayload);
-                LoggingSwitch.uiux('prompt_agent', 'action_confirm_requested', {
-                    runId,
-                    requestId: actionPayload.requestId,
-                    app: actionPayload.app,
-                    goalPreview: safeSliceText(actionPayload.goal, 160)
-                });
-                emit('execution', `Preparé ejecución en ${actionPlan.app} y la dejé lista para confirmar`);
             }
-        }
-
-        const learningLinkSuggestions = [];
-        for (const note of keptNotes.slice(0, 3)) {
-            try {
-                const links = await inferLearningLinksForNote(note.title, note.body, { maxLinks: 3 });
-                if (links.length > 0) {
-                    learningLinkSuggestions.push({
-                        sourceNoteId: note.id,
-                        sourceNoteTitle: note.title || 'Sin titulo',
-                        links
-                    });
-                }
-            } catch (linkErr) {
-                console.warn('⚠️ [PromptAgent] Link suggestion failed for note', note.id, linkErr?.message || linkErr);
-            }
-        }
-        LoggingSwitch.uiux('prompt_agent', 'learning_link_suggestions', {
-            runId,
-            suggestions: learningLinkSuggestions.length
         });
-        LoggingSwitch.execution('PromptAgent', `run=${runId} intent=${routeIntent} metas=${metas.length} notes=${notes.length} readQueue=${readQueue.length} kept=${keptNotes.length} links=${learningLinkSuggestions.length}`);
-        return {
-            success: true,
-            runId,
-            mode: 'knowledge',
-            userMessages: [],
-            assistantReply,
-            selectedMetaIds,
-            selectedNotes: keptNotes.map((item) => ({ id: item.id, title: item.title })),
-            learningLinkSuggestions: [],
-            applyLearningLinks: false,
-            actionPlan: validAction ? actionPlan : null,
-            actionBlockedAsInternal: Boolean(blockedInternalAction)
-        };
     } catch (error) {
         console.error('❌ [PromptAgent] Failed:', error);
-        emit('error', 'Falló el análisis del prompt principal');
+        event.sender.send('prompt-agent-progress', {
+            runId,
+            timestamp: Date.now(),
+            type: 'status',
+            phase: 'error',
+            visibility: 'public',
+            message: 'Falló el runtime del prompt principal'
+        });
         return {
             success: false,
             runId,
             error: error?.message || 'No se pudo ejecutar el agente principal',
-            userMessages: [],
             assistantReply: ''
         };
     }
+});
+
+ipcMain.handle('time-manager-decide', async (event, payload = {}) => {
+    const notification = payload?.notification || payload;
+    const runId = String(payload?.runId || `tm_run_${Date.now()}`).trim();
+
+    try {
+        return await timeManagerRuntime.decideInterruption({
+            ...payload,
+            notification,
+            runId,
+            emit: (entry = {}) => {
+                event.sender.send('time-manager-progress', {
+                    runId,
+                    timestamp: Date.now(),
+                    ...entry
+                });
+            }
+        });
+    } catch (error) {
+        console.error('❌ [TimeManager] Failed:', error);
+        event.sender.send('time-manager-progress', {
+            runId,
+            timestamp: Date.now(),
+            type: 'status',
+            phase: 'error',
+            visibility: 'public',
+            message: 'Falló el runtime de Time Manager'
+        });
+        return {
+            success: false,
+            runId,
+            error: error?.message || 'No se pudo ejecutar Time Manager',
+            decision: null
+        };
+    }
+});
+
+ipcMain.handle('time-manager-get-state', async () => {
+    return buildTimeManagerState();
 });
 
 ipcMain.handle('chat-bootstrap', async () => {
@@ -2243,147 +2333,6 @@ ipcMain.handle('knowledge-attach-note', async (event, payload = {}) => {
 ipcMain.handle('knowledge-detach-note', async (event, payload = {}) => {
     const meta = knowledgeService.detachNoteFromMeta(payload.metaId, payload.noteId);
     return { meta, metas: knowledgeService.getMetas() };
-});
-
-ipcMain.handle('notes-generate-injected-chat', async (event, payload = {}) => {
-    const prompt = String(payload.prompt || '').trim();
-    if (!prompt) {
-        return {
-            success: false,
-            error: 'Prompt vacio',
-            userMessages: [],
-            assistantReply: ''
-        };
-    }
-
-    if (!ModelSwitch.isReady({ capability: 'chat' })) {
-        return {
-            success: false,
-            error: 'Provider de texto no inicializado',
-            userMessages: [],
-            assistantReply: ''
-        };
-    }
-
-    try {
-        const state = notebookManager.getState();
-        const notes = (state.tabs || [])
-            .map((tab) => ({
-                id: String(tab?.id || '').trim(),
-                title: String(tab?.title || '').trim() || 'Sin titulo',
-                body: String(tab?.body || '').trim()
-            }))
-            .filter((tab) => tab.id);
-        const noteIds = new Set(notes.map((tab) => tab.id));
-        const notesById = new Map(notes.map((tab) => [tab.id, tab]));
-        const noteIndex = buildNoteDiscoveryIndex(notes, 220);
-
-        const { parsed: selection } = await chatCompletionJson([
-            {
-                role: 'system',
-                content: [
-                    'Eres un agente que decide qué notas leer para ejecutar un prompt.',
-                    'Responde SOLO JSON:',
-                    '{"candidateNoteIds":["..."],"readOrder":["..."],"why":"..."}',
-                    'Reglas: máximo 6 notas. Usa solo ids existentes.'
-                ].join('\n')
-            },
-            {
-                role: 'user',
-                content: JSON.stringify({ prompt, notesIndex: noteIndex })
-            }
-        ], 'seleccion de notas para inyeccion', {
-            schemaHint: '{"candidateNoteIds":["tab_1"],"readOrder":["tab_1"],"why":"..."}'
-        });
-
-        const candidateIds = sanitizeNoteIdSelection(selection?.candidateNoteIds, noteIds, 6);
-        const orderedIds = sanitizeNoteIdSelection(selection?.readOrder, new Set(candidateIds), 6);
-        const selectedTabs = sanitizeNoteIdSelection([...orderedIds, ...candidateIds], noteIds, 6)
-            .map((id) => notesById.get(id))
-            .filter(Boolean);
-
-        const noteContext = selectedTabs
-            .map((tab, index) => {
-                return [
-                    `[Nota ${index + 1}]`,
-                    `id: ${tab.id}`,
-                    `titulo: ${tab.title || 'Sin titulo'}`,
-                    `contenido:`,
-                    safeSliceText(tab.body || '', 1800)
-                ].join('\n');
-            })
-            .join('\n\n');
-
-        const response = await ModelSwitch.chatCompletion({
-            messages: [
-                {
-                    role: 'system',
-                    content: [
-                        'Eres un orquestador UX de ejecucion.',
-                        'Debes responder SOLO JSON valido con esta forma:',
-                        '{"user_messages":[{"type":"note_title|instruction","text":"...","noteTitle":"..."}],"assistant_reply":"..."}',
-                        'Reglas:',
-                        '- user_messages son mensajes del lado del usuario, en primera persona, cortos y accionables.',
-                        '- Incluye titulos de notas como mensajes type="note_title".',
-                        '- Incluye varios parrafos cortos type="instruction" describiendo exactamente que se hara.',
-                        '- assistant_reply debe ser autentico, breve y aceptar ejecucion sin preguntas innecesarias.',
-                        '- No uses markdown, no uses bloques de codigo, solo JSON.'
-                    ].join('\n')
-                },
-                {
-                    role: 'user',
-                    content: [
-                        `Prompt inicial del usuario: ${prompt}`,
-                        '',
-                        'Notas disponibles para basar la ejecucion:',
-                        noteContext || '[Sin notas disponibles]'
-                    ].join('\n')
-                }
-            ]
-        });
-
-        const content = response?.choices?.[0]?.message?.content || '';
-        const parsed = parseModelJsonPayload(content);
-        const userMessages = Array.isArray(parsed?.user_messages)
-            ? parsed.user_messages
-                .map((message) => ({
-                    type: message?.type === 'note_title' ? 'note_title' : 'instruction',
-                    text: String(message?.text || '').trim(),
-                    noteTitle: String(message?.noteTitle || '').trim() || null,
-                    noteId: null
-                }))
-                .filter((message) => message.text.length > 0)
-            : [];
-        const assistantReply = String(parsed?.assistant_reply || '').trim();
-
-        if (!assistantReply || userMessages.length === 0) {
-            return {
-                success: false,
-                error: 'No fue posible generar una respuesta estructurada del agente',
-                userMessages,
-                assistantReply: ''
-            };
-        }
-
-        return {
-            success: true,
-            prompt,
-            selectedNotes: selectedTabs.map((tab) => ({
-                id: tab.id,
-                title: tab.title || 'Sin titulo'
-            })),
-            userMessages,
-            assistantReply
-        };
-    } catch (error) {
-        console.error('❌ [NotesInjection] Failed:', error);
-        return {
-            success: false,
-            error: error?.message || 'No se pudo preparar la ejecucion desde notas',
-            userMessages: [],
-            assistantReply: ''
-        };
-    }
 });
 
 ipcMain.handle('meta-suggest-notes', async (event, payload = {}) => {
@@ -2761,236 +2710,6 @@ ipcMain.handle('meta-agent-run', async (event, payload = {}) => {
     }
 });
 
-ipcMain.handle('chat-send-message', async (event, payload = {}) => {
-    const text = String(payload.text || '').trim();
-    if (!text) {
-        return { error: 'Mensaje vacio', state: knowledgeService.getKnowledgeState() };
-    }
-    LoggingSwitch.execution('Chat', `User sent: ${text.substring(0, 60)}`);
-    LoggingSwitch.uiux('chat', 'user_message', {
-        tabId: String(payload.activeTabId || notebookManager.getState().activeTabId || ''),
-        executionId: String(payload.activeExecutionId || notebookManager.getState().activeExecutionId || ''),
-        textPreview: safeSliceText(text, 220)
-    });
-
-    const tabId = payload.activeTabId || notebookManager.getState().activeTabId;
-    const executionId = payload.activeExecutionId || notebookManager.getState().activeExecutionId;
-    if (payload.noteSnapshot) {
-        notebookManager.updateTab(tabId, {
-            title: payload.noteSnapshot.title,
-            body: payload.noteSnapshot.body
-        });
-    }
-    notebookManager.setActiveTab(tabId);
-    notebookManager.setActiveExecution(executionId);
-    const userExecution = notebookManager.appendMessage(executionId, {
-        role: 'user',
-        text,
-        status: 'thinking'
-    });
-
-    // 1. Add to Central Context
-    contextManager.addMessage('user', text, 'chat_ui');
-    if (LearningAgent.isLearning) {
-        LearningAgent.addTeachingNote(text);
-    }
-
-    if (!ModelSwitch.isReady({ capability: 'chat' })) {
-        if (chatWindow && !chatWindow.isDestroyed()) {
-            chatWindow.webContents.send('chat-response', { error: 'Provider de texto no inicializado' });
-        }
-        return {
-            error: 'Provider de texto no inicializado',
-            state: knowledgeService.getKnowledgeState(),
-            execution: userExecution
-        };
-    }
-
-    try {
-        const variableAnalysis = await notebookManager.analyzeVariables({
-            tabId,
-            executionId,
-            trigger: 'send'
-        });
-
-        if (shouldAskChatClarification(text, variableAnalysis)) {
-            const clarificationText = variableAnalysis.clarificationPrompt;
-            const clarificationExecution = notebookManager.appendMessage(executionId, {
-                role: 'assistant',
-                text: clarificationText,
-                status: 'waiting_clarification'
-            });
-            contextManager.addMessage('assistant', clarificationText, 'chat_api');
-            LoggingSwitch.uiux('chat', 'clarification_requested', {
-                clarificationPreview: safeSliceText(clarificationText, 220)
-            });
-            return {
-                clarification: clarificationText,
-                updatedVariables: variableAnalysis.variables,
-                state: knowledgeService.getKnowledgeState(),
-                execution: clarificationExecution
-            };
-        }
-
-        // Retrieve relevant context from disk/semantic memory
-        const relevantContext = await contextManager.getRelevantContext(text);
-        const relevantLearned = LearningAgent.findRelevantWorkflows(text, 3);
-        const { systemPrompt, learnedWorkflowsText } = buildChatSystemPrompt(relevantLearned, relevantContext);
-        const promptPayload = notebookManager.buildChatPayload({
-            tabId,
-            executionId,
-            baseSystemPrompt: systemPrompt,
-            learnedWorkflowsText,
-            longTermContext: ''
-        });
-
-        // Send to active model (OpenAI or Gemini via ModelSwitch)
-        const response = await ModelSwitch.chatCompletion({
-            messages: promptPayload.messages,
-            tools: [
-                ...(actionPlanner ? actionPlanner.tools : []),
-                ...getKnowledgeTools()
-            ],
-            tool_choice: 'auto'
-        });
-
-        const message = response.choices[0].message;
-        const reply = message.content || '';
-
-        // Check for function call (action)
-        if (message.tool_calls && message.tool_calls.length > 0) {
-            const call = message.tool_calls[0];
-            const knowledgeResult = executeKnowledgeToolCall(call);
-            if (knowledgeResult) {
-                if (knowledgeResult.error) {
-                    const assistantExecution = notebookManager.appendMessage(executionId, {
-                        role: 'assistant',
-                        text: knowledgeResult.error,
-                        kind: 'knowledge',
-                        status: 'error'
-                    });
-                    contextManager.addMessage('assistant', knowledgeResult.error, 'chat_api');
-                    return {
-                        error: knowledgeResult.error,
-                        updatedVariables: variableAnalysis.variables,
-                        state: knowledgeService.getKnowledgeState(),
-                        execution: assistantExecution
-                    };
-                }
-
-                const visibleReply = String(knowledgeResult.reply || 'Listo. Actualicé tu conocimiento.').trim();
-                const assistantExecution = notebookManager.appendMessage(executionId, {
-                    role: 'assistant',
-                    text: visibleReply,
-                    kind: 'knowledge',
-                    status: 'answered'
-                });
-                contextManager.addMessage('assistant', visibleReply, 'chat_api', {
-                    tool_calls: message.tool_calls
-                });
-                contextManager.addMessage('tool', visibleReply, 'knowledge_result', {
-                    tool_call_id: call.id,
-                    name: call.function?.name || 'knowledge_tool'
-                });
-                return {
-                    reply: visibleReply,
-                    updatedVariables: variableAnalysis.variables,
-                    state: knowledgeResult.state || knowledgeService.getKnowledgeState(),
-                    execution: assistantExecution
-                };
-            }
-
-            if (call.function.name === 'execute_screen_action') {
-                const args = JSON.parse(call.function.arguments);
-                LoggingSwitch.execution('Chat', `Action planned: ${args.goal}`);
-                LoggingSwitch.uiux('chat', 'action_planned', {
-                    app: String(args?.app || ''),
-                    goalPreview: safeSliceText(args?.goal || '', 180),
-                    stepsPreview: safeSliceText(args?.steps_hint || '', 180)
-                });
-
-                // ── FIX: Cerrar el loop del tool_call en el historial ──────────
-                // 1. Guardar el mensaje del assistant CON su tool_call
-                contextManager.addMessage('assistant', reply || null, 'chat_api', {
-                    tool_calls: message.tool_calls
-                });
-                // 2. Guardar el tool_result inmediatamente para que el historial quede bien formado.
-                //    Sin este paso, el LLM ve un tool_call pendiente y lo re-ejecuta en la
-                //    siguiente llamada en lugar de procesar el nuevo mensaje del usuario.
-                contextManager.addMessage('tool', `Acción iniciada: ${args.goal} en ${args.app}`, 'action_result', {
-                    tool_call_id: call.id,
-                    name: call.function.name
-                });
-                // ───────────────────────────────────────────────────────────────
-
-                // Send reply + action to chat window
-                const visibleReply = reply || (relevantLearned && relevantLearned[0]
-                    ? `Perfecto, lo voy a hacer como me enseñaste en ${relevantLearned[0].workflowName}.`
-                    : `Entendido. Voy a ${args.goal.toLowerCase()}.`);
-                const actionExecution = notebookManager.appendMessage(executionId, {
-                    role: 'assistant',
-                    text: visibleReply,
-                    kind: 'action',
-                    status: 'action_pending'
-                });
-
-                // Send confirmation to main window
-                if (mainWindow) {
-                    mainWindow.webContents.send('action-confirm-request', {
-                        goal: args.goal,
-                        app: args.app,
-                        stepsHint: args.steps_hint,
-                        source: 'explicit'
-                    });
-                }
-
-                return {
-                    reply: visibleReply,
-                    action: args,
-                    updatedVariables: variableAnalysis.variables,
-                    state: knowledgeService.getKnowledgeState(),
-                    execution: actionExecution
-                };
-            }
-        }
-
-        // Regular reply (no action)
-        const assistantExecution = notebookManager.appendMessage(executionId, {
-            role: 'assistant',
-            text: reply,
-            status: 'answered'
-        });
-        LoggingSwitch.uiux('chat', 'assistant_reply', {
-            replyPreview: safeSliceText(reply, 220),
-            hasToolCalls: Boolean(message.tool_calls && message.tool_calls.length)
-        });
-
-        // 2. Add reply to Central Context (conversational — no tool_call here)
-        contextManager.addMessage('assistant', reply || null, 'chat_api', {
-            tool_calls: message.tool_calls
-        });
-
-        return {
-            reply,
-            updatedVariables: variableAnalysis.variables,
-            state: knowledgeService.getKnowledgeState(),
-            execution: assistantExecution
-        };
-
-    } catch (e) {
-        console.error('❌ [Chat] Failed:', e.message);
-        LoggingSwitch.uiux('chat', 'chat_error', {
-            error: safeSliceText(e?.message || 'unknown', 220)
-        });
-        notebookManager.updateExecutionStatus(executionId, 'error');
-        return {
-            error: e.message,
-            state: knowledgeService.getKnowledgeState(),
-            execution: notebookManager.getState().executions.find((execution) => execution.id === executionId) || null
-        };
-    }
-});
-
 // 🎓 Learning Mode IPCs
 ipcMain.handle('learning-start', async (event, { name }) => {
     LearningAgent.startLearning(name);
@@ -3339,7 +3058,7 @@ async function transcribeCommandHoldAudioFallback(buffer, mimeType = 'audio/webm
 }
 
 async function executeFromCommandHoldTranscript(transcript) {
-    if (!transcript || !actionPlanner || !screenAgent) return;
+    if (!transcript || !screenAgent) return;
 
     contextManager.addMessage('user', transcript, 'command_hold_transcription');
 
@@ -3382,11 +3101,12 @@ async function executeFromCommandHoldTranscript(transcript) {
         return;
     }
 
-    const relevantContext = await contextManager.getRelevantContext(transcript);
-    const plan = await actionPlanner.planFromExplicit(transcript, {
-        recent: contextManager.getHistoryForAPI(10),
-        longTerm: relevantContext.longTerm
+    const actionIntent = await planUnifiedActionIntent(transcript, {
+        recentLimit: 10,
+        allowReply: false,
+        mode: 'command_hold'
     });
+    const plan = actionIntent?.kind === 'action' ? actionIntent.action : null;
 
     if (!plan) {
         console.log('ℹ️ [CommandHold] No actionable intent after transcription');
@@ -3662,7 +3382,6 @@ ipcMain.on('window-move', (event, { x, y }) => {
     }
 });
 
-// Open/toggle chat window from main window
 ipcMain.handle('toggle-chat-window', () => {
     if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.close();
@@ -4398,7 +4117,20 @@ const { ensureManagedChrome, getManagedChromeTargets, MANAGED_CHROME_PORT } = re
 
 let chatContext = null;
 let chatPage = null;
-const CHATGPT_HOME_URL = 'https://chatgpt.com/';
+const CHATGPT_CUSTOM_GPT_URL = String(process.env.IU_CHATGPT_CUSTOM_GPT_URL || process.env.CHATGPT_CUSTOM_GPT_URL || '').trim();
+const CHATGPT_HOME_URL = CHATGPT_CUSTOM_GPT_URL || 'https://chatgpt.com/';
+
+function isCustomGptModeEnabled() {
+    return Boolean(CHATGPT_CUSTOM_GPT_URL);
+}
+
+function startChatGptVoiceUiMonitoring() {
+    startVoiceStateMonitoring();
+    startSmartConversationMonitoring();
+    if (mainWindow) {
+        mainWindow.webContents.send('system-ready');
+    }
+}
 
 function isChromeInternalPage(url = '') {
     return !url || url === 'about:blank' || url.startsWith('chrome://new-tab-page') || url.startsWith('chrome://newtab');
@@ -4407,6 +4139,7 @@ function isChromeInternalPage(url = '') {
 async function setupChatGPT() {
     console.log('🤖 Setting up ChatGPT integration...');
     try {
+        await ensureGptActionBridge();
         await ensureManagedChrome(CHATGPT_HOME_URL, [], { source: 'main.setupChatGPT' });
         const browser = await chromium.connectOverCDP(`http://127.0.0.1:${MANAGED_CHROME_PORT}`);
         const contexts = browser.contexts();
@@ -4482,10 +4215,15 @@ async function setupChatGPT() {
 
         console.log('🤖 ChatGPT ready inside IU Chrome. Please login if needed.');
 
-        // Only inject prompt when ChatGPT page is actually reachable.
-        // This avoids 30s startup stalls in offline/captive/intercepted networks.
+        // Only inject prompt when we are using the generic ChatGPT homepage.
+        // Custom GPT mode should keep its own instructions and actions.
         if (navigationReady) {
-            await injectSystemPromptOnStartup();
+            if (isCustomGptModeEnabled()) {
+                console.log('🧠 [ChatGPT] Custom GPT mode enabled. Skipping startup prompt injection.');
+                startChatGptVoiceUiMonitoring();
+            } else {
+                await injectSystemPromptOnStartup();
+            }
         } else {
             console.log('⏭️ [ChatGPT] Skipping prompt injection until network is available.');
         }
@@ -4546,24 +4284,301 @@ async function injectSystemPromptOnStartup() {
             // Wait for response
             await chatPage.waitForTimeout(3000);
             console.log('✅ System prompt injected on startup');
-
-            // Start voice state monitoring
-            startVoiceStateMonitoring();
-            startSmartConversationMonitoring();
-
-            if (mainWindow) {
-                mainWindow.webContents.send('system-ready');
-            }
+            startChatGptVoiceUiMonitoring();
         }
     } catch (e) {
         console.warn('⚠️ Could not inject System Prompt on startup:', e.message);
     }
 }
 
-ipcMain.handle('conversation-control', async (event, action, options = {}) => {
-    console.log(`🎤 IPC received: conversation-control -> ${action}`, options);
-    const { isSimpleMode } = options;
+async function ensureChatGPTVoiceBridge() {
+    if (!chatPage || chatPage.isClosed()) {
+        throw new Error('ChatGPT page unavailable for voice bridge');
+    }
 
+    const bridgeInstaller = () => {
+        if (window.__iuVoiceBridgeBootstrapInstalled && window.__iuInstallVoiceBridge) return;
+        window.__iuVoiceBridgeBootstrapInstalled = true;
+
+        const installBridge = async () => {
+            if (window.__iuVoiceBridge?.installed) return window.__iuVoiceBridge;
+            if (!navigator.mediaDevices?.getUserMedia) {
+                throw new Error('getUserMedia unavailable');
+            }
+
+            const originalGetUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+            const bridge = {
+                installed: true,
+                waitEnabled: false,
+                originalGetUserMedia,
+                currentStream: null,
+                mixedStream: null,
+                audioContext: null,
+                destination: null,
+                micGain: null,
+                syntheticGain: null,
+                speechGain: null,
+                carrierNodes: [],
+                carrierInterval: null,
+                micSourceNodes: []
+            };
+
+            function buildNoiseBuffer(ctx) {
+                const buffer = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < data.length; i += 1) {
+                    data[i] = (Math.random() * 2 - 1) * 0.18;
+                }
+                return buffer;
+            }
+
+            async function ensureAudioGraph() {
+                if (bridge.audioContext && bridge.audioContext.state !== 'closed') {
+                    if (bridge.audioContext.state === 'suspended') {
+                        try { await bridge.audioContext.resume(); } catch (_) {}
+                    }
+                    return;
+                }
+
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (!AudioCtx) throw new Error('AudioContext unavailable');
+
+                const ctx = new AudioCtx();
+                bridge.audioContext = ctx;
+                bridge.destination = ctx.createMediaStreamDestination();
+                bridge.micGain = ctx.createGain();
+                bridge.syntheticGain = ctx.createGain();
+                bridge.speechGain = ctx.createGain();
+                bridge.micGain.gain.value = 1;
+                bridge.syntheticGain.gain.value = 0;
+                bridge.speechGain.gain.value = 0;
+
+                const carrier = ctx.createOscillator();
+                carrier.type = 'sawtooth';
+                carrier.frequency.value = 180;
+                const carrierGain = ctx.createGain();
+                carrierGain.gain.value = 0.16;
+
+                const harmonic = ctx.createOscillator();
+                harmonic.type = 'square';
+                harmonic.frequency.value = 260;
+                const harmonicGain = ctx.createGain();
+                harmonicGain.gain.value = 0.12;
+
+                const noise = ctx.createBufferSource();
+                noise.buffer = buildNoiseBuffer(ctx);
+                noise.loop = true;
+                const noiseFilter = ctx.createBiquadFilter();
+                noiseFilter.type = 'bandpass';
+                noiseFilter.frequency.value = 1700;
+                noiseFilter.Q.value = 0.6;
+                const noiseGain = ctx.createGain();
+                noiseGain.gain.value = 0.09;
+
+                carrier.connect(carrierGain).connect(bridge.speechGain);
+                harmonic.connect(harmonicGain).connect(bridge.speechGain);
+                noise.connect(noiseFilter).connect(noiseGain).connect(bridge.speechGain);
+                bridge.speechGain.connect(bridge.syntheticGain).connect(bridge.destination);
+                bridge.micGain.connect(bridge.destination);
+
+                carrier.start();
+                harmonic.start();
+                noise.start();
+
+                bridge.carrierNodes = [carrier, harmonic, noise];
+
+                const syllables = [
+                    { start: 0.00, end: 0.13, gain: 1.25 },
+                    { start: 0.17, end: 0.30, gain: 1.0 },
+                    { start: 0.34, end: 0.46, gain: 0.88 },
+                    { start: 0.50, end: 0.70, gain: 1.18 }
+                ];
+
+                const pulsePhrase = () => {
+                    if (!bridge.audioContext || bridge.audioContext.state === 'closed') return;
+                    const now = bridge.audioContext.currentTime + 0.01;
+                    const gate = bridge.speechGain.gain;
+                    gate.cancelScheduledValues(now);
+                    gate.setValueAtTime(0.0001, now);
+
+                    for (const syllable of syllables) {
+                        const start = now + syllable.start;
+                        const peak = start + 0.018;
+                        const end = now + syllable.end;
+                        gate.linearRampToValueAtTime(syllable.gain, peak);
+                        gate.exponentialRampToValueAtTime(0.001, end);
+                    }
+                };
+
+                pulsePhrase();
+                bridge.carrierInterval = window.setInterval(pulsePhrase, 720);
+            }
+
+            async function getMixedStream(constraints) {
+                const stream = await originalGetUserMedia(constraints);
+                if (!constraints || !constraints.audio) return stream;
+
+                await ensureAudioGraph();
+
+                bridge.currentStream = stream;
+                const micSource = bridge.audioContext.createMediaStreamSource(stream);
+                micSource.connect(bridge.micGain);
+                bridge.micSourceNodes.push(micSource);
+
+                const tracks = [
+                    ...bridge.destination.stream.getAudioTracks(),
+                    ...stream.getVideoTracks()
+                ];
+                bridge.mixedStream = new MediaStream(tracks);
+                return bridge.mixedStream;
+            }
+
+            navigator.mediaDevices.getUserMedia = async (constraints = {}) => {
+                const wantsAudio = typeof constraints === 'object' && constraints !== null && !!constraints.audio;
+                if (!wantsAudio) {
+                    return originalGetUserMedia(constraints);
+                }
+                return getMixedStream(constraints);
+            };
+
+            bridge.setWaitEnabled = async (enabled, mode = 'hold') => {
+                bridge.waitEnabled = !!enabled;
+                await ensureAudioGraph();
+                const now = bridge.audioContext.currentTime + 0.01;
+                const interruptMode = mode === 'interrupt';
+                const target = bridge.waitEnabled
+                    ? (interruptMode ? 1.05 : 0.16)
+                    : 0.0001;
+                bridge.syntheticGain.gain.cancelScheduledValues(now);
+                bridge.syntheticGain.gain.setTargetAtTime(target, now, interruptMode ? 0.01 : 0.035);
+                bridge.micGain.gain.cancelScheduledValues(now);
+                bridge.micGain.gain.setTargetAtTime(interruptMode ? 1.35 : 1.0, now, 0.02);
+                return { waitEnabled: bridge.waitEnabled, mode };
+            };
+
+            bridge.teardown = async () => {
+                bridge.waitEnabled = false;
+
+                if (bridge.carrierInterval) {
+                    clearInterval(bridge.carrierInterval);
+                    bridge.carrierInterval = null;
+                }
+
+                for (const node of bridge.carrierNodes) {
+                    try {
+                        if (typeof node.stop === 'function') node.stop();
+                    } catch (_) {
+                        // ignored
+                    }
+                    try {
+                        node.disconnect();
+                    } catch (_) {
+                        // ignored
+                    }
+                }
+                bridge.carrierNodes = [];
+
+                for (const node of bridge.micSourceNodes) {
+                    try {
+                        node.disconnect();
+                    } catch (_) {
+                        // ignored
+                    }
+                }
+                bridge.micSourceNodes = [];
+
+                if (bridge.currentStream) {
+                    try {
+                        bridge.currentStream.getTracks().forEach((track) => track.stop());
+                    } catch (_) {
+                        // ignored
+                    }
+                    bridge.currentStream = null;
+                }
+
+                navigator.mediaDevices.getUserMedia = bridge.originalGetUserMedia;
+
+                if (bridge.audioContext && bridge.audioContext.state !== 'closed') {
+                    try {
+                        await bridge.audioContext.close();
+                    } catch (_) {
+                        // ignored
+                    }
+                }
+
+                bridge.audioContext = null;
+                bridge.destination = null;
+                bridge.micGain = null;
+                bridge.syntheticGain = null;
+                bridge.speechGain = null;
+                bridge.mixedStream = null;
+                delete window.__iuVoiceBridge;
+                return { restored: true };
+            };
+
+            bridge.getState = () => ({
+                installed: true,
+                waitEnabled: !!bridge.waitEnabled,
+                hasMixedStream: !!bridge.mixedStream
+            });
+
+            window.__iuVoiceBridge = bridge;
+            return bridge;
+        };
+
+        window.__iuInstallVoiceBridge = installBridge;
+    };
+
+    await chatPage.addInitScript(bridgeInstaller);
+    await chatPage.evaluate(bridgeInstaller);
+
+    return chatPage.evaluate(async () => {
+        if (!window.__iuInstallVoiceBridge) {
+            throw new Error('Voice bridge bootstrap missing');
+        }
+        const bridge = await window.__iuInstallVoiceBridge();
+        return bridge.getState ? bridge.getState() : { installed: true };
+    });
+}
+
+async function setChatGPTSyntheticWaitEnabled(payload = {}) {
+    if (!chatPage || chatPage.isClosed()) {
+        return { success: false, error: 'ChatGPT page unavailable' };
+    }
+
+    try {
+        await ensureChatGPTVoiceBridge();
+        const enabled = !!payload.enabled;
+        const mode = String(payload.mode || 'hold').trim().toLowerCase() === 'interrupt' ? 'interrupt' : 'hold';
+        const result = await chatPage.evaluate(async ({ enabled, mode }) => {
+            const bridge = window.__iuVoiceBridge || await window.__iuInstallVoiceBridge?.();
+            if (!bridge?.setWaitEnabled) {
+                throw new Error('Voice bridge not ready');
+            }
+            return bridge.setWaitEnabled(enabled, mode);
+        }, { enabled, mode });
+        return { success: true, state: result };
+    } catch (error) {
+        console.error('❌ [ChatGPT VoiceBridge] Failed to set synthetic wait:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+async function disableChatGPTVoiceBridge() {
+    if (!chatPage || chatPage.isClosed()) return { success: false, error: 'ChatGPT page unavailable' };
+    try {
+        const result = await chatPage.evaluate(async () => {
+            const bridge = window.__iuVoiceBridge;
+            if (!bridge?.teardown) return { restored: false, skipped: true };
+            return bridge.teardown();
+        });
+        return { success: true, state: result };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+async function recoverChatPageIfNeeded() {
     // Recovery logic for closed/navigated pages
     if (!chatPage || chatPage.isClosed()) {
         console.log('⚠️ chatPage was missing or closed. Attempting recovery...');
@@ -4577,119 +4592,205 @@ ipcMain.handle('conversation-control', async (event, action, options = {}) => {
     }
 
     if (!chatPage) {
-        console.error('❌ Error: ChatGPT window/page not found.');
-        return { success: false, error: 'ChatGPT not initialized or window closed' };
+        throw new Error('ChatGPT not initialized or window closed');
+    }
+}
+
+async function startChatGPTVoiceConversation(options = {}) {
+    const { isSimpleMode, skipGreeting = false } = options;
+    void isSimpleMode;
+
+    await recoverChatPageIfNeeded();
+
+    console.log('🔍 Starting voice conversation FIRST, then injecting prompt...');
+
+    const selectors = [
+        'button[data-testid="composer-speech-button"]',
+        'button[aria-label="Start Voice"]',
+        'button[aria-label="Iniciar voz"]',
+        'button:has(use[href*="f8aa74"])'
+    ];
+
+    let startBtn = null;
+    let attempts = 0;
+    const maxAttempts = 10;
+
+    while (attempts < maxAttempts) {
+        console.log(`🔍 Searching for "Start Voice" button (Attempt ${attempts + 1})...`);
+        for (const sel of selectors) {
+            try {
+                const locator = chatPage.locator(sel);
+                if (await locator.count() > 0 && await locator.isVisible()) {
+                    console.log(`✅ Found button with selector: ${sel}`);
+                    startBtn = locator.first();
+                    break;
+                }
+            } catch (e) { }
+        }
+
+        if (startBtn) break;
+
+        attempts++;
+        await chatPage.waitForTimeout(500);
+    }
+
+    if (!startBtn) {
+        console.warn('⚠️ "Start Voice" button NOT found.');
+        return { success: false, error: 'Start button not found in current view' };
+    }
+
+    await startBtn.click();
+    console.log('🖱️ Clicked "Start Voice" successfully');
+    await chatPage.waitForTimeout(1500);
+
+    if (!skipGreeting) {
+        console.log('✍️ Sending greeting context...');
+        const composer = chatPage.locator('#prompt-textarea');
+        if (await composer.count() > 0) {
+            const recentContext = contextManager.getRecentContextSummary(3);
+            let greetingMsg = 'El usuario podría querer algo a continuación. Acabo de iniciar el chat de voz, saludalo!';
+
+            if (recentContext) {
+                greetingMsg = `[Contexto previo del chat de texto]:\n${recentContext}\n\nEl usuario acaba de activar el modo voz. Úsalos como contexto.`;
+                console.log('🧠 [Voice] Injecting context:', recentContext.substring(0, 50) + '...');
+            }
+
+            await composer.fill(greetingMsg);
+            await chatPage.waitForTimeout(300);
+            const sendBtn = chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
+            if (await sendBtn.count() > 0 && await sendBtn.isEnabled()) {
+                await sendBtn.click();
+            } else {
+                await chatPage.keyboard.press('Enter');
+            }
+            console.log('✅ Greeting context sent');
+        }
+    }
+
+    startSmartConversationMonitoring();
+    return { success: true, state: 'active' };
+}
+
+async function stopChatGPTVoiceConversation() {
+    await recoverChatPageIfNeeded();
+    console.log('🔍 Stopping voice conversation...');
+    stopSmartConversationMonitoring();
+
+    const stopSelectors = [
+        'button[aria-label="End Voice"]',
+        'button[aria-label="Terminar voz"]',
+        'button[aria-label="Finalizar voz"]'
+    ];
+
+    let stopped = false;
+    for (const sel of stopSelectors) {
+        const stopBtn = chatPage.locator(sel);
+        if (await stopBtn.count() > 0) {
+            await stopBtn.first().click();
+            stopped = true;
+            break;
+        }
+    }
+
+    if (!stopped) {
+        await chatPage.keyboard.press('Escape');
+    }
+    return { success: true, state: 'idle' };
+}
+
+async function forceInterruptChatGPTVoice() {
+    await recoverChatPageIfNeeded();
+
+    LoggingSwitch.uiux('turn_taking', 'force_interrupt_attempt');
+
+    const interruptSelectors = [
+        'button[aria-label*="Interrupt" i]',
+        'button[aria-label*="Pause" i]',
+        'button[aria-label*="Stop speaking" i]',
+        'button[aria-label*="Detener" i]',
+        'button[aria-label*="Pausar" i]',
+        'button[aria-label*="Interrump" i]'
+    ];
+
+    for (const sel of interruptSelectors) {
+        try {
+            const locator = chatPage.locator(sel);
+            if (await locator.count() > 0 && await locator.first().isVisible()) {
+                await locator.first().click();
+                LoggingSwitch.uiux('turn_taking', 'force_interrupt_selector_clicked', { selector: sel });
+                return { success: true, mode: 'selector', selector: sel };
+            }
+        } catch (_) {
+            // ignored
+        }
     }
 
     try {
+        await chatPage.keyboard.press('Escape');
+        LoggingSwitch.uiux('turn_taking', 'force_interrupt_escape_sent');
+        await chatPage.waitForTimeout(220);
+    } catch (_) {
+        // ignored
+    }
+
+    const bridgeDisabled = await disableChatGPTVoiceBridge();
+    LoggingSwitch.uiux('turn_taking', 'force_interrupt_bridge_disabled', {
+        success: !!bridgeDisabled.success,
+        error: bridgeDisabled.error || ''
+    });
+
+    const stopResult = await stopChatGPTVoiceConversation();
+    if (!stopResult.success) {
+        return { success: false, error: stopResult.error || 'Could not stop voice for interruption' };
+    }
+
+    await chatPage.waitForTimeout(280);
+    const startResult = await startChatGPTVoiceConversation({ skipGreeting: true });
+    LoggingSwitch.uiux('turn_taking', 'force_interrupt_restart_result', { success: !!startResult.success });
+    return startResult.success
+        ? { success: true, mode: 'restart' }
+        : { success: false, error: startResult.error || 'Could not restart voice after interruption' };
+}
+
+ipcMain.handle('conversation-control', async (event, action, options = {}) => {
+    console.log(`🎤 IPC received: conversation-control -> ${action}`, options);
+    const { isSimpleMode } = options;
+
+    try {
         if (action === 'start') {
-            console.log('🔍 Starting voice conversation FIRST, then injecting prompt...');
-
-            // Language-independent selectors (aria-labels change by locale)
-            const selectors = [
-                'button[data-testid="composer-speech-button"]',
-                'button[aria-label="Start Voice"]',
-                'button[aria-label="Iniciar voz"]',
-                'button:has(use[href*="f8aa74"])'  // SVG icon reference
-            ];
-
-            let startBtn = null;
-            let attempts = 0;
-            const maxAttempts = 10; // Wait up to 5 seconds (500ms * 10)
-
-            while (attempts < maxAttempts) {
-                console.log(`🔍 Searching for "Start Voice" button (Attempt ${attempts + 1})...`);
-                for (const sel of selectors) {
-                    try {
-                        const locator = chatPage.locator(sel);
-                        if (await locator.count() > 0 && await locator.isVisible()) {
-                            console.log(`✅ Found button with selector: ${sel}`);
-                            startBtn = locator.first();
-                            break;
-                        }
-                    } catch (e) { }
-                }
-
-                if (startBtn) break;
-
-                attempts++;
-                await chatPage.waitForTimeout(500); // Wait between polls
-            }
-
-            if (startBtn) {
-                // Click "Start Voice"
-                await startBtn.click();
-                console.log('🖱️ Clicked "Start Voice" successfully');
-
-                // Wait for voice UI to initialize
-                await chatPage.waitForTimeout(1500);
-
-                // Send greeting message as text
-                console.log('✍️ Sending greeting context...');
-                const composer = chatPage.locator('#prompt-textarea');
-                if (await composer.count() > 0) {
-                    // INJECT RECENT CONTEXT
-                    const recentContext = contextManager.getRecentContextSummary(3);
-                    let greetingMsg = 'El usuario podría querer algo a continuación. Acabo de iniciar el chat de voz, saludalo!';
-
-                    if (recentContext) {
-                        greetingMsg = `[Contexto previo del chat de texto]:\n${recentContext}\n\nEl usuario acaba de activar el modo voz. Úsalos como contexto.`;
-                        console.log('🧠 [Voice] Injecting context:', recentContext.substring(0, 50) + '...');
-                    }
-
-                    await composer.fill(greetingMsg);
-
-                    // Use send button click instead of Enter
-                    await chatPage.waitForTimeout(300);
-                    const sendBtn = chatPage.locator('#composer-submit-button, button[data-testid="send-button"]');
-                    if (await sendBtn.count() > 0 && await sendBtn.isEnabled()) {
-                        await sendBtn.click();
-                    } else {
-                        await chatPage.keyboard.press('Enter');
-                    }
-                    console.log('✅ Greeting context sent');
-                }
-
-                // Start monitoring for transcription text
-                startSmartConversationMonitoring();
-
-                return { success: true, state: 'active' };
-            }
-
-            console.warn('⚠️ "Start Voice" button NOT found.');
-            return { success: false, error: 'Start button not found in current view' };
-
+            return startChatGPTVoiceConversation({ isSimpleMode });
         } else if (action === 'stop') {
-            console.log('🔍 Stopping voice conversation...');
-            stopSmartConversationMonitoring();
-
-            // Language-independent stop selectors
-            const stopSelectors = [
-                'button[aria-label="End Voice"]',
-                'button[aria-label="Terminar voz"]',
-                'button[aria-label="Finalizar voz"]'
-            ];
-
-            let stopped = false;
-            for (const sel of stopSelectors) {
-                const stopBtn = chatPage.locator(sel);
-                if (await stopBtn.count() > 0) {
-                    await stopBtn.first().click();
-                    stopped = true;
-                    break;
-                }
-            }
-
-            if (!stopped) {
-                await chatPage.keyboard.press('Escape');
-            }
-            return { success: true, state: 'idle' };
+            return stopChatGPTVoiceConversation();
         }
 
     } catch (e) {
         console.error('❌ Conversation action failed:', e);
         return { success: false, error: e.message };
     }
+});
+
+ipcMain.handle('chatgpt-force-interrupt', async () => {
+    try {
+        const result = await forceInterruptChatGPTVoice();
+        return result;
+    } catch (error) {
+        LoggingSwitch.uiux('turn_taking', 'force_interrupt_error', { error: error.message || 'unknown' });
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('chatgpt-set-synthetic-wait', async (event, payload = {}) => {
+    const enabled = !!payload.enabled;
+    const mode = String(payload.mode || 'hold').trim().toLowerCase() === 'interrupt' ? 'interrupt' : 'hold';
+    LoggingSwitch.uiux('turn_taking', 'bridge_toggle_requested', { enabled, mode });
+    const result = await setChatGPTSyntheticWaitEnabled({ enabled, mode });
+    LoggingSwitch.uiux('turn_taking', 'bridge_toggle_result', {
+        enabled,
+        mode,
+        success: !!result.success,
+        error: result.error || ''
+    });
+    return result;
 });
 
 // ============================================================
@@ -4770,6 +4871,10 @@ ipcMain.handle('activate-thinking-mode', async (event) => {
 let conversationMonitorInterval = null;
 let lastLoggedUserContent = '';
 let lastLoggedAssistantContent = '';
+let lastVoiceActivityHint = {
+    userDetectedByChatGPT: false,
+    assistantStreaming: false
+};
 
 // Track pending actions to avoid duplicates
 let isActionPending = false;
@@ -4784,12 +4889,16 @@ function startSmartConversationMonitoring() {
     lastLoggedAssistantContent = '';
     isActionPending = false;
     lastImplicitActionContent = '';
+    lastVoiceActivityHint = {
+        userDetectedByChatGPT: false,
+        assistantStreaming: false
+    };
 
-    // --- Stability tracking (Problema 2: One prompt per full turn) ---
+    // --- Stability tracking (One observed turn per stable completion) ---
     // The assistant streams in chunks arriving BEFORE user text is available.
     // Strategy: poll fast for transcript streaming, count consecutive polls where assistant text
     // does NOT change. When stable for STABLE_POLLS_REQUIRED consecutive polls
-    // AND we have new content → the response stream ended → fire ONE Brain call.
+    // AND we have new content → the response stream ended → publish the final text to UI/context.
     let lastSeenAssistantText = '';
     let assistantStableCount = 0;
     const POLL_MS = 80;
@@ -4822,19 +4931,37 @@ function startSmartConversationMonitoring() {
 
                 const userText = extractText(userNode).trim();
                 const assistText = extractText(assistNode).trim();
+                const normalizedUser = userText.toLowerCase();
+                const normalizedAssistant = assistText.toLowerCase();
 
                 // Note: ChatGPT uses Unicode ellipsis (…) in "Transcribing…"
                 const userStable = userText.length > 0 && !userText.startsWith('Transcribing');
                 const assistStable = assistText.length > 0 && !assistText.startsWith('Thinking');
+                const userDetectedByChatGPT = normalizedUser.startsWith('transcribing');
+                const assistantStreaming = normalizedAssistant.startsWith('thinking') || (!assistStable && assistText.length > 0);
 
                 return {
                     user: { text: userText, isStable: userStable },
                     assistant: { text: assistText, isStable: assistStable },
                     isNewUser: userText !== lastUser,
                     isNewAssistant: assistText !== lastAssistant,
+                    activityHint: {
+                        userDetectedByChatGPT,
+                        assistantStreaming
+                    },
                     debug: { userCount: userNodes.length, assistCount: assistNodes.length }
                 };
             }, { lastUser: lastLoggedUserContent, lastAssistant: lastLoggedAssistantContent });
+
+            if (
+                state.activityHint.userDetectedByChatGPT !== lastVoiceActivityHint.userDetectedByChatGPT ||
+                state.activityHint.assistantStreaming !== lastVoiceActivityHint.assistantStreaming
+            ) {
+                lastVoiceActivityHint = { ...state.activityHint };
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('voice-activity-hint', lastVoiceActivityHint);
+                }
+            }
 
             // ── 1. USER TEXT: capture for UI & memory, but NO Brain call yet ──
             // We wait until the full turn is complete (assistant stable) before
@@ -4844,9 +4971,6 @@ function startSmartConversationMonitoring() {
                 console.log('🗣️ [User] Captured:', lastLoggedUserContent.substring(0, 50) + '...');
 
                 // UI Feedback immediately
-                if (chatWindow && !chatWindow.isDestroyed()) {
-                    chatWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
-                }
                 if (narrationWindow && !narrationWindow.isDestroyed()) {
                     narrationWindow.webContents.send('voice-text', { role: 'user', text: lastLoggedUserContent });
                 }
@@ -4877,9 +5001,6 @@ function startSmartConversationMonitoring() {
                     // UI feedback as stream progresses (good UX — shows live text)
                     const lastClean = lastLoggedAssistantContent.replace(/\s+/g, ' ').trim();
                     if (cleanAsst !== lastClean) {
-                        if (chatWindow && !chatWindow.isDestroyed()) {
-                            chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
-                        }
                         if (narrationWindow && !narrationWindow.isDestroyed()) {
                             narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                         }
@@ -4898,7 +5019,7 @@ function startSmartConversationMonitoring() {
                     lastLoggedAssistantContent = state.assistant.text;
                     assistantStableCount = 0;
 
-                    console.log('✅ [Turn Complete] Stream ended. Firing ONE Brain prompt.');
+                    console.log('✅ [Turn Complete] Stream ended. Publishing final voice text.');
                     console.log('   👤 User   :', lastLoggedUserContent.substring(0, 60));
                     console.log('   🤖 Asst   :', cleanAsst.substring(0, 60));
 
@@ -4906,9 +5027,6 @@ function startSmartConversationMonitoring() {
                     contextManager.addMessage('assistant', state.assistant.text, 'voice_transcription');
 
                     // Final UI update for assistant (ensure last chunk is shown)
-                    if (chatWindow && !chatWindow.isDestroyed()) {
-                        chatWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
-                    }
                     if (narrationWindow && !narrationWindow.isDestroyed()) {
                         narrationWindow.webContents.send('voice-text', { role: 'assistant', text: state.assistant.text });
                     }
@@ -4927,49 +5045,14 @@ function startSmartConversationMonitoring() {
                         } catch (e) { }
                     }
 
-                    // ── ONE Brain call per turn: user intent + assistant context ──
+                    // In custom GPT voice mode, polling is display-only:
+                    // actions and summaries must come through direct GPT function calls.
                     if (LearningAgent.isLearning) {
-                        console.log('🎓 [Learning] Skipping action planner during learning mode.');
-                        isActionPending = false;
-                    } else if (!isActionPending && actionPlanner && lastLoggedUserContent) {
-                        isActionPending = true;
-                        const relevantContext = await contextManager.getRelevantContext(lastLoggedUserContent);
-
-                        // Build combined prompt: user message is primary, assistant response
-                        // is appended as context so the planner understands what already happened.
-                        const combinedPrompt = lastLoggedUserContent +
-                            (cleanAsst ? `\n\n[Respuesta del asistente de voz]: "${cleanAsst}"` : '');
-
-                        const plan = await actionPlanner.planFromExplicit(combinedPrompt, {
-                            recent: contextManager.getHistoryForAPI(5),
-                            longTerm: relevantContext.longTerm
-                        });
-
-                        if (plan && mainWindow) {
-                            if (plan.type === 'play_agario') {
-                                console.log('🎯 [Action] Auto-playing AgarIO');
-                                if (browserAgent) {
-                                    browserAgent.launchAgarIO(plan.nickname).finally(() => { isActionPending = false; });
-                                } else { isActionPending = false; }
-                            } else if (plan.type === 'schedule') {
-                                console.log('🎯 [Action] Auto-scheduling reminder');
-                                if (brain) {
-                                    const date = new Date(Date.now() + (plan.minutes * 60 * 1000));
-                                    brain.scheduleTask(plan.task, date);
-                                }
-                                isActionPending = false;
-                            } else if (screenAgent) {
-                                console.log('🎯 [Action] Auto-executing screen plan:', plan.goal);
-                                startManagedScreenAction(plan.goal, plan.app, plan.stepsHint, { source: 'voice_auto' })
-                                    .finally(() => { isActionPending = false; });
-                            } else {
-                                isActionPending = false;
-                            }
-                        } else {
-                            console.log('ℹ️ [Turn] No action needed for this turn.');
-                            isActionPending = false;
-                        }
+                        console.log('🎓 [Learning] Voice polling completed a turn during learning mode.');
+                    } else if (lastLoggedUserContent) {
+                        console.log('🧠 [VoicePolling] Observed complete turn. No backend action is executed from polling.');
                     }
+                    isActionPending = false;
                 }
             } else {
                 // Assistant not yet stable ("Thinking…", "Transcribing…") → reset counter
@@ -4987,6 +5070,13 @@ function stopSmartConversationMonitoring() {
         clearInterval(conversationMonitorInterval);
         conversationMonitorInterval = null;
         console.log('🔇 [Smart Monitor] Stopped.');
+    }
+    lastVoiceActivityHint = {
+        userDetectedByChatGPT: false,
+        assistantStreaming: false
+    };
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('voice-activity-hint', lastVoiceActivityHint);
     }
 }
 
@@ -5082,10 +5172,6 @@ function startVoiceStateMonitoring() {
                     mainWindow.webContents.send('voice-state-changed', state);
                 }
 
-                // Unified Chat: Update chat window UI
-                if (chatWindow && !chatWindow.isDestroyed()) {
-                    chatWindow.webContents.send('voice-state', state);
-                }
             }
         } catch (e) {
             // Silently fail
@@ -5216,17 +5302,17 @@ ipcMain.handle('get-intent-predictions', async (event, data) => {
 ipcMain.handle('execute-explicit-action', async (event, userText) => {
     console.log('🎯 [Action] Explicit action request:', userText.substring(0, 60));
 
-    if (!actionPlanner || !screenAgent) {
+    if (!screenAgent) {
         return { success: false, error: 'Action system not initialized' };
     }
 
     try {
-        // Step 1: Plan the action
-        const relevantContext = await contextManager.getRelevantContext(userText);
-        const plan = await actionPlanner.planFromExplicit(userText, {
-            recent: contextManager.getHistoryForAPI(10),
-            longTerm: relevantContext.longTerm
+        const actionIntent = await planUnifiedActionIntent(userText, {
+            recentLimit: 10,
+            allowReply: false,
+            mode: 'explicit_action'
         });
+        const plan = actionIntent?.kind === 'action' ? actionIntent.action : null;
 
         if (!plan) {
             return { success: false, error: 'No actionable intent detected' };
@@ -5446,7 +5532,7 @@ async function handlePhoneBridgeMessage(msg) {
 }
 
 /**
- * Handle text chat from phone — same pipeline as chat-send-message IPC
+ * Handle text chat from phone for remote control.
  */
 async function handlePhoneChat(payload) {
     const text = payload?.text;
@@ -5474,88 +5560,112 @@ async function handlePhoneChat(payload) {
     }
 
     try {
-        const relevantContext = await contextManager.getRelevantContext(text);
-        const LearningAgent = require('./LearningAgent');
-        const relevantLearned = LearningAgent.findRelevantWorkflows(text, 3);
-
-        let systemPrompt = `Eres U, un asistente digital conciso y eficaz. El usuario te escribe desde su teléfono para controlar su computador remotamente.
-
-Si el usuario pide ejecutar algo en su computador (abrir apps, enviar mensajes, buscar algo, etc.), responde brevemente confirmando lo que harás y llama la función execute_screen_action.
-
-Si solo conversa o pregunta algo, responde de forma breve y útil. Máximo 2-3 oraciones.
-Responde en español.`;
-
-        if (relevantLearned && relevantLearned.length > 0) {
-            const list = relevantLearned.map((wf, i) => {
-                return `${i + 1}. ${wf.workflowName}\n   Resumen: ${wf.summary}\n   Estilo: ${wf.executionStyle}`;
-            }).join('\n');
-            systemPrompt += `\n\nAPRENDIZAJES RELEVANTES DEL USUARIO:\n${list}`;
-        }
-
-        if (relevantContext.longTerm) {
-            systemPrompt += `\n\nMEMORIA A LARGO PLAZO:\n${relevantContext.longTerm}`;
-        }
-
-        const history = contextManager.getHistoryForAPI(20);
-
-        const response = await ModelSwitch.chatCompletion({
-            messages: [
-                { role: 'system', content: systemPrompt },
-                ...history
-            ],
-            tools: actionPlanner ? actionPlanner.tools : undefined,
-            tool_choice: actionPlanner ? 'auto' : undefined
+        const actionIntent = await planUnifiedActionIntent(text, {
+            recentLimit: 20,
+            allowReply: true,
+            mode: 'phone_remote'
         });
-
-        const message = response.choices[0].message;
-        const reply = message.content || '';
+        const reply = String(actionIntent?.reply || '').trim();
 
         // Check for action
-        if (message.tool_calls && message.tool_calls.length > 0) {
-            const call = message.tool_calls[0];
-            if (call.function.name === 'execute_screen_action') {
-                const args = JSON.parse(call.function.arguments);
-                console.log(`📱 [PhoneBridge] Action from phone: ${args.goal}`);
+        if (actionIntent?.kind === 'action' && actionIntent.action?.type === 'screen_action') {
+            const action = actionIntent.action;
+            console.log(`📱 [PhoneBridge] Action from phone: ${action.goal}`);
 
-                contextManager.addMessage('assistant', reply || null, 'phone_api', {
-                    tool_calls: message.tool_calls
-                });
-                contextManager.addMessage('tool', `Acción iniciada: ${args.goal} en ${args.app}`, 'action_result', {
-                    tool_call_id: call.id,
-                    name: call.function.name
-                });
+            contextManager.addMessage('assistant', reply || null, 'phone_api');
+            contextManager.addMessage('tool', `Acción iniciada: ${action.goal} en ${action.app}`, 'action_result', {
+                name: 'execute_screen_action'
+            });
 
-                // Send reply + action to phone
-                phoneBridgeSend({
-                    type: 'phone_reply',
-                    deviceId: phoneBridgeDeviceId,
-                    payload: {
-                        reply: reply || `Entendido. Voy a ${args.goal.toLowerCase()}.`,
-                        action: args
+            phoneBridgeSend({
+                type: 'phone_reply',
+                deviceId: phoneBridgeDeviceId,
+                payload: {
+                    reply: reply || `Entendido. Voy a ${action.goal.toLowerCase()}.`,
+                    action: {
+                        goal: action.goal,
+                        app: action.app,
+                        steps_hint: action.stepsHint
                     }
-                });
-
-                // Send face state: executing
-                phoneBridgeSend({
-                    type: 'face_state',
-                    deviceId: phoneBridgeDeviceId,
-                    payload: { state: 'executing' }
-                });
-
-                // Execute on Mac
-                if (mainWindow) {
-                    mainWindow.webContents.send('action-confirm-request', {
-                        goal: args.goal,
-                        app: args.app,
-                        stepsHint: args.steps_hint,
-                        source: 'phone'
-                    });
                 }
+            });
 
-                // Sync context
-                syncContextToServer();
-                return;
+            phoneBridgeSend({
+                type: 'face_state',
+                deviceId: phoneBridgeDeviceId,
+                payload: { state: 'executing' }
+            });
+
+            if (mainWindow) {
+                mainWindow.webContents.send('action-confirm-request', {
+                    goal: action.goal,
+                    app: action.app,
+                    stepsHint: action.stepsHint,
+                    source: 'phone'
+                });
             }
+
+            syncContextToServer();
+            return;
+        }
+
+        if (actionIntent?.kind === 'action' && actionIntent.action?.type === 'schedule') {
+            const action = actionIntent.action;
+            if (!brain) {
+                throw new Error('Brain offline');
+            }
+            const date = new Date(Date.now() + (action.minutes * 60 * 1000));
+            brain.scheduleTask(action.task, date);
+
+            phoneBridgeSend({
+                type: 'phone_reply',
+                deviceId: phoneBridgeDeviceId,
+                payload: {
+                    reply: reply || `Listo. Programé el recordatorio para ${action.task}.`
+                }
+            });
+            phoneBridgeSend({
+                type: 'face_state',
+                deviceId: phoneBridgeDeviceId,
+                payload: { state: 'idle' }
+            });
+
+            contextManager.addMessage('assistant', reply || null, 'phone_api');
+            contextManager.addMessage('tool', `Recordatorio programado: ${action.task}`, 'action_result', {
+                name: 'schedule_reminder'
+            });
+
+            syncContextToServer();
+            return;
+        }
+
+        if (actionIntent?.kind === 'action' && actionIntent.action?.type === 'play_agario') {
+            if (!browserAgent) {
+                throw new Error('BrowserAgent not initialized');
+            }
+            const action = actionIntent.action;
+            browserAgent.launchAgarIO(action.nickname);
+
+            phoneBridgeSend({
+                type: 'phone_reply',
+                deviceId: phoneBridgeDeviceId,
+                payload: {
+                    reply: reply || 'Listo. Dejé Agar.io preparado.'
+                }
+            });
+            phoneBridgeSend({
+                type: 'face_state',
+                deviceId: phoneBridgeDeviceId,
+                payload: { state: 'executing' }
+            });
+
+            contextManager.addMessage('assistant', reply || null, 'phone_api');
+            contextManager.addMessage('tool', 'Agar.io preparado desde el telefono', 'action_result', {
+                name: 'play_agario'
+            });
+
+            syncContextToServer();
+            return;
         }
 
         // Regular reply
@@ -5572,9 +5682,7 @@ Responde en español.`;
             payload: { state: 'idle' }
         });
 
-        contextManager.addMessage('assistant', reply || null, 'phone_api', {
-            tool_calls: message.tool_calls
-        });
+        contextManager.addMessage('assistant', reply || null, 'phone_api');
 
         // Sync context
         syncContextToServer();
