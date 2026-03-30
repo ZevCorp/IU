@@ -176,9 +176,11 @@ class AgentRuntime {
             deletedMetas: [],
             attachments: [],
             detachments: [],
+            financeUpdates: [],
             actions: []
         };
         const toolEvents = [];
+        const failures = [];
         const toolRegistry = this._createToolRegistry({ emit, changes, runId });
         const workspaceDigest = this._buildWorkspaceDigest();
 
@@ -199,7 +201,14 @@ class AgentRuntime {
                     '- Solo crea, edita, anida o borra notas/metas cuando la intencion del usuario sea clara.',
                     '- Si el usuario pide un listado o panorama general, intenta resolverlo con una sola tool de listado o búsqueda; no abras cada elemento uno por uno salvo que haga falta.',
                     '- Evita tool calls redundantes cuando ya tengas datos suficientes para responder.',
-                    '- Si vas a usar tools, puedes escribir antes una sola frase breve, natural y descriptiva sobre el siguiente paso. Debe sonar humana, concreta y util para el usuario.',
+                    '- Si vas a usar tools, puedes escribir mensajes intermedios libres antes de un bloque de ejecucion cuando ayuden al usuario.',
+                    '- Si explicas algo antes de ejecutar, habla de la fase o del bloque completo que sigue, no describas cada tool ni cada cambio individual.',
+                    '- Si no hace falta explicar nada, puedes ejecutar directamente sin escribir mensajes intermedios.',
+                    '- En tareas compuestas o largas, suele ser buena idea escribir una frase breve antes del primer bloque importante para orientar al usuario.',
+                    '- Si vas a encadenar varias tools y tu mensaje quedaria vacio, prefiere escribir una explicacion corta de lo que vas a hacer primero.',
+                    '- Buen ejemplo de mensaje intermedio: "Voy a revisar las metas que ya tienes, elegiré una direccion clara y despues crearé las notas necesarias para sostenerla."',
+                    '- Otro buen ejemplo: "Primero voy a abrir tus metas para elegir la más alineada con tu app, y después bajaré eso a un plan ejecutable en notas anidadas."',
+                    '- Evita mensajes repetitivos y demasiado granulares como "Voy a crear una nota..." antes de cada creacion.',
                     '- Cuando el usuario pida varios elementos nuevos, intenta que sean distintos entre si y evita duplicados tontos.',
                     '- Si ya hiciste cambios, dilo claro y preciso al final.',
                     '- Responde en español.',
@@ -217,6 +226,7 @@ class AgentRuntime {
 
         const maxTurns = Math.max(4, Math.min(10, Number(options.maxTurns || 8)));
         let assistantReply = '';
+        let emptyResponseRetries = 0;
 
         for (let turn = 1; turn <= maxTurns; turn += 1) {
             const response = await this.modelSwitch.chatCompletion({
@@ -235,15 +245,35 @@ class AgentRuntime {
 
             if (!Array.isArray(message.tool_calls) || message.tool_calls.length === 0) {
                 assistantReply = String(message.content || '').trim();
+                if (!assistantReply) {
+                    if (emptyResponseRetries < 1 && turn < maxTurns) {
+                        emptyResponseRetries += 1;
+                        messages.push({
+                            role: 'system',
+                            content: 'Tu turno anterior salió vacío. Reintenta ahora con una respuesta útil: responde normalmente o usa tools si hacen falta.'
+                        });
+                        continue;
+                    }
+                    failures.push('El modelo no devolvió una respuesta útil para esta solicitud.');
+                }
                 break;
             }
 
-            const assistantStatus = this._extractAssistantStatusMessage(message.content);
+            let assistantStatus = this._extractAssistantStatusMessage(message.content);
+            if (!assistantStatus && this._shouldRequestExecutionPreamble({
+                prompt,
+                turn,
+                toolCalls: message.tool_calls
+            })) {
+                assistantStatus = await this._generateExecutionPreamble({
+                    prompt,
+                    toolCalls: message.tool_calls
+                });
+            }
             if (assistantStatus) {
                 emit({
-                    type: 'status',
+                    type: 'assistant_message',
                     phase: 'execution',
-                    visibility: 'public',
                     message: assistantStatus
                 });
             }
@@ -261,15 +291,12 @@ class AgentRuntime {
                 }
 
                 const args = this._parseToolArgs(call?.function?.arguments);
-                const statusMessage = this._buildStatusForToolStart(toolName, args);
-                if (statusMessage && !assistantStatus) {
-                    emit({
-                        type: 'status',
-                        phase: 'execution',
-                        visibility: 'public',
-                        message: statusMessage
-                    });
-                }
+                emit({
+                    type: 'tool_call',
+                    phase: 'start',
+                    toolName,
+                    args: this._buildToolCallPreview(toolName, args)
+                });
 
                 let result;
                 try {
@@ -280,6 +307,17 @@ class AgentRuntime {
                         error: error?.message || `Falló ${toolName}`
                     };
                 }
+                if (result?.ok === false) {
+                    failures.push(String(result?.error || `Falló ${toolName}`));
+                }
+                emit({
+                    type: 'tool_call',
+                    phase: 'result',
+                    toolName,
+                    ok: result?.ok !== false,
+                    args: this._buildToolCallPreview(toolName, args),
+                    result: this._buildToolCallPreview(toolName, result)
+                });
 
                 const publicEvent = this._buildPublicToolEvent(toolName, args, result);
                 if (publicEvent) {
@@ -300,7 +338,7 @@ class AgentRuntime {
         }
 
         if (!assistantReply) {
-            assistantReply = this._fallbackAssistantReply(changes);
+            assistantReply = this._fallbackAssistantReply(changes, failures);
         }
 
         const changeSummary = this._buildChangeSummary(changes);
@@ -345,14 +383,25 @@ class AgentRuntime {
             })),
             metas: metas.slice(0, 40).map((meta) => ({
                 id: String(meta?.id || ''),
+                kind: String(meta?.kind || 'generic'),
+                isFixed: Boolean(meta?.isFixed),
                 title: String(meta?.title || '').trim() || 'Meta sin titulo',
                 description: this.safeSliceText(meta?.description || '', 180),
-                noteIds: Array.isArray(meta?.noteIds) ? meta.noteIds.slice(0, 16) : []
+                noteIds: Array.isArray(meta?.noteIds) ? meta.noteIds.slice(0, 16) : [],
+                finance: meta?.kind === 'finance'
+                    ? {
+                        pocketCount: Array.isArray(meta?.finance?.pockets) ? meta.finance.pockets.length : 0,
+                        totalBalance: (Array.isArray(meta?.finance?.pockets) ? meta.finance.pockets : []).reduce((sum, pocket) => sum + Number(pocket?.balance || 0), 0),
+                        expectedIncome: Number(meta?.finance?.forecast?.expectedIncome || 0),
+                        expectedExpenses: Number(meta?.finance?.forecast?.expectedExpenses || 0),
+                        horizonWeeks: Number(meta?.finance?.forecast?.horizonWeeks || 0)
+                    }
+                    : null
             }))
         };
     }
 
-    _createToolRegistry(context = {}) {
+    _createToolRegistry(registryContext = {}) {
         const handlers = new Map();
         const definitions = [];
         const register = (definition, handler) => {
@@ -372,7 +421,7 @@ class AgentRuntime {
                     }
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const limit = this._clampInt(args.limit, 12, 1, 60);
             const notes = this._getNotes()
                 .slice(0, limit)
@@ -394,7 +443,7 @@ class AgentRuntime {
                     required: ['query']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const query = String(args.query || '').trim();
             const limit = this._clampInt(args.limit, 8, 1, 24);
             const matches = this._searchNotes(query, limit);
@@ -419,7 +468,7 @@ class AgentRuntime {
                     required: ['title_query']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const titleQuery = String(args.title_query || '').trim();
             const note = this._findBestNoteByTitle(titleQuery);
             if (!note) return { ok: false, error: 'No encontré una nota con ese titulo.' };
@@ -443,7 +492,7 @@ class AgentRuntime {
                     required: ['note_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const noteId = String(args.note_id || '').trim();
             const maxChars = this._clampInt(args.max_chars, 12000, 200, 24000);
             const note = this._findNote(noteId);
@@ -474,21 +523,26 @@ class AgentRuntime {
                     required: ['title']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const requestedTitle = String(args.title || '').trim();
             const resolvedTitle = this._ensureUniqueNoteTitle(requestedTitle);
             const created = this.knowledgeService.createNote({
                 title: resolvedTitle,
-                body: args.body !== undefined ? String(args.body || '') : ''
+                body: args.body !== undefined ? String(args.body || '') : '',
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
             });
             const note = created?.note || created?.tab || null;
             if (!note?.id) return { ok: false, error: 'No pude crear la nota.' };
-            context.changes.createdNotes.push({ id: note.id, title: note.title || 'Sin titulo' });
+            registryContext.changes.createdNotes.push({ id: note.id, title: note.title || 'Sin titulo' });
             const metaId = String(args.meta_id || '').trim();
             if (metaId) {
-                const meta = this.knowledgeService.attachNoteToMeta(metaId, note.id, { source: 'manual' });
+                const meta = this.knowledgeService.attachNoteToMeta(metaId, note.id, {
+                    source: 'prompt_agent',
+                    runId: runtimeContext.runId
+                });
                 if (meta?.id) {
-                    context.changes.attachments.push({
+                    registryContext.changes.attachments.push({
                         metaId: meta.id,
                         metaTitle: meta.title || 'Meta sin titulo',
                         noteId: note.id,
@@ -516,7 +570,7 @@ class AgentRuntime {
                     required: ['note_id', 'text']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const noteId = String(args.note_id || '').trim();
             const text = String(args.text || '');
             const current = this._findNote(noteId);
@@ -525,9 +579,13 @@ class AgentRuntime {
             const nextBody = baseBody.trimEnd()
                 ? `${baseBody.replace(/\s+$/, '')}\n\n${text.trim()}`
                 : text.trim();
-            const updated = this.knowledgeService.updateNote(noteId, { body: nextBody });
+            const updated = this.knowledgeService.updateNote(noteId, {
+                body: nextBody,
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
             if (!updated?.note) return { ok: false, error: 'No pude agregar contenido a esa nota.' };
-            context.changes.updatedNotes.push({ id: updated.note.id, title: updated.note.title || 'Sin titulo' });
+            registryContext.changes.updatedNotes.push({ id: updated.note.id, title: updated.note.title || 'Sin titulo' });
             return {
                 ok: true,
                 note: this._summarizeNote(updated.note)
@@ -549,7 +607,7 @@ class AgentRuntime {
                     required: ['note_id', 'find_text', 'replace_with']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const noteId = String(args.note_id || '').trim();
             const findText = String(args.find_text || '');
             const replaceWith = String(args.replace_with || '');
@@ -560,9 +618,13 @@ class AgentRuntime {
                 return { ok: false, error: 'No encontré ese fragmento exacto dentro de la nota.' };
             }
             const nextBody = body.replace(findText, replaceWith);
-            const updated = this.knowledgeService.updateNote(noteId, { body: nextBody });
+            const updated = this.knowledgeService.updateNote(noteId, {
+                body: nextBody,
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
             if (!updated?.note) return { ok: false, error: 'No pude reemplazar el texto en esa nota.' };
-            context.changes.updatedNotes.push({ id: updated.note.id, title: updated.note.title || 'Sin titulo' });
+            registryContext.changes.updatedNotes.push({ id: updated.note.id, title: updated.note.title || 'Sin titulo' });
             return {
                 ok: true,
                 note: this._summarizeNote(updated.note)
@@ -584,13 +646,15 @@ class AgentRuntime {
                     required: ['note_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const updated = this.knowledgeService.updateNote(String(args.note_id || '').trim(), {
                 title: args.title,
-                body: args.body
+                body: args.body,
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
             });
             if (!updated?.note) return { ok: false, error: 'No encontré esa nota para actualizar.' };
-            context.changes.updatedNotes.push({ id: updated.note.id, title: updated.note.title || 'Sin titulo' });
+            registryContext.changes.updatedNotes.push({ id: updated.note.id, title: updated.note.title || 'Sin titulo' });
             return {
                 ok: true,
                 note: this._summarizeNote(updated.note)
@@ -610,11 +674,14 @@ class AgentRuntime {
                     required: ['note_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const note = this._findNote(String(args.note_id || '').trim());
-            const deleted = this.knowledgeService.deleteNote(String(args.note_id || '').trim());
+            const deleted = this.knowledgeService.deleteNote(String(args.note_id || '').trim(), {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
             if (!deleted) return { ok: false, error: 'No pude eliminar esa nota.' };
-            context.changes.deletedNotes.push({
+            registryContext.changes.deletedNotes.push({
                 id: String(args.note_id || '').trim(),
                 title: note?.title || 'Nota'
             });
@@ -633,7 +700,7 @@ class AgentRuntime {
                     }
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const limit = this._clampInt(args.limit, 12, 1, 40);
             const metas = this._getMetas()
                 .slice(0, limit)
@@ -655,7 +722,7 @@ class AgentRuntime {
                     required: ['query']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const query = String(args.query || '').trim();
             const limit = this._clampInt(args.limit, 8, 1, 24);
             const matches = this._searchMetas(query, limit);
@@ -680,7 +747,7 @@ class AgentRuntime {
                     required: ['title_query']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const titleQuery = String(args.title_query || '').trim();
             const meta = this._findBestMetaByTitle(titleQuery);
             if (!meta) return { ok: false, error: 'No encontré una meta con ese titulo.' };
@@ -703,7 +770,7 @@ class AgentRuntime {
                     required: ['meta_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const metaId = String(args.meta_id || '').trim();
             const meta = this._findMeta(metaId);
             if (!meta) return { ok: false, error: 'Meta no encontrada', meta_id: metaId };
@@ -734,13 +801,15 @@ class AgentRuntime {
                     required: ['title']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const meta = this.knowledgeService.createMeta({
                 title: String(args.title || '').trim(),
-                description: String(args.description || '').trim()
+                description: String(args.description || '').trim(),
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
             });
             if (!meta?.id) return { ok: false, error: 'No pude crear la meta.' };
-            context.changes.createdMetas.push({ id: meta.id, title: meta.title || 'Meta sin titulo' });
+            registryContext.changes.createdMetas.push({ id: meta.id, title: meta.title || 'Meta sin titulo' });
             return {
                 ok: true,
                 meta: this._summarizeMeta(meta)
@@ -762,17 +831,260 @@ class AgentRuntime {
                     required: ['meta_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const meta = this.knowledgeService.updateMeta(String(args.meta_id || '').trim(), {
                 title: args.title,
-                description: args.description
+                description: args.description,
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
             });
             if (!meta?.id) return { ok: false, error: 'No encontré esa meta para actualizar.' };
-            context.changes.updatedMetas.push({ id: meta.id, title: meta.title || 'Meta sin titulo' });
+            registryContext.changes.updatedMetas.push({ id: meta.id, title: meta.title || 'Meta sin titulo' });
             return {
                 ok: true,
                 meta: this._summarizeMeta(meta)
             };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'update_finance_instructions',
+                description: 'Actualiza el texto libre de la meta fija Finanzas. Úsalo para capturar reglas operativas, feedback y criterios futuros del agente financiero.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        instructions: { type: 'string', description: 'Nuevo texto completo de instrucciones.' }
+                    },
+                    required: ['meta_id', 'instructions']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.updateFinanceInstructions(String(args.meta_id || '').trim(), String(args.instructions || ''), {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
+            if (!meta?.id) return { ok: false, error: 'No pude actualizar las instrucciones de Finanzas.' };
+            registryContext.changes.financeUpdates.push({ type: 'instructions', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'create_finance_pocket',
+                description: 'Crea un bolsillo dentro de la meta fija Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        name: { type: 'string', description: 'Nombre del bolsillo.' },
+                        bank: { type: 'string', description: 'Banco o app bancaria.' },
+                        purpose: { type: 'string', description: 'Propósito del bolsillo.' },
+                        balance: { type: 'number', description: 'Saldo inicial.' }
+                    },
+                    required: ['meta_id', 'name']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.createFinancePocket(String(args.meta_id || '').trim(), {
+                name: String(args.name || '').trim(),
+                bank: String(args.bank || '').trim(),
+                purpose: String(args.purpose || '').trim(),
+                balance: Number(args.balance || 0)
+            }, {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
+            if (!meta?.id) return { ok: false, error: 'No pude crear ese bolsillo en Finanzas.' };
+            registryContext.changes.financeUpdates.push({ type: 'create_pocket', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'update_finance_pocket',
+                description: 'Edita un bolsillo existente de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo.' },
+                        name: { type: 'string', description: 'Nuevo nombre.' },
+                        bank: { type: 'string', description: 'Nuevo banco o app.' },
+                        purpose: { type: 'string', description: 'Nuevo propósito.' },
+                        balance: { type: 'number', description: 'Nuevo saldo absoluto.' }
+                    },
+                    required: ['meta_id', 'pocket_id']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.updateFinancePocket(String(args.meta_id || '').trim(), String(args.pocket_id || '').trim(), {
+                name: args.name,
+                bank: args.bank,
+                purpose: args.purpose,
+                balance: args.balance
+            }, {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
+            if (!meta?.id) return { ok: false, error: 'No pude actualizar ese bolsillo de Finanzas.' };
+            registryContext.changes.financeUpdates.push({ type: 'update_pocket', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'delete_finance_pocket',
+                description: 'Elimina un bolsillo de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo.' }
+                    },
+                    required: ['meta_id', 'pocket_id']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.deleteFinancePocket(String(args.meta_id || '').trim(), String(args.pocket_id || '').trim(), {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
+            if (!meta?.id) return { ok: false, error: 'No pude eliminar ese bolsillo de Finanzas.' };
+            registryContext.changes.financeUpdates.push({ type: 'delete_pocket', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'deposit_finance_pocket',
+                description: 'Carga dinero en un bolsillo de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo.' },
+                        amount: { type: 'number', description: 'Monto a cargar.' }
+                    },
+                    required: ['meta_id', 'pocket_id', 'amount']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.adjustFinancePocket(
+                String(args.meta_id || '').trim(),
+                String(args.pocket_id || '').trim(),
+                Number(args.amount || 0),
+                'deposit',
+                {
+                    source: 'prompt_agent',
+                    runId: runtimeContext.runId
+                }
+            );
+            if (!meta?.id) return { ok: false, error: 'No pude cargar dinero en ese bolsillo.' };
+            registryContext.changes.financeUpdates.push({ type: 'deposit_pocket', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'withdraw_finance_pocket',
+                description: 'Descarga dinero de un bolsillo de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo.' },
+                        amount: { type: 'number', description: 'Monto a descargar.' }
+                    },
+                    required: ['meta_id', 'pocket_id', 'amount']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.adjustFinancePocket(
+                String(args.meta_id || '').trim(),
+                String(args.pocket_id || '').trim(),
+                Number(args.amount || 0),
+                'withdraw',
+                {
+                    source: 'prompt_agent',
+                    runId: runtimeContext.runId
+                }
+            );
+            if (!meta?.id) return { ok: false, error: 'No pude descargar dinero de ese bolsillo.' };
+            registryContext.changes.financeUpdates.push({ type: 'withdraw_pocket', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'move_money_between_finance_pockets',
+                description: 'Mueve dinero entre dos bolsillos de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        from_pocket_id: { type: 'string', description: 'ID del bolsillo origen.' },
+                        to_pocket_id: { type: 'string', description: 'ID del bolsillo destino.' },
+                        amount: { type: 'number', description: 'Monto a mover.' }
+                    },
+                    required: ['meta_id', 'from_pocket_id', 'to_pocket_id', 'amount']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.moveMoneyBetweenFinancePockets(
+                String(args.meta_id || '').trim(),
+                String(args.from_pocket_id || '').trim(),
+                String(args.to_pocket_id || '').trim(),
+                Number(args.amount || 0),
+                {
+                    source: 'prompt_agent',
+                    runId: runtimeContext.runId
+                }
+            );
+            if (!meta?.id) return { ok: false, error: 'No pude mover dinero entre esos bolsillos.' };
+            registryContext.changes.financeUpdates.push({ type: 'move_between_pockets', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
+        });
+
+        register({
+            type: 'function',
+            function: {
+                name: 'update_finance_projection',
+                description: 'Actualiza ingresos previstos, gastos previstos y horizonte temporal de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas.' },
+                        expected_income: { type: 'number', description: 'Ingreso previsto para el horizonte.' },
+                        expected_expenses: { type: 'number', description: 'Gasto previsto para el horizonte.' },
+                        horizon_weeks: { type: 'integer', description: 'Horizonte en semanas.' },
+                        current_label: { type: 'string', description: 'Etiqueta de tiempo actual.' },
+                        future_label: { type: 'string', description: 'Etiqueta de tiempo futuro.' }
+                    },
+                    required: ['meta_id']
+                }
+            }
+        }, async (args = {}, runtimeContext = {}) => {
+            const meta = this.knowledgeService.updateFinanceProjection(String(args.meta_id || '').trim(), {
+                expectedIncome: args.expected_income,
+                expectedExpenses: args.expected_expenses,
+                horizonWeeks: args.horizon_weeks,
+                currentLabel: args.current_label,
+                futureLabel: args.future_label
+            }, {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
+            if (!meta?.id) return { ok: false, error: 'No pude actualizar la proyección de Finanzas.' };
+            registryContext.changes.financeUpdates.push({ type: 'update_projection', metaId: meta.id, title: meta.title || 'Finanzas' });
+            return { ok: true, meta: this._summarizeMeta(meta) };
         });
 
         register({
@@ -788,11 +1100,14 @@ class AgentRuntime {
                     required: ['meta_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const meta = this._findMeta(String(args.meta_id || '').trim());
-            const ok = this.knowledgeService.deleteMeta(String(args.meta_id || '').trim());
+            const ok = this.knowledgeService.deleteMeta(String(args.meta_id || '').trim(), {
+                source: 'prompt_agent',
+                runId: runtimeContext.runId
+            });
             if (!ok) return { ok: false, error: 'No pude eliminar esa meta.' };
-            context.changes.deletedMetas.push({
+            registryContext.changes.deletedMetas.push({
                 id: String(args.meta_id || '').trim(),
                 title: meta?.title || 'Meta'
             });
@@ -813,15 +1128,15 @@ class AgentRuntime {
                     required: ['meta_id', 'note_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const meta = this.knowledgeService.attachNoteToMeta(
                 String(args.meta_id || '').trim(),
                 String(args.note_id || '').trim(),
-                { source: 'manual' }
+                { source: 'prompt_agent', runId: runtimeContext.runId }
             );
             if (!meta?.id) return { ok: false, error: 'No pude anidar la nota en esa meta.' };
             const note = this._findNote(String(args.note_id || '').trim());
-            context.changes.attachments.push({
+            registryContext.changes.attachments.push({
                 metaId: meta.id,
                 metaTitle: meta.title || 'Meta sin titulo',
                 noteId: String(args.note_id || '').trim(),
@@ -847,14 +1162,15 @@ class AgentRuntime {
                     required: ['meta_id', 'note_id']
                 }
             }
-        }, async (args = {}) => {
+        }, async (args = {}, runtimeContext = {}) => {
             const meta = this.knowledgeService.detachNoteFromMeta(
                 String(args.meta_id || '').trim(),
-                String(args.note_id || '').trim()
+                String(args.note_id || '').trim(),
+                { source: 'prompt_agent', runId: runtimeContext.runId }
             );
             if (!meta?.id) return { ok: false, error: 'No pude sacar la nota de esa meta.' };
             const note = this._findNote(String(args.note_id || '').trim());
-            context.changes.detachments.push({
+            registryContext.changes.detachments.push({
                 metaId: meta.id,
                 metaTitle: meta.title || 'Meta sin titulo',
                 noteId: String(args.note_id || '').trim(),
@@ -874,7 +1190,7 @@ class AgentRuntime {
                     runId: runtimeContext.runId
                 });
                 if (result?.action) {
-                    context.changes.actions.push(result.action);
+                    registryContext.changes.actions.push(result.action);
                 }
                 return result || { ok: false, error: `No se pudo ejecutar ${actionTool.function.name}` };
             });
@@ -883,116 +1199,65 @@ class AgentRuntime {
         return { definitions, handlers };
     }
 
-    _buildStatusForToolStart(toolName, args = {}) {
-        const noteTitle = this._resolveNoteStatusLabel(args.note_id, args.title);
-        const metaTitle = this._resolveMetaStatusLabel(args.meta_id, args.title);
-        const noteText = this._formatStatusLabel(noteTitle, 'esa nota');
-        const metaText = this._formatStatusLabel(metaTitle, 'esa meta');
-        const query = String(args.query || args.title_query || '').trim();
-
-        if (toolName === 'search_notes') {
-            return query
-                ? `Estoy revisando tus notas para ubicar lo importante sobre "${this.safeSliceText(query, 80)}".`
-                : 'Estoy revisando tus notas para ubicar lo importante.';
-        }
-        if (toolName === 'find_note_by_title' || toolName === 'find_meta_by_title') {
-            return '';
-        }
-        if (toolName === 'list_notes' || toolName === 'list_metas') {
-            if (toolName === 'list_notes') {
-                return 'Estoy repasando tus notas para darte un panorama claro.';
-            }
-            return 'Estoy repasando tus metas para darte un panorama claro.';
-        }
-        if (toolName === 'get_note' || toolName === 'get_meta') {
-            if (toolName === 'get_note') {
-                return `Voy a abrir ${noteText} para trabajar con el contenido exacto.`;
-            }
-            return `Voy a abrir ${metaText} para revisar cómo está armada.`;
-        }
-        if (toolName === 'search_metas') {
-            return query
-                ? `Estoy revisando tus metas para encontrar lo relevante sobre "${this.safeSliceText(query, 80)}".`
-                : 'Estoy revisando tus metas para encontrar lo relevante.';
-        }
-        if (toolName === 'create_note') {
-            if (noteTitle) {
-                return `Voy a crear una nota nueva para dejar esto aterrizado como ${this._formatStatusLabel(noteTitle, 'una nota nueva')}.`;
-            }
-            return 'Voy a crear una nota nueva para dejar esto aterrizado.';
-        }
-        if (toolName === 'create_meta') {
-            if (metaTitle) {
-                return `Voy a crear una meta nueva para organizar esto como ${this._formatStatusLabel(metaTitle, 'una meta nueva')}.`;
-            }
-            return 'Voy a crear una meta nueva para organizar esto mejor.';
-        }
-        if (toolName === 'append_to_note') {
-            return `Voy a sumar ese contenido al final de ${noteText} sin tocar el resto.`;
-        }
-        if (toolName === 'replace_in_note') {
-            return `Estoy ajustando un fragmento puntual dentro de ${noteText}.`;
-        }
-        if (toolName === 'update_note') {
-            return `Voy a reescribir ${noteText} para dejarla alineada con lo que pediste.`;
-        }
-        if (toolName === 'update_meta') {
-            return `Ahora voy a actualizar ${metaText} para dejarla con el enfoque que pediste.`;
-        }
-        if (toolName === 'attach_note_to_meta') {
-            return `Estoy vinculando ${noteText} dentro de ${metaText} para que quede organizada en el mismo lugar.`;
-        }
-        if (toolName === 'detach_note_from_meta') {
-            return `Voy a sacar ${noteText} de ${metaText} para dejar esa estructura limpia.`;
-        }
-        if (toolName === 'delete_note') {
-            return `Voy a eliminar ${noteText} tal como lo pediste.`;
-        }
-        if (toolName === 'delete_meta') {
-            return `Voy a eliminar ${metaText} tal como lo pediste.`;
-        }
-        if (toolName === 'execute_screen_action') {
-            return 'Preparando la acción en tu computador.';
-        }
-        if (toolName === 'play_agario') {
-            return 'Preparando Agar.io.';
-        }
-        if (toolName === 'schedule_reminder') {
-            return 'Programando el recordatorio.';
-        }
-        return '';
-    }
-
     _extractAssistantStatusMessage(content) {
         const text = String(content || '').replace(/\s+/g, ' ').trim();
         if (!text) return '';
         return this.safeSliceText(text, 220);
     }
 
-    _resolveNoteStatusLabel(noteId, fallbackTitle) {
-        const id = String(noteId || '').trim();
-        if (id) {
-            const note = this._findNote(id);
-            if (note?.title) return note.title;
-        }
-        const title = String(fallbackTitle || '').trim();
-        return title || '';
+    _shouldRequestExecutionPreamble(options = {}) {
+        const prompt = String(options.prompt || '').trim();
+        const turn = Number(options.turn || 1);
+        const toolCalls = Array.isArray(options.toolCalls) ? options.toolCalls : [];
+        if (turn !== 1) return false;
+        if (toolCalls.length >= 2) return true;
+        if (prompt.length >= 140 && toolCalls.length >= 1) return true;
+        return false;
     }
 
-    _resolveMetaStatusLabel(metaId, fallbackTitle) {
-        const id = String(metaId || '').trim();
-        if (id) {
-            const meta = this._findMeta(id);
-            if (meta?.title) return meta.title;
+    async _generateExecutionPreamble(options = {}) {
+        if (!this.modelSwitch?.isReady?.({ capability: 'chat' })) {
+            return '';
         }
-        const title = String(fallbackTitle || '').trim();
-        return title || '';
-    }
 
-    _formatStatusLabel(label, fallback) {
-        const text = String(label || '').trim();
-        if (!text) return fallback;
-        return `"${this.safeSliceText(text, 80)}"`;
+        const prompt = String(options.prompt || '').trim();
+        const plannedTools = (Array.isArray(options.toolCalls) ? options.toolCalls : [])
+            .slice(0, 8)
+            .map((call) => {
+                const toolName = String(call?.function?.name || '').trim();
+                const args = this._parseToolArgs(call?.function?.arguments);
+                return {
+                    tool: toolName,
+                    preview: this._buildToolCallPreview(toolName, args)
+                };
+            });
+
+        try {
+            const response = await this.modelSwitch.chatCompletion({
+                messages: [
+                    {
+                        role: 'system',
+                        content: [
+                            'Escribe una sola frase breve en español para orientar al usuario antes de ejecutar un bloque de trabajo.',
+                            'Debe sonar natural, inteligente y concreta.',
+                            'Habla del objetivo general o de la fase que viene, no describas tool por tool.',
+                            'No menciones JSON, tools, pipeline interno ni IDs.',
+                            'Si no hay nada útil que decir, responde con una cadena vacía.'
+                        ].join('\n')
+                    },
+                    {
+                        role: 'user',
+                        content: JSON.stringify({
+                            prompt,
+                            plannedTools
+                        })
+                    }
+                ]
+            });
+            return this._extractAssistantStatusMessage(response?.choices?.[0]?.message?.content || '');
+        } catch (error) {
+            return '';
+        }
     }
 
     _buildPublicToolEvent(toolName, args = {}, result = {}) {
@@ -1111,6 +1376,38 @@ class AgentRuntime {
                 items: result?.meta?.title ? [result.meta.title] : []
             };
         }
+        if (toolName === 'update_finance_instructions') {
+            return {
+                eventKind: 'edited',
+                label: 'Edited',
+                summary: 'Updated finance instructions',
+                items: result?.meta?.title ? [result.meta.title] : []
+            };
+        }
+        if (toolName === 'create_finance_pocket') {
+            return {
+                eventKind: 'created',
+                label: 'Created',
+                summary: 'Created 1 finance pocket',
+                items: result?.meta?.title ? [result.meta.title] : []
+            };
+        }
+        if (toolName === 'update_finance_pocket' || toolName === 'deposit_finance_pocket' || toolName === 'withdraw_finance_pocket' || toolName === 'move_money_between_finance_pockets' || toolName === 'update_finance_projection') {
+            return {
+                eventKind: 'edited',
+                label: 'Edited',
+                summary: 'Updated finance state',
+                items: result?.meta?.title ? [result.meta.title] : []
+            };
+        }
+        if (toolName === 'delete_finance_pocket') {
+            return {
+                eventKind: 'deleted',
+                label: 'Deleted',
+                summary: 'Deleted 1 finance pocket',
+                items: result?.meta?.title ? [result.meta.title] : []
+            };
+        }
         if (toolName === 'attach_note_to_meta') {
             return {
                 eventKind: 'edited',
@@ -1153,6 +1450,84 @@ class AgentRuntime {
         return null;
     }
 
+    _buildToolCallPreview(toolName, payload = {}) {
+        const data = payload && typeof payload === 'object' ? payload : {};
+        const note = data.note && typeof data.note === 'object' ? data.note : null;
+        const meta = data.meta && typeof data.meta === 'object' ? data.meta : null;
+
+        if (toolName === 'create_note' || toolName === 'update_note') {
+            return {
+                note_id: String(data.note_id || note?.id || '').trim(),
+                title: String(data.title || note?.title || '').trim(),
+                body: this.safeSliceText(data.body || note?.body || '', 2400)
+            };
+        }
+        if (toolName === 'append_to_note' || toolName === 'replace_in_note') {
+            return {
+                note_id: String(data.note_id || note?.id || '').trim(),
+                title: String(note?.title || '').trim(),
+                body: this.safeSliceText(note?.body || '', 2400),
+                text: this.safeSliceText(data.text || '', 800)
+            };
+        }
+        if (toolName === 'create_meta' || toolName === 'update_meta') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                title: String(data.title || meta?.title || '').trim(),
+                description: this.safeSliceText(data.description || meta?.description || '', 1800)
+            };
+        }
+        if (toolName === 'update_finance_instructions') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                title: String(meta?.title || '').trim(),
+                instructions: this.safeSliceText(data.instructions || data.description || meta?.description || '', 1800)
+            };
+        }
+        if (toolName === 'create_finance_pocket' || toolName === 'update_finance_pocket') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                pocket_id: String(data.pocket_id || '').trim(),
+                name: String(data.name || '').trim(),
+                bank: String(data.bank || '').trim(),
+                purpose: this.safeSliceText(data.purpose || '', 240),
+                balance: Number(data.balance || 0)
+            };
+        }
+        if (toolName === 'delete_finance_pocket' || toolName === 'deposit_finance_pocket' || toolName === 'withdraw_finance_pocket') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                pocket_id: String(data.pocket_id || '').trim(),
+                amount: Number(data.amount || 0)
+            };
+        }
+        if (toolName === 'move_money_between_finance_pockets') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                from_pocket_id: String(data.from_pocket_id || '').trim(),
+                to_pocket_id: String(data.to_pocket_id || '').trim(),
+                amount: Number(data.amount || 0)
+            };
+        }
+        if (toolName === 'update_finance_projection') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                expected_income: Number(data.expected_income || 0),
+                expected_expenses: Number(data.expected_expenses || 0),
+                horizon_weeks: Number(data.horizon_weeks || 0),
+                current_label: String(data.current_label || '').trim(),
+                future_label: String(data.future_label || '').trim()
+            };
+        }
+        if (toolName === 'attach_note_to_meta' || toolName === 'detach_note_from_meta') {
+            return {
+                meta_id: String(data.meta_id || meta?.id || '').trim(),
+                note_id: String(data.note_id || '').trim()
+            };
+        }
+        return {};
+    }
+
     _buildToolResultPayload(toolName, args = {}, result = {}) {
         return {
             tool: toolName,
@@ -1172,6 +1547,7 @@ class AgentRuntime {
         if ((changes.deletedMetas || []).length > 0) items.push(`${changes.deletedMetas.length} meta${changes.deletedMetas.length === 1 ? '' : 's'} deleted`);
         if ((changes.attachments || []).length > 0) items.push(`${changes.attachments.length} linkage${changes.attachments.length === 1 ? '' : 's'} added`);
         if ((changes.detachments || []).length > 0) items.push(`${changes.detachments.length} linkage${changes.detachments.length === 1 ? '' : 's'} removed`);
+        if ((changes.financeUpdates || []).length > 0) items.push(`${changes.financeUpdates.length} finance change${changes.financeUpdates.length === 1 ? '' : 's'} applied`);
         if ((changes.actions || []).length > 0) items.push(`${changes.actions.length} computer action${changes.actions.length === 1 ? '' : 's'} prepared`);
         if (items.length === 0) return null;
         return {
@@ -1181,12 +1557,19 @@ class AgentRuntime {
         };
     }
 
-    _fallbackAssistantReply(changes = {}) {
+    _fallbackAssistantReply(changes = {}, failures = []) {
         const summary = this._buildChangeSummary(changes);
+        const firstFailure = Array.from(new Set((Array.isArray(failures) ? failures : []).filter(Boolean)))[0] || '';
+        if (summary && firstFailure) {
+            return `Hice parte del trabajo, pero hubo un problema: ${firstFailure}. ${summary.detail}.`;
+        }
         if (summary) {
             return `Listo. ${summary.detail}.`;
         }
-        return 'Listo.';
+        if (firstFailure) {
+            return `No pude completar eso: ${firstFailure}.`;
+        }
+        return 'No pude completar eso.';
     }
 
     _getKnowledgeState() {
@@ -1248,13 +1631,26 @@ class AgentRuntime {
                 id: note.id,
                 title: note.title || 'Sin titulo'
             }));
+        const pockets = Array.isArray(meta?.finance?.pockets) ? meta.finance.pockets : [];
+        const totalBalance = pockets.reduce((sum, pocket) => sum + Number(pocket?.balance || 0), 0);
         return {
             id: String(meta?.id || ''),
+            kind: String(meta?.kind || 'generic'),
+            isFixed: Boolean(meta?.isFixed),
             title: String(meta?.title || '').trim() || 'Meta sin titulo',
             description: this.safeSliceText(meta?.description || '', 180),
             noteIds: Array.isArray(meta?.noteIds) ? meta.noteIds.slice(0, 24) : [],
             noteCount: Array.isArray(meta?.noteIds) ? meta.noteIds.length : 0,
-            noteTitles: linkedNotes
+            noteTitles: linkedNotes,
+            finance: meta?.kind === 'finance'
+                ? {
+                    pocketCount: pockets.length,
+                    totalBalance: Math.round(totalBalance * 100) / 100,
+                    expectedIncome: Number(meta?.finance?.forecast?.expectedIncome || 0),
+                    expectedExpenses: Number(meta?.finance?.forecast?.expectedExpenses || 0),
+                    horizonWeeks: Number(meta?.finance?.forecast?.horizonWeeks || 0)
+                }
+                : null
         };
     }
 

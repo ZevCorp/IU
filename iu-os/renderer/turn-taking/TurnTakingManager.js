@@ -18,6 +18,11 @@
 (function () {
   'use strict';
 
+  function turnTakingLog(...args) {
+    if (!window.__IU_TURN_TAKING_LOGS_ENABLED) return;
+    console.log(...args);
+  }
+
   const DEFAULTS = {
     yieldDwellMs: 1000,
     assistantSpeechHoldMs: 1400,
@@ -183,20 +188,20 @@
       this.state.interruptCandidate = interruptCandidate;
 
       if (thinkingActivationCandidate !== this.prevThinkingActivationCandidate) {
-        console.log(
+        turnTakingLog(
           `🧪 [UIUX][turn_taking] thinking_candidate_${thinkingActivationCandidate ? 'on' : 'off'} | ` +
           `gazeUp=${this.state.gazeUp} gazeY=${this.state.gazeY} hand=${this.state.handVisible}`
         );
       }
 
       if (interruptCandidate !== this.prevInterruptCandidate) {
-        console.log(
+        turnTakingLog(
           `🧪 [UIUX][turn_taking] interrupt_candidate_${interruptCandidate ? 'on' : 'off'} | ` +
           `assistantSpeaking=${this.state.assistantSpeaking} mouthOpen=${this.state.mouthPartiallyOpen} ` +
           `mouthRatio=${this.state.mouthOpenRatio} hand=${this.state.handVisible}`
         );
       } else if (nearInterrupt && nearInterruptState !== this.prevNearInterruptState) {
-        console.log('🧪 [UIUX][turn_taking] interrupt_diagnostics', {
+        turnTakingLog('🧪 [UIUX][turn_taking] interrupt_diagnostics', {
           assistantSpeaking: this.state.assistantSpeaking,
           assistantStreaming: this.state.assistantStreaming,
           mouthPartiallyOpen: this.state.mouthPartiallyOpen,

@@ -462,6 +462,9 @@ function setTheme(theme, shouldBroadcast = true) {
 
 let face;
 let panelCollapsed = true;
+let controlsPinnedOpen = false;
+let controlsHoverCloseTimer = null;
+const CONTROLS_HOVER_CLOSE_DELAY_MS = 480;
 let isSimpleMode = false;
 let deviceSync = null;
 let qrConnect = null;
@@ -483,8 +486,11 @@ const wakeUpSound = new Audio('assets/hey_pss_pss.mp3');
 let inceptionOnboardingState = null;
 let syntheticWaitRequested = false;
 let lastTurnTakingLogKey = '';
+const TURN_TAKING_LOGS_ENABLED = !!window.iuOS?.turnTakingLogsEnabled;
+window.__IU_TURN_TAKING_LOGS_ENABLED = TURN_TAKING_LOGS_ENABLED;
 
 function emitTurnTakingUiUx(event, data = {}) {
+    if (!TURN_TAKING_LOGS_ENABLED) return;
     if (!window.iuOS?.logUiUx) return;
     window.iuOS.logUiUx({
         scope: 'turn_taking',
@@ -528,7 +534,9 @@ function setSyntheticWaitRequested(active, state = null) {
     if (syntheticWaitRequested === normalized) return;
     syntheticWaitRequested = normalized;
     const label = normalized ? 'on' : 'off';
-    console.log(`🎧 [TurnTaking] Synthetic wait request: ${label}`);
+    if (TURN_TAKING_LOGS_ENABLED) {
+        console.log(`🎧 [TurnTaking] Synthetic wait request: ${label}`);
+    }
     emitTurnTakingUiUx('synthetic_wait_toggled', {
         enabled: normalized,
         floorState: state?.floorState || '',
@@ -596,13 +604,6 @@ function initTurnTaking() {
     });
 
     turnTakingManager.onFloorStateChange(({ action, reason, state }) => {
-        console.log(`🧪 [UIUX][turn_taking] floor_${action}`, {
-            reason,
-            floorState: state?.floorState,
-            wait: state?.syntheticWaitActive,
-            assistantSpeaking: state?.assistantSpeaking,
-            localSilenceMs: state?.localSilenceMs
-        });
         emitTurnTakingUiUx(`floor_${action}`, {
             reason,
             floorState: state?.floorState || '',
@@ -1262,10 +1263,30 @@ function init() {
     // Chat toggle button (top-right)
     const chatToggleBtn = document.getElementById('btn-chat-toggle');
     if (chatToggleBtn) {
-        chatToggleBtn.addEventListener('click', () => {
+        const CHAT_TOGGLE_HOVER_LOCK_MS = 392;
+        let hoverToggleLockedUntil = 0;
+
+        const triggerChatToggle = () => {
+            setMainWindowClickThrough(false);
+            promptChatInteractionState.active = true;
+            promptChatInteractionState.recentActivityUntil = Date.now() + 260;
+            schedulePromptChatReleaseCheck(280);
             if (window.iuOS?.toggleChatWindow) {
                 window.iuOS.toggleChatWindow();
             }
+        };
+
+        chatToggleBtn.addEventListener('click', () => {
+            triggerChatToggle();
+        });
+
+        ['mouseenter', 'pointerenter'].forEach((eventName) => {
+            chatToggleBtn.addEventListener(eventName, () => {
+                const now = Date.now();
+                if (now < hoverToggleLockedUntil) return;
+                hoverToggleLockedUntil = now + CHAT_TOGGLE_HOVER_LOCK_MS;
+                triggerChatToggle();
+            }, { passive: true });
         });
     }
 
@@ -1301,13 +1322,67 @@ function init() {
         requestAnimationFrame(updateControlsScrollHints);
     };
 
+    const clearControlsHoverCloseTimer = () => {
+        if (!controlsHoverCloseTimer) return;
+        clearTimeout(controlsHoverCloseTimer);
+        controlsHoverCloseTimer = null;
+    };
+
+    const applyControlsPanelState = (collapsed) => {
+        if (!controlsPanel || !menuToggle) return;
+        panelCollapsed = collapsed;
+        controlsPanel.classList.toggle('collapsed', collapsed);
+        menuToggle.classList.toggle('active', !collapsed);
+        if (collapsed) {
+            setExperimentalView(false);
+            return;
+        }
+        requestAnimationFrame(updateControlsScrollHints);
+    };
+
+    const openControlsPanelForHover = () => {
+        if (controlsPinnedOpen) return;
+        clearControlsHoverCloseTimer();
+        applyControlsPanelState(false);
+    };
+
+    const scheduleControlsPanelHoverClose = () => {
+        clearControlsHoverCloseTimer();
+        if (controlsPinnedOpen) return;
+        controlsHoverCloseTimer = setTimeout(() => {
+            controlsHoverCloseTimer = null;
+            if (controlsPinnedOpen) return;
+            applyControlsPanelState(true);
+        }, CONTROLS_HOVER_CLOSE_DELAY_MS);
+    };
+
     if (menuToggle && controlsPanel) {
         menuToggle.addEventListener('click', () => {
-            panelCollapsed = !panelCollapsed;
-            controlsPanel.classList.toggle('collapsed', panelCollapsed);
-            menuToggle.classList.toggle('active', !panelCollapsed);
-            if (panelCollapsed) setExperimentalView(false);
-            if (!panelCollapsed) requestAnimationFrame(updateControlsScrollHints);
+            clearControlsHoverCloseTimer();
+            if (panelCollapsed) {
+                controlsPinnedOpen = true;
+                applyControlsPanelState(false);
+                return;
+            }
+            if (!controlsPinnedOpen) {
+                controlsPinnedOpen = true;
+                applyControlsPanelState(false);
+                return;
+            }
+            controlsPinnedOpen = false;
+            applyControlsPanelState(true);
+        });
+
+        ['mouseenter', 'pointerenter'].forEach((eventName) => {
+            menuToggle.addEventListener(eventName, openControlsPanelForHover, { passive: true });
+            controlsPanel.addEventListener(eventName, () => {
+                clearControlsHoverCloseTimer();
+            }, { passive: true });
+        });
+
+        ['mouseleave', 'pointerleave'].forEach((eventName) => {
+            menuToggle.addEventListener(eventName, scheduleControlsPanelHoverClose, { passive: true });
+            controlsPanel.addEventListener(eventName, scheduleControlsPanelHoverClose, { passive: true });
         });
     }
 
@@ -1771,31 +1846,84 @@ function init() {
     // Initialize View
     document.body.className = 'view-face';
 
-    // Trackpad / Wheel Navigation (Horizontal only)
-    let wheelTimeout;
+    // Trackpad / Wheel Navigation
+    // NOTE FOR FUTURE ASSISTANTS:
+    // The horizontal two-finger swipe used to call performTransfer() from here.
+    // We detached that gesture because it now repositions the window, and the old
+    // transfer affordance was visually misleading when there were no peer devices.
+    // Keep performTransfer() available for explicit/remote flows, and reconnect
+    // device transfer from a different gesture or dedicated UI control later.
+    let trackpadSwipeCooldownUntil = 0;
+    const TRACKPAD_SWIPE_COOLDOWN_MS = 420;
+    const TRACKPAD_SWIPE_MIN_DELTA = 45;
+
+    function classifyTrackpadSwipe(deltaX, deltaY) {
+        const absX = Math.abs(deltaX);
+        const absY = Math.abs(deltaY);
+
+        if (absX < TRACKPAD_SWIPE_MIN_DELTA && absY < TRACKPAD_SWIPE_MIN_DELTA) {
+            return null;
+        }
+
+        const diagonalIntent = absX >= TRACKPAD_SWIPE_MIN_DELTA
+            && absY >= TRACKPAD_SWIPE_MIN_DELTA
+            && (Math.min(absX, absY) / Math.max(absX, absY)) >= 0.55;
+
+        if (diagonalIntent) {
+            return {
+                kind: 'diagonal',
+                horizontal: deltaX >= 0 ? 'right' : 'left',
+                vertical: deltaY >= 0 ? 'down' : 'up'
+            };
+        }
+
+        if (absX >= absY) {
+            return {
+                kind: 'horizontal',
+                horizontal: deltaX >= 0 ? 'right' : 'left',
+                vertical: null
+            };
+        }
+
+        return {
+            kind: 'vertical',
+            horizontal: null,
+            vertical: deltaY >= 0 ? 'down' : 'up'
+        };
+    }
+
     window.addEventListener('wheel', (e) => {
         const interaction = getInteractionContextFromEvent(e);
         if (interaction.withinPromptChat) {
             beginPromptChatInteractionSession('wheel', interaction);
             return;
         }
-        // Horizontal: Intents / Transfer
-        if (Math.abs(e.deltaX) > 40 && Math.abs(e.deltaY) < 30) {
-            if (isCarouselActive && currentIntents.length > 0) {
-                if (e.deltaX > 0 && focusedIntentIndex < currentIntents.length - 1) {
-                    focusedIntentIndex++;
-                } else if (e.deltaX < 0 && focusedIntentIndex > 0) {
-                    focusedIntentIndex--;
-                }
-                updateCarouselVisuals();
-                return;
-            }
 
-            if (!wheelTimeout) {
-                performTransfer();
-                wheelTimeout = setTimeout(() => { wheelTimeout = null; }, 1200);
-            }
+        if (e.ctrlKey) {
+            return;
         }
+
+        const swipe = classifyTrackpadSwipe(e.deltaX, e.deltaY);
+        if (!swipe) return;
+
+        if (swipe.kind === 'horizontal' && isCarouselActive && currentIntents.length > 0) {
+            if (e.deltaX > 0 && focusedIntentIndex < currentIntents.length - 1) {
+                focusedIntentIndex++;
+            } else if (e.deltaX < 0 && focusedIntentIndex > 0) {
+                focusedIntentIndex--;
+            }
+            updateCarouselVisuals();
+            return;
+        }
+
+        const now = Date.now();
+        if (now < trackpadSwipeCooldownUntil) return;
+        trackpadSwipeCooldownUntil = now + TRACKPAD_SWIPE_COOLDOWN_MS;
+
+        window.iuOS?.moveWindowViaTrackpadSwipe?.({
+            deltaX: e.deltaX,
+            deltaY: e.deltaY
+        });
     });
 
     // Initialize Neural Graph
@@ -2311,7 +2439,10 @@ const promptChatState = {
     busy: false,
     activeRunId: null,
     streamedUserCount: 0,
-    lastProgressKey: ''
+    lastProgressKey: '',
+    focusMode: 'background',
+    activityLabel: '',
+    activityElement: null
 };
 const PROMPT_CHAT_SURFACE_SELECTOR = '#prompt-chat-dock';
 const PROMPT_CHAT_ACTIVITY_HOLD_MS = 520;
@@ -2330,6 +2461,8 @@ const promptChatInteractionState = {
 };
 
 let lastMainWindowClickThrough = null;
+let promptChatLayoutFrame = null;
+let promptChatResizeObserver = null;
 
 function setMainWindowClickThrough(enabled) {
     if (!window.iuOS?.setClickThrough) return;
@@ -2446,6 +2579,7 @@ function isWithinPromptChatSurface(input = {}) {
 function getPromptChatRefs() {
     return {
         dock: document.getElementById('prompt-chat-dock'),
+        panel: document.querySelector('#prompt-chat-dock .prompt-chat-panel'),
         empty: document.getElementById('prompt-chat-empty'),
         history: document.getElementById('prompt-chat-history'),
         input: document.getElementById('prompt-chat-input'),
@@ -2474,6 +2608,7 @@ function autoResizePromptInput(input) {
     if (!input) return;
     input.style.height = 'auto';
     input.style.height = `${Math.min(input.scrollHeight, 126)}px`;
+    schedulePromptChatLayoutUpdate();
 }
 
 function scrollPromptHistoryToEnd(history) {
@@ -2484,6 +2619,7 @@ function scrollPromptHistoryToEnd(history) {
 function syncPromptChatFocusState() {
     const refs = getPromptChatRefs();
     promptChatInteractionState.focusWithin = Boolean(refs.dock && refs.dock.contains(document.activeElement));
+    syncPromptChatVisualState();
     return promptChatInteractionState.focusWithin;
 }
 
@@ -2507,6 +2643,88 @@ function syncMainWindowClickThroughFromContext(context = getInteractionContext()
     return context;
 }
 
+function schedulePromptChatLayoutUpdate() {
+    if (promptChatLayoutFrame) return;
+    promptChatLayoutFrame = requestAnimationFrame(() => {
+        promptChatLayoutFrame = null;
+        syncPromptChatLayout();
+    });
+}
+
+function isPromptChatExpanded() {
+    return (
+        promptChatState.focusMode === 'chat' ||
+        promptChatInteractionState.hover ||
+        promptChatInteractionState.focusWithin
+    );
+}
+
+function syncPromptChatVisualState() {
+    const shouldKeepVisible =
+        promptChatInteractionState.active ||
+        promptChatInteractionState.hover ||
+        promptChatInteractionState.focusWithin ||
+        promptChatState.busy;
+    const expanded = isPromptChatExpanded();
+    const refs = getPromptChatRefs();
+    document.body.classList.toggle('prompt-chat-active', shouldKeepVisible);
+    document.body.classList.toggle('prompt-chat-expanded', shouldKeepVisible && expanded);
+    document.body.classList.toggle('prompt-chat-persistent-expanded', promptChatState.focusMode === 'chat');
+    refs.dock?.classList.toggle('is-collapsed', !expanded);
+    schedulePromptChatLayoutUpdate();
+}
+
+function setPromptChatFocusMode(mode, options = {}) {
+    const nextMode = mode === 'chat' ? 'chat' : 'background';
+    if (promptChatState.focusMode === nextMode) return;
+    promptChatState.focusMode = nextMode;
+    emitPromptChatUiUx('focus_mode_changed', {
+        mode: nextMode,
+        source: String(options.source || 'unknown')
+    });
+    syncPromptChatVisualState();
+}
+
+function releasePromptChatFocus() {
+    const refs = getPromptChatRefs();
+    const activeElement = document.activeElement;
+    const focusedInsidePrompt = activeElement instanceof Element && refs.dock?.contains(activeElement);
+    if (focusedInsidePrompt && typeof activeElement.blur === 'function') {
+        activeElement.blur();
+    }
+}
+
+function syncPromptChatLayout() {
+    const refs = getPromptChatRefs();
+    const root = document.documentElement;
+    const panel = refs.panel;
+    if (!refs.dock || !panel) {
+        root.style.setProperty('--prompt-chat-face-offset', '-38px');
+        root.style.setProperty('--prompt-chat-history-max-height', 'min(42vh, 380px)');
+        return;
+    }
+
+    const viewportHeight = Math.max(window.innerHeight || 0, 1);
+    const viewportWidth = Math.max(window.innerWidth || 0, 320);
+    const panelHeight = Math.max(panel.offsetHeight || 0, 0);
+    const dockWidth = Math.max(420, Math.min(viewportWidth - 32, viewportHeight > 860 ? 820 : 760));
+    const historyMaxHeight = Math.round(Math.min(Math.max(viewportHeight * 0.44, 190), 420));
+    if (!isPromptChatExpanded()) {
+        root.style.setProperty('--prompt-chat-dock-width', `min(calc(100vw - 32px), ${dockWidth}px)`);
+        root.style.setProperty('--prompt-chat-history-max-height', `${historyMaxHeight}px`);
+        root.style.setProperty('--prompt-chat-face-offset', '0px');
+        return;
+    }
+    const baseLift = viewportHeight < 760 ? 28 : 38;
+    const expansionLift = Math.max(0, panelHeight - 114) * 0.58;
+    const maxLift = Math.round(Math.min(Math.max(viewportHeight * 0.27, 144), 250));
+    const faceLift = Math.round(Math.min(baseLift + expansionLift, maxLift));
+
+    root.style.setProperty('--prompt-chat-dock-width', `min(calc(100vw - 32px), ${dockWidth}px)`);
+    root.style.setProperty('--prompt-chat-history-max-height', `${historyMaxHeight}px`);
+    root.style.setProperty('--prompt-chat-face-offset', `-${faceLift}px`);
+}
+
 function reconcilePromptChatInteractionSession() {
     syncPromptChatFocusState();
     const pointerContext = getInteractionContext({
@@ -2523,6 +2741,7 @@ function reconcilePromptChatInteractionSession() {
         promptChatInteractionState.gestureOwnedByPrompt;
 
     promptChatInteractionState.active = shouldKeepActive;
+    syncPromptChatVisualState();
 
     if (shouldKeepActive) {
         setMainWindowClickThrough(false);
@@ -2559,6 +2778,7 @@ function beginPromptChatInteractionSession(source = 'prompt', eventOrContext = n
     }
     syncPromptChatFocusState();
     setMainWindowClickThrough(false);
+    syncPromptChatVisualState();
     schedulePromptChatReleaseCheck();
     return true;
 }
@@ -2658,6 +2878,7 @@ function setPromptChatHasMessages(hasMessages) {
     if (refs.empty) {
         refs.empty.setAttribute('aria-hidden', hasMessages ? 'true' : 'false');
     }
+    schedulePromptChatLayoutUpdate();
 }
 
 function createPromptMessageElement(role, text, options = {}) {
@@ -2677,6 +2898,49 @@ function createPromptMessageElement(role, text, options = {}) {
     }
     el.appendChild(bubble);
     return el;
+}
+
+function streamPromptMessageContent(element, text) {
+    const bubble = element?.querySelector?.('.prompt-chat-message-bubble');
+    if (!bubble) return;
+    const fullText = String(text || '');
+    if (!fullText.trim()) {
+        bubble.textContent = '';
+        return;
+    }
+
+    const rich = document.createElement('div');
+    rich.className = 'prompt-chat-rich-text is-streaming';
+    bubble.textContent = '';
+    bubble.appendChild(rich);
+
+    const chars = Array.from(fullText);
+    let index = 0;
+
+    const tick = () => {
+        const remaining = chars.length - index;
+        if (remaining <= 0) {
+            bubble.textContent = '';
+            renderPromptRichText(bubble, fullText);
+            return;
+        }
+        const chunkSize = remaining > 48 ? 4 : remaining > 20 ? 3 : remaining > 8 ? 2 : 1;
+        index = Math.min(chars.length, index + chunkSize);
+        rich.textContent = chars.slice(0, index).join('');
+        const refs = getPromptChatRefs();
+        if (refs.history) {
+            scrollPromptHistoryToEnd(refs.history);
+        }
+        const delay = index < chars.length ? 18 + Math.round(Math.random() * 20) : 0;
+        if (delay > 0) {
+            window.setTimeout(tick, delay);
+            return;
+        }
+        bubble.textContent = '';
+        renderPromptRichText(bubble, fullText);
+    };
+
+    tick();
 }
 
 function createPromptToolEventElement(payload = {}) {
@@ -2728,6 +2992,95 @@ function createPromptToolEventElement(payload = {}) {
     return el;
 }
 
+function ensurePromptChatActivityIndicator() {
+    if (promptChatState.activityElement instanceof HTMLElement) {
+        return promptChatState.activityElement;
+    }
+    const el = document.createElement('div');
+    el.className = 'prompt-chat-activity-indicator';
+    el.setAttribute('aria-hidden', 'true');
+
+    const text = document.createElement('span');
+    text.className = 'prompt-chat-activity-indicator-text';
+    el.appendChild(text);
+
+    promptChatState.activityElement = el;
+    return el;
+}
+
+function syncPromptChatActivityIndicatorPosition() {
+    const refs = getPromptChatRefs();
+    const indicator = promptChatState.activityElement;
+    if (!refs.history || !(indicator instanceof HTMLElement)) return;
+    refs.history.appendChild(indicator);
+    trimPromptHistory(refs.history, 48);
+    setPromptChatHasMessages(refs.history.children.length > 0);
+    scrollPromptHistoryToEnd(refs.history);
+    schedulePromptChatLayoutUpdate();
+}
+
+function setPromptChatActivityIndicator(label) {
+    const nextLabel = String(label || '').trim();
+    if (!nextLabel) {
+        clearPromptChatActivityIndicator();
+        return;
+    }
+
+    promptChatState.activityLabel = nextLabel;
+    const indicator = ensurePromptChatActivityIndicator();
+    const text = indicator.querySelector('.prompt-chat-activity-indicator-text');
+    if (text) {
+        text.dataset.label = nextLabel;
+        text.textContent = nextLabel;
+    }
+    syncPromptChatActivityIndicatorPosition();
+}
+
+function clearPromptChatActivityIndicator() {
+    promptChatState.activityLabel = '';
+    const indicator = promptChatState.activityElement;
+    if (indicator instanceof HTMLElement && indicator.parentNode) {
+        indicator.parentNode.removeChild(indicator);
+    }
+}
+
+function getPromptChatActivityLabel(toolName) {
+    const name = String(toolName || '').trim();
+    if (!name) return 'Thinking';
+    if (
+        name === 'list_notes' ||
+        name === 'search_notes' ||
+        name === 'find_note_by_title' ||
+        name === 'get_note' ||
+        name === 'list_metas' ||
+        name === 'search_metas' ||
+        name === 'find_meta_by_title' ||
+        name === 'get_meta'
+    ) {
+        return 'Exploring';
+    }
+    if (name.startsWith('create_')) {
+        return 'Creating';
+    }
+    if (
+        name.startsWith('update_') ||
+        name.startsWith('delete_') ||
+        name === 'append_to_note' ||
+        name === 'replace_in_note' ||
+        name === 'attach_note_to_meta' ||
+        name === 'detach_note_from_meta' ||
+        name === 'deposit_finance_pocket' ||
+        name === 'withdraw_finance_pocket' ||
+        name === 'move_money_between_finance_pockets'
+    ) {
+        return 'Editing';
+    }
+    if (name === 'execute_screen_action' || name === 'play_agario' || name === 'schedule_reminder') {
+        return 'Acting';
+    }
+    return 'Thinking';
+}
+
 function trimPromptHistory(history, keep = 48) {
     if (!history) return;
     while (history.children.length > keep) {
@@ -2740,9 +3093,16 @@ function pushPromptChatMessage(role, text, options = {}) {
     if (!refs.history) return;
     const element = createPromptMessageElement(role, text, options);
     refs.history.appendChild(element);
+    if (options.streaming) {
+        streamPromptMessageContent(element, text);
+    }
     trimPromptHistory(refs.history, 48);
     setPromptChatHasMessages(refs.history.children.length > 0);
     scrollPromptHistoryToEnd(refs.history);
+    schedulePromptChatLayoutUpdate();
+    if (promptChatState.activityLabel) {
+        syncPromptChatActivityIndicatorPosition();
+    }
     if (!options.status) {
         emitPromptChatUiUx('message_rendered', {
             role,
@@ -2761,6 +3121,10 @@ function pushPromptToolEvent(payload = {}) {
     trimPromptHistory(refs.history, 48);
     setPromptChatHasMessages(refs.history.children.length > 0);
     scrollPromptHistoryToEnd(refs.history);
+    schedulePromptChatLayoutUpdate();
+    if (promptChatState.activityLabel) {
+        syncPromptChatActivityIndicatorPosition();
+    }
     emitPromptChatUiUx('tool_event_rendered', {
         eventKind: String(payload?.eventKind || 'explored'),
         summary: previewText(payload?.summary || '', 140)
@@ -2784,10 +3148,20 @@ function handlePromptAgentProgress(payload = {}) {
     }
 
     const type = String(payload?.type || '').trim();
+    if (type === 'tool_call') {
+        if (String(payload?.phase || '').trim() === 'start') {
+            setPromptChatActivityIndicator(getPromptChatActivityLabel(payload?.toolName));
+        }
+        return;
+    }
+
     if (type === 'tool_event') {
         const summary = String(payload?.summary || '').trim();
         const detail = String(payload?.detail || '').trim();
-        const key = `${payload?.eventKind || 'event'}::${summary}::${detail}`;
+        const itemsKey = Array.isArray(payload?.items)
+            ? payload.items.map((item) => String(item || '').trim()).filter(Boolean).join('::')
+            : '';
+        const key = `${payload?.eventKind || 'event'}::${summary}::${detail}::${itemsKey}`;
         if (promptChatState.lastProgressKey === key) return;
         promptChatState.lastProgressKey = key;
         pushPromptToolEvent(payload);
@@ -2810,6 +3184,15 @@ function handlePromptAgentProgress(payload = {}) {
         pushPromptChatMessage('user', message, {
             noteTitle: payload?.messageType === 'note_title'
         });
+        return;
+    }
+
+    if (type === 'assistant_message') {
+        const key = `${type}::${message}`;
+        if (promptChatState.lastProgressKey === key) return;
+        promptChatState.lastProgressKey = key;
+        clearPromptChatActivityIndicator();
+        pushPromptChatMessage('assistant', message, { streaming: true });
         return;
     }
 
@@ -2839,19 +3222,25 @@ async function runPromptInjectionFlow(prompt) {
 
     const refs = getPromptChatRefs();
     promptChatState.busy = true;
+    syncPromptChatVisualState();
     emitPromptChatUiUx('run_started', {
         promptLength: cleanPrompt.length,
         promptPreview: previewText(cleanPrompt, 180)
     });
     if (refs.sendBtn) refs.sendBtn.disabled = true;
     if (refs.voiceBtn) refs.voiceBtn.disabled = true;
-    if (refs.input) refs.input.disabled = true;
+    if (refs.input) {
+        refs.input.value = '';
+        autoResizePromptInput(refs.input);
+        refs.input.disabled = true;
+    }
 
     try {
         const runId = `prompt_run_${Date.now()}_${Math.random().toString(16).slice(2, 6)}`;
         promptChatState.activeRunId = runId;
         promptChatState.streamedUserCount = 0;
         promptChatState.lastProgressKey = '';
+        setPromptChatActivityIndicator('Thinking');
 
         pushPromptChatMessage('user', cleanPrompt);
 
@@ -2881,7 +3270,7 @@ async function runPromptInjectionFlow(prompt) {
 
         const assistantReply = String(result.assistantReply || '').trim();
         if (assistantReply) {
-            pushPromptChatMessage('assistant', assistantReply);
+            pushPromptChatMessage('assistant', assistantReply, { streaming: true });
         }
         emitPromptChatUiUx('run_succeeded', {
             runId,
@@ -2898,6 +3287,8 @@ async function runPromptInjectionFlow(prompt) {
     } finally {
         promptChatState.activeRunId = null;
         promptChatState.busy = false;
+        clearPromptChatActivityIndicator();
+        syncPromptChatVisualState();
         emitPromptChatUiUx('run_finished');
         if (refs.sendBtn) refs.sendBtn.disabled = false;
         if (refs.voiceBtn) refs.voiceBtn.disabled = false;
@@ -2960,6 +3351,7 @@ function setupPromptChatDock() {
     });
 
     refs.dock.addEventListener('focusin', (event) => {
+        setPromptChatFocusMode('chat', { source: 'focusin' });
         keepPromptChatSessionAlive(event);
         syncPromptChatFocusState();
     });
@@ -3001,7 +3393,15 @@ function setupPromptChatDock() {
         }, { passive: true });
     }
 
+    window.addEventListener('focus', () => {
+        document.body.classList.remove('window-blurred');
+        syncPromptChatFocusState();
+        reconcilePromptChatInteractionSession();
+    });
+
     window.addEventListener('blur', () => {
+        document.body.classList.add('window-blurred');
+        releasePromptChatFocus();
         promptChatInteractionState.hover = false;
         promptChatInteractionState.focusWithin = false;
         promptChatInteractionState.gestureOwnedByPrompt = false;
@@ -3010,6 +3410,7 @@ function setupPromptChatDock() {
         clearPromptChatReleaseTimer();
         promptChatInteractionState.recentActivityUntil = 0;
         promptChatInteractionState.active = false;
+        syncPromptChatVisualState();
         syncMainWindowClickThroughFromContext();
     });
 
@@ -3025,16 +3426,20 @@ function setupPromptChatDock() {
 
     document.addEventListener('visibilitychange', () => {
         if (!document.hidden) return;
+        document.body.classList.add('window-blurred');
+        releasePromptChatFocus();
         promptChatInteractionState.hover = false;
         promptChatInteractionState.focusWithin = false;
         promptChatInteractionState.gestureOwnedByPrompt = false;
         promptChatInteractionState.lastPointerClientX = null;
         promptChatInteractionState.lastPointerClientY = null;
         promptChatInteractionState.recentActivityUntil = 0;
+        syncPromptChatVisualState();
         reconcilePromptChatInteractionSession();
     });
 
     refs.input.addEventListener('input', () => {
+        setPromptChatFocusMode('chat', { source: 'typing' });
         autoResizePromptInput(refs.input);
         beginPromptChatInteractionSession('input', { target: refs.input });
     });
@@ -3051,6 +3456,7 @@ function setupPromptChatDock() {
     });
 
     refs.sendBtn.addEventListener('click', () => {
+        setPromptChatFocusMode('chat', { source: 'send_click' });
         emitPromptChatUiUx('submit_click', {
             promptLength: String(refs.input?.value || '').trim().length,
             promptPreview: previewText(refs.input?.value || '', 180)
@@ -3083,9 +3489,37 @@ function setupPromptChatDock() {
         });
     }
 
+    document.addEventListener('pointerdown', (event) => {
+        const context = getInteractionContextFromEvent(event, { fallbackToLastPointer: false });
+        if (context.withinPromptChat) {
+            setPromptChatFocusMode('chat', { source: 'pointerdown_chat' });
+            return;
+        }
+        releasePromptChatFocus();
+        promptChatInteractionState.focusWithin = false;
+        setPromptChatFocusMode('background', { source: 'pointerdown_background' });
+        reconcilePromptChatInteractionSession();
+    }, { passive: true, capture: true });
+
     autoResizePromptInput(refs.input);
     setPromptVoiceButtonState(conversationState);
     setPromptChatHasMessages(Boolean(refs.history.children.length));
+    refs.dock.classList.add('is-collapsed');
+    syncPromptChatLayout();
+
+    if (typeof ResizeObserver === 'function') {
+        if (promptChatResizeObserver) {
+            promptChatResizeObserver.disconnect();
+        }
+        promptChatResizeObserver = new ResizeObserver(() => {
+            schedulePromptChatLayoutUpdate();
+        });
+        promptChatResizeObserver.observe(refs.dock);
+        if (refs.history) {
+            promptChatResizeObserver.observe(refs.history);
+        }
+    }
+    window.addEventListener('resize', schedulePromptChatLayoutUpdate, { passive: true });
 }
 
 // Conversation Text state

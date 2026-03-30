@@ -36,6 +36,12 @@ if (!envLoaded) {
 }
 
 LoggingSwitch.setMode(process.env.IU_LOG_MODE || LoggingSwitch.getMode(), { persistEnv: true });
+const TURN_TAKING_LOGS_ENABLED = process.env.IU_TURN_TAKING_LOGS === '1';
+
+function logTurnTakingUiux(eventName, data) {
+    if (!TURN_TAKING_LOGS_ENABLED) return;
+    LoggingSwitch.uiux('turn_taking', eventName, data);
+}
 
 // IPC: Get Device ID from env
 ipcMain.handle('get-env-device-id', () => {
@@ -199,7 +205,10 @@ const notebookManager = new NotebookExecutionManager({
 });
 const knowledgeService = new KnowledgeService({
     notebookManager,
-    storageDir: path.join(app.getPath('userData'), 'chat-notebooks')
+    storageDir: path.join(app.getPath('userData'), 'chat-notebooks'),
+    onChange: (change) => {
+        pushKnowledgeStateToChatWindow(change);
+    }
 });
 const timeManagerStore = new TimeManagerStore();
 
@@ -207,6 +216,12 @@ let mainWindow = null;
 let chatWindow = null;
 let isLearningChatPinned = false;
 let chatWindowBoundsBeforeLearning = null;
+let chatWindowAnimationTimer = null;
+let isChatWindowAnimatingClose = false;
+let isChatWindowBooting = false;
+let pendingAutoCloseChatWindow = false;
+const pendingChatWindowEvents = [];
+const promptRunChatWindowState = new Map();
 let currentUiTheme = 'light';
 let compactWindow = null; // Mini circular window for action mode
 let handWindow = null; // Floating hand-tracking window (camera source + skeleton)
@@ -233,6 +248,7 @@ let pinchSnapTimer = null;
 // • Strict fist held GESTURE_VOICE_MS → deactivate voice mode (stop talking)
 const GESTURE_SLEEP_MS = 800;   // ms to hold strict fist for sleep / open palm for wake
 const GESTURE_VOICE_MS = 2000;  // ms to hold for voice on/off
+const CHAT_WINDOW_TRANSITION_MS = 170;
 
 let gestureState = {
     isAsleep: false,        // whether mainWindow is currently hidden by gesture
@@ -334,15 +350,109 @@ const SETTINGS_PATH = path.join(app.getPath('userData'), 'user_settings.json');
 const USER_ENV_PATH = path.join(app.getPath('userData'), '.env');
 const INCEPTION_ONBOARDING_STATE_PATH = path.join(app.getPath('userData'), 'inception_onboarding.json');
 let currentWindowMode = WINDOW_MODES.SMALL;
+let preferredCompactWindowMode = WINDOW_MODES.SMALL;
+const rememberedWindowBounds = {
+    [WINDOW_MODES.SMALL]: null,
+    [WINDOW_MODES.MEDIUM]: null,
+    [WINDOW_MODES.LARGE]: null
+};
+let windowBoundsSaveTimer = null;
 
 // Hand mesh style: 'v2' (único estilo activo)
 let handMeshStyle = 'v2';
+
+function isCompactWindowMode(mode) {
+    return mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM;
+}
+
+function isRememberedWindowMode(mode) {
+    return mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM || mode === WINDOW_MODES.LARGE;
+}
+
+function sanitizeStoredBounds(bounds) {
+    if (!bounds || typeof bounds !== 'object') return null;
+
+    const x = Number(bounds.x);
+    const y = Number(bounds.y);
+    const width = Number(bounds.width);
+    const height = Number(bounds.height);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+        return null;
+    }
+
+    return {
+        x: Math.round(x),
+        y: Math.round(y),
+        width: Math.round(width),
+        height: Math.round(height)
+    };
+}
+
+function scheduleWindowSettingsSave() {
+    if (windowBoundsSaveTimer) {
+        clearTimeout(windowBoundsSaveTimer);
+    }
+    windowBoundsSaveTimer = setTimeout(() => {
+        windowBoundsSaveTimer = null;
+        saveSettings();
+    }, 120);
+}
+
+function clampBoundsToDisplay(bounds) {
+    const sanitized = sanitizeStoredBounds(bounds);
+    if (!sanitized) return null;
+
+    const display = screen.getDisplayMatching({
+        x: sanitized.x,
+        y: sanitized.y,
+        width: sanitized.width,
+        height: sanitized.height
+    });
+    const area = display.workArea;
+    const maxX = area.x + area.width - sanitized.width;
+    const maxY = area.y + area.height - sanitized.height;
+
+    return {
+        ...sanitized,
+        x: Math.max(area.x, Math.min(sanitized.x, maxX)),
+        y: Math.max(area.y, Math.min(sanitized.y, maxY))
+    };
+}
+
+function rememberBoundsForMode(mode, bounds = null, options = {}) {
+    if (!isRememberedWindowMode(mode)) return;
+
+    const sourceBounds = bounds || ((mainWindow && !mainWindow.isDestroyed()) ? mainWindow.getBounds() : null);
+    const sanitized = sanitizeStoredBounds(sourceBounds);
+    if (!sanitized) return;
+
+    rememberedWindowBounds[mode] = sanitized;
+    if (isCompactWindowMode(mode)) {
+        preferredCompactWindowMode = mode;
+    }
+
+    if (options.persist !== false) {
+        scheduleWindowSettingsSave();
+    }
+}
+
+function getPreferredCompactMode() {
+    return preferredCompactWindowMode === WINDOW_MODES.MEDIUM ? WINDOW_MODES.MEDIUM : WINDOW_MODES.SMALL;
+}
 
 function loadSettings() {
     try {
         if (fs.existsSync(SETTINGS_PATH)) {
             const settings = JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
             if (settings.handMeshStyle) handMeshStyle = settings.handMeshStyle;
+            if (settings.preferredCompactWindowMode === WINDOW_MODES.SMALL || settings.preferredCompactWindowMode === WINDOW_MODES.MEDIUM) {
+                preferredCompactWindowMode = settings.preferredCompactWindowMode;
+            }
+            const storedBounds = settings.windowBoundsByMode || {};
+            for (const mode of [WINDOW_MODES.SMALL, WINDOW_MODES.MEDIUM, WINDOW_MODES.LARGE]) {
+                rememberedWindowBounds[mode] = sanitizeStoredBounds(storedBounds[mode]);
+            }
             console.log(`⚙️ Settings loaded: handMeshStyle=${handMeshStyle}`);
         }
     } catch (e) {
@@ -352,7 +462,12 @@ function loadSettings() {
 
 function saveSettings() {
     try {
-        const settings = { windowMode: currentWindowMode, handMeshStyle };
+        const settings = {
+            windowMode: currentWindowMode,
+            handMeshStyle,
+            preferredCompactWindowMode,
+            windowBoundsByMode: rememberedWindowBounds
+        };
         fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
     } catch (e) {
         console.error('Error saving settings:', e);
@@ -439,6 +554,114 @@ function syncChatWindowPosition(animate = false) {
         return;
     }
     chatWindow.setBounds(bounds, animate);
+}
+
+function clearChatWindowAnimationTimer() {
+    if (!chatWindowAnimationTimer) return;
+    clearTimeout(chatWindowAnimationTimer);
+    chatWindowAnimationTimer = null;
+}
+
+function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
+}
+
+function getChatWindowTransitionBounds(bounds) {
+    return {
+        width: bounds.width,
+        height: bounds.height,
+        x: bounds.x + 12,
+        y: bounds.y + 6
+    };
+}
+
+function interpolateNumber(from, to, progress) {
+    return from + (to - from) * progress;
+}
+
+function animateChatWindow(win, options = {}) {
+    if (!win || win.isDestroyed()) return;
+
+    const {
+        fromBounds,
+        toBounds,
+        fromOpacity = 1,
+        toOpacity = 1,
+        duration = CHAT_WINDOW_TRANSITION_MS,
+        onDone
+    } = options;
+
+    clearChatWindowAnimationTimer();
+    const start = Date.now();
+
+    const tick = () => {
+        if (!win || win.isDestroyed()) return;
+        const elapsed = Date.now() - start;
+        const progress = Math.min(1, elapsed / duration);
+        const eased = easeOutCubic(progress);
+
+        if (fromBounds && toBounds) {
+            win.setBounds({
+                x: Math.round(interpolateNumber(fromBounds.x, toBounds.x, eased)),
+                y: Math.round(interpolateNumber(fromBounds.y, toBounds.y, eased)),
+                width: Math.round(interpolateNumber(fromBounds.width, toBounds.width, eased)),
+                height: Math.round(interpolateNumber(fromBounds.height, toBounds.height, eased))
+            }, false);
+        }
+
+        if (typeof win.setOpacity === 'function') {
+            win.setOpacity(interpolateNumber(fromOpacity, toOpacity, eased));
+        }
+
+        if (progress >= 1) {
+            clearChatWindowAnimationTimer();
+            onDone?.();
+            return;
+        }
+
+        chatWindowAnimationTimer = setTimeout(tick, 16);
+    };
+
+    tick();
+}
+
+function showChatWindowWithTransition() {
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+    const targetBounds = chatWindow.getBounds();
+    const startBounds = getChatWindowTransitionBounds(targetBounds);
+    if (typeof chatWindow.setOpacity === 'function') {
+        chatWindow.setOpacity(0);
+    }
+    chatWindow.setBounds(startBounds, false);
+    chatWindow.show();
+    animateChatWindow(chatWindow, {
+        fromBounds: startBounds,
+        toBounds: targetBounds,
+        fromOpacity: 0,
+        toOpacity: 1
+    });
+}
+
+function closeChatWindowWithTransition() {
+    if (!chatWindow || chatWindow.isDestroyed() || isChatWindowAnimatingClose) return;
+    isChatWindowAnimatingClose = true;
+    const win = chatWindow;
+    const startBounds = win.getBounds();
+    const endBounds = getChatWindowTransitionBounds(startBounds);
+    const fromOpacity = typeof win.getOpacity === 'function' ? win.getOpacity() : 1;
+
+    animateChatWindow(win, {
+        fromBounds: startBounds,
+        toBounds: endBounds,
+        fromOpacity,
+        toOpacity: 0,
+        onDone: () => {
+            isChatWindowAnimatingClose = false;
+            if (!win.isDestroyed()) {
+                win.destroy();
+            }
+        }
+    });
 }
 
 function getFloatingChatBounds() {
@@ -559,13 +782,42 @@ function getWindowBounds(mode) {
     return { width: w, height: h, x, y };
 }
 
+function getRememberedBoundsForMode(mode) {
+    const fallbackBounds = getWindowBounds(mode);
+    const stored = rememberedWindowBounds[mode];
+    if (!stored) {
+        return fallbackBounds;
+    }
+
+    return clampBoundsToDisplay({
+        ...fallbackBounds,
+        x: stored.x,
+        y: stored.y
+    }) || fallbackBounds;
+}
+
+function moveWindowToBounds(bounds, animate = true) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const clampedBounds = clampBoundsToDisplay(bounds);
+    if (!clampedBounds) return;
+    mainWindow.setBounds(clampedBounds, animate);
+}
+
 function applyWindowMode(mode, animate = true) {
     if (!mainWindow) return;
     if (mode === WINDOW_MODES.FULLSCREEN) {
         mode = WINDOW_MODES.LARGE;
     }
 
+    const previousMode = currentWindowMode;
+    if (previousMode !== mode && mainWindow && !mainWindow.isDestroyed()) {
+        rememberBoundsForMode(previousMode, mainWindow.getBounds(), { persist: false });
+    }
+
     currentWindowMode = mode;
+    if (isCompactWindowMode(mode)) {
+        preferredCompactWindowMode = mode;
+    }
     saveSettings();
     isCompactMode = (mode === WINDOW_MODES.SMALL || mode === WINDOW_MODES.MEDIUM || mode === WINDOW_MODES.BOOTLOADER);
 
@@ -573,43 +825,8 @@ function applyWindowMode(mode, animate = true) {
     destroySmallWindow(); // Clean up any leftover independent window
     if (!mainWindow.isVisible()) mainWindow.show();
 
-    const modeBounds = getWindowBounds(mode);
-    const currentBounds = mainWindow.getBounds();
-
-    let bounds;
-    // Enforce center positioning ONLY when animating directly to SMALL mode from another mode (like Bootloader)
-    // Otherwise rely on current bounds / dragging
-    if (mode === WINDOW_MODES.SMALL) {
-        // Find accurate center
-        const primaryDisplay = screen.getPrimaryDisplay();
-        const { width, height, x: areaX, y: areaY } = primaryDisplay.workArea;
-        const centerX = Math.round(areaX + (width - modeBounds.width) / 2);
-        const centerY = Math.round(areaY + (height - modeBounds.height) / 2);
-
-        bounds = {
-            width: modeBounds.width,
-            height: modeBounds.height,
-            x: centerX,
-            y: centerY
-        };
-        mainWindow.setBounds(bounds, animate);
-
-        // After the window appears in the center, animate it to the top-left corner
-        const CORNER_MARGIN = 20;
-        const targetX = areaX + CORNER_MARGIN;
-        const targetY = areaY + CORNER_MARGIN;
-        setTimeout(() => {
-            animateMainWindowTo(targetX, targetY);
-        }, 1200);
-    } else {
-        bounds = {
-            width: modeBounds.width,
-            height: modeBounds.height,
-            x: currentBounds.x, // Dont force clamping to screen area so we can drag it freely
-            y: currentBounds.y
-        };
-        mainWindow.setBounds(bounds, animate);
-    }
+    const bounds = getRememberedBoundsForMode(mode);
+    moveWindowToBounds(bounds, animate);
 
     if (process.platform === 'darwin') {
         // SMALL mode: no system vibrancy — CSS backdrop-filter on the circle handles the effect.
@@ -620,6 +837,7 @@ function applyWindowMode(mode, animate = true) {
 
     // Send mode change to renderer
     mainWindow.webContents.send('window-mode-changed', mode);
+    rememberBoundsForMode(mode, mainWindow.getBounds(), { persist: false });
 
     console.log(`🔲 Window mode applied: ${mode.toUpperCase()} (${bounds.width}x${bounds.height})`);
 }
@@ -712,10 +930,12 @@ function createWindow() {
 
     mainWindow.on('move', () => {
         syncChatWindowPosition(false);
+        rememberBoundsForMode(currentWindowMode, mainWindow.getBounds(), { persist: false });
     });
 
     mainWindow.on('resize', () => {
         syncChatWindowPosition(false);
+        rememberBoundsForMode(currentWindowMode, mainWindow.getBounds(), { persist: false });
     });
 
     console.log(`✅ Window created in ${isCompactMode ? 'COMPACT' : 'EXPANDED'} mode (${bounds.width}x${bounds.height})`);
@@ -739,11 +959,102 @@ function pushUiThemeToChatWindow() {
     chatWindow.webContents.send('chat-ui-theme', { theme: currentUiTheme });
 }
 
+function queueChatWindowEvent(channel, payload) {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.webContents.send(channel, payload);
+        return true;
+    }
+    if (!isChatWindowBooting) {
+        return false;
+    }
+    pendingChatWindowEvents.push({ channel, payload });
+    if (pendingChatWindowEvents.length > 80) {
+        pendingChatWindowEvents.shift();
+    }
+    return true;
+}
+
+function flushPendingChatWindowEvents() {
+    if (!chatWindow || chatWindow.isDestroyed()) return;
+    while (pendingChatWindowEvents.length > 0) {
+        const next = pendingChatWindowEvents.shift();
+        chatWindow.webContents.send(next.channel, next.payload);
+    }
+}
+
+function pushKnowledgeStateToChatWindow(change = {}) {
+    queueChatWindowEvent('chat-knowledge-state', {
+        timestamp: Date.now(),
+        state: change?.state || knowledgeService.getKnowledgeState(),
+        change
+    });
+}
+
+function pushPromptAgentProgressToChatWindow(entry = {}, runId = '') {
+    queueChatWindowEvent('chat-agent-progress', {
+        runId,
+        timestamp: Date.now(),
+        ...entry
+    });
+}
+
+function isKnowledgeEditingTool(toolName = '') {
+    return [
+        'create_note',
+        'update_note',
+        'append_to_note',
+        'replace_in_note',
+        'delete_note',
+        'create_meta',
+        'update_meta',
+        'delete_meta',
+        'attach_note_to_meta',
+        'detach_note_from_meta'
+    ].includes(String(toolName || '').trim());
+}
+
+function ensurePromptRunChatWindow(runId = '') {
+    const key = String(runId || '').trim();
+    if (!key) return null;
+    if (!promptRunChatWindowState.has(key)) {
+        promptRunChatWindowState.set(key, {
+            sawKnowledgeEdit: false,
+            autoOpened: false
+        });
+    }
+    return promptRunChatWindowState.get(key);
+}
+
+function maybeAutoOpenChatWindowForPromptRun(runId = '', entry = {}) {
+    const state = ensurePromptRunChatWindow(runId);
+    if (!state) return;
+    if (String(entry?.type || '').trim() !== 'tool_call' || String(entry?.phase || '').trim() !== 'start') return;
+    if (!isKnowledgeEditingTool(entry?.toolName)) return;
+    state.sawKnowledgeEdit = true;
+    if (chatWindow && !chatWindow.isDestroyed()) return;
+    if (isChatWindowBooting) return;
+    state.autoOpened = true;
+    createChatWindow();
+}
+
+function finalizePromptRunChatWindow(runId = '') {
+    const key = String(runId || '').trim();
+    const state = promptRunChatWindowState.get(key);
+    promptRunChatWindowState.delete(key);
+    if (!state?.autoOpened) return;
+    if (!chatWindow || chatWindow.isDestroyed()) {
+        pendingAutoCloseChatWindow = true;
+        return;
+    }
+    closeChatWindowWithTransition();
+}
+
 function createChatWindow(options = {}) {
     if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.focus();
         return;
     }
+    isChatWindowBooting = true;
     const floating = options.floating === true;
 
     const bounds = floating ? getFloatingChatBounds() : getChatBounds();
@@ -782,17 +1093,37 @@ function createChatWindow(options = {}) {
     chatWindow.loadFile('renderer/chat.html');
 
     chatWindow.once('ready-to-show', () => {
+        isChatWindowBooting = false;
         if (!isLearningChatPinned) {
             syncChatWindowPosition(false);
         }
-        chatWindow.show();
+        showChatWindowWithTransition();
         pushUiThemeToChatWindow();
+        flushPendingChatWindowEvents();
+        pushKnowledgeStateToChatWindow({
+            entity: 'knowledge',
+            action: 'bootstrap_sync',
+            source: 'main_process',
+            state: knowledgeService.getKnowledgeState()
+        });
+        if (pendingAutoCloseChatWindow) {
+            pendingAutoCloseChatWindow = false;
+            setTimeout(() => {
+                if (chatWindow && !chatWindow.isDestroyed()) {
+                    closeChatWindowWithTransition();
+                }
+            }, 180);
+        }
     });
 
     chatWindow.on('closed', () => {
+        clearChatWindowAnimationTimer();
         chatWindow = null;
         isLearningChatPinned = false;
         chatWindowBoundsBeforeLearning = null;
+        isChatWindowAnimatingClose = false;
+        isChatWindowBooting = false;
+        pendingAutoCloseChatWindow = false;
     });
 
     console.log('💬 Chat window created');
@@ -1386,6 +1717,141 @@ function getKnowledgeTools() {
                     required: ['meta_id', 'note_id']
                 }
             }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'update_finance_instructions',
+                description: 'Actualiza el texto libre de la meta fija Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        instructions: { type: 'string', description: 'Instrucciones operativas completas del agente financiero' }
+                    },
+                    required: ['meta_id', 'instructions']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'create_finance_pocket',
+                description: 'Crea un bolsillo dentro de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        name: { type: 'string', description: 'Nombre del bolsillo' },
+                        bank: { type: 'string', description: 'Banco o app bancaria' },
+                        purpose: { type: 'string', description: 'Uso o propósito del bolsillo' },
+                        balance: { type: 'number', description: 'Saldo inicial' }
+                    },
+                    required: ['meta_id', 'name']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'update_finance_pocket',
+                description: 'Edita un bolsillo existente dentro de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo' },
+                        name: { type: 'string', description: 'Nuevo nombre' },
+                        bank: { type: 'string', description: 'Nuevo banco o app bancaria' },
+                        purpose: { type: 'string', description: 'Nuevo propósito' },
+                        balance: { type: 'number', description: 'Nuevo saldo absoluto' }
+                    },
+                    required: ['meta_id', 'pocket_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'delete_finance_pocket',
+                description: 'Elimina un bolsillo de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo' }
+                    },
+                    required: ['meta_id', 'pocket_id']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'deposit_finance_pocket',
+                description: 'Carga dinero en un bolsillo.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo' },
+                        amount: { type: 'number', description: 'Monto a cargar' }
+                    },
+                    required: ['meta_id', 'pocket_id', 'amount']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'withdraw_finance_pocket',
+                description: 'Descarga dinero de un bolsillo.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        pocket_id: { type: 'string', description: 'ID del bolsillo' },
+                        amount: { type: 'number', description: 'Monto a descargar' }
+                    },
+                    required: ['meta_id', 'pocket_id', 'amount']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'move_money_between_finance_pockets',
+                description: 'Mueve dinero entre dos bolsillos de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        from_pocket_id: { type: 'string', description: 'Bolsillo origen' },
+                        to_pocket_id: { type: 'string', description: 'Bolsillo destino' },
+                        amount: { type: 'number', description: 'Monto a mover' }
+                    },
+                    required: ['meta_id', 'from_pocket_id', 'to_pocket_id', 'amount']
+                }
+            }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'update_finance_projection',
+                description: 'Actualiza ingresos, gastos y horizonte temporal de Finanzas.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        meta_id: { type: 'string', description: 'ID de la meta de finanzas' },
+                        expected_income: { type: 'number', description: 'Ingreso previsto para el horizonte' },
+                        expected_expenses: { type: 'number', description: 'Gasto previsto para el horizonte' },
+                        horizon_weeks: { type: 'integer', description: 'Horizonte en semanas' },
+                        current_label: { type: 'string', description: 'Etiqueta del tiempo actual' },
+                        future_label: { type: 'string', description: 'Etiqueta del tiempo futuro' }
+                    },
+                    required: ['meta_id']
+                }
+            }
         }
     ];
 }
@@ -1501,6 +1967,106 @@ function executeKnowledgeToolCall(call) {
         if (!meta?.id) return { error: 'No pude desanidar la nota de esa meta.' };
         return {
             reply: `Quité la nota de la meta ${describeMeta(meta)}.`,
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'update_finance_instructions') {
+        LoggingSwitch.execution('KnowledgeTool', `update_finance_instructions meta="${String(args.meta_id || '').trim()}"`);
+        const meta = knowledgeService.updateFinanceInstructions(String(args.meta_id || '').trim(), String(args.instructions || ''), { source: 'manual' });
+        if (!meta?.id) return { error: 'No pude actualizar las instrucciones de Finanzas.' };
+        return {
+            reply: 'Actualicé las instrucciones operativas de Finanzas.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'create_finance_pocket') {
+        LoggingSwitch.execution('KnowledgeTool', `create_finance_pocket meta="${String(args.meta_id || '').trim()}"`);
+        const meta = knowledgeService.createFinancePocket(String(args.meta_id || '').trim(), {
+            name: String(args.name || '').trim(),
+            bank: String(args.bank || '').trim(),
+            purpose: String(args.purpose || '').trim(),
+            balance: Number(args.balance || 0)
+        }, { source: 'manual' });
+        if (!meta?.id) return { error: 'No pude crear ese bolsillo.' };
+        return {
+            reply: 'Creé un bolsillo nuevo dentro de Finanzas.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'update_finance_pocket') {
+        LoggingSwitch.execution('KnowledgeTool', `update_finance_pocket meta="${String(args.meta_id || '').trim()}" pocket="${String(args.pocket_id || '').trim()}"`);
+        const meta = knowledgeService.updateFinancePocket(String(args.meta_id || '').trim(), String(args.pocket_id || '').trim(), {
+            name: args.name,
+            bank: args.bank,
+            purpose: args.purpose,
+            balance: args.balance
+        }, { source: 'manual' });
+        if (!meta?.id) return { error: 'No pude actualizar ese bolsillo.' };
+        return {
+            reply: 'Actualicé ese bolsillo de Finanzas.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'delete_finance_pocket') {
+        LoggingSwitch.execution('KnowledgeTool', `delete_finance_pocket meta="${String(args.meta_id || '').trim()}" pocket="${String(args.pocket_id || '').trim()}"`);
+        const meta = knowledgeService.deleteFinancePocket(String(args.meta_id || '').trim(), String(args.pocket_id || '').trim(), { source: 'manual' });
+        if (!meta?.id) return { error: 'No pude eliminar ese bolsillo.' };
+        return {
+            reply: 'Eliminé ese bolsillo de Finanzas.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'deposit_finance_pocket' || name === 'withdraw_finance_pocket') {
+        LoggingSwitch.execution('KnowledgeTool', `${name} meta="${String(args.meta_id || '').trim()}" pocket="${String(args.pocket_id || '').trim()}"`);
+        const meta = knowledgeService.adjustFinancePocket(
+            String(args.meta_id || '').trim(),
+            String(args.pocket_id || '').trim(),
+            Number(args.amount || 0),
+            name === 'withdraw_finance_pocket' ? 'withdraw' : 'deposit',
+            { source: 'manual' }
+        );
+        if (!meta?.id) return { error: 'No pude mover ese saldo.' };
+        return {
+            reply: name === 'withdraw_finance_pocket'
+                ? 'Descargué dinero de ese bolsillo.'
+                : 'Cargué dinero en ese bolsillo.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'move_money_between_finance_pockets') {
+        LoggingSwitch.execution('KnowledgeTool', `move_money_between_finance_pockets meta="${String(args.meta_id || '').trim()}"`);
+        const meta = knowledgeService.moveMoneyBetweenFinancePockets(
+            String(args.meta_id || '').trim(),
+            String(args.from_pocket_id || '').trim(),
+            String(args.to_pocket_id || '').trim(),
+            Number(args.amount || 0),
+            { source: 'manual' }
+        );
+        if (!meta?.id) return { error: 'No pude mover dinero entre esos bolsillos.' };
+        return {
+            reply: 'Moví dinero entre bolsillos de Finanzas.',
+            state: knowledgeService.getKnowledgeState()
+        };
+    }
+
+    if (name === 'update_finance_projection') {
+        LoggingSwitch.execution('KnowledgeTool', `update_finance_projection meta="${String(args.meta_id || '').trim()}"`);
+        const meta = knowledgeService.updateFinanceProjection(String(args.meta_id || '').trim(), {
+            expectedIncome: args.expected_income,
+            expectedExpenses: args.expected_expenses,
+            horizonWeeks: args.horizon_weeks,
+            currentLabel: args.current_label,
+            futureLabel: args.future_label
+        }, { source: 'manual' });
+        if (!meta?.id) return { error: 'No pude actualizar la proyección financiera.' };
+        return {
+            reply: 'Actualicé la proyección temporal de Finanzas.',
             state: knowledgeService.getKnowledgeState()
         };
     }
@@ -1699,14 +2265,27 @@ function summarizeBridgeMeta(meta, notes = []) {
         .filter(Boolean)
         .slice(0, 6)
         .map((note) => ({ id: note.id, title: note.title || 'Sin titulo' }));
+    const financePockets = Array.isArray(meta?.finance?.pockets) ? meta.finance.pockets : [];
+    const financeTotal = financePockets.reduce((sum, pocket) => sum + Number(pocket?.balance || 0), 0);
 
     return {
         id: String(meta?.id || '').trim(),
+        kind: String(meta?.kind || 'generic').trim(),
+        isFixed: Boolean(meta?.isFixed),
         title: String(meta?.title || '').trim() || 'Meta sin titulo',
         description: safeSliceText(meta?.description || '', 220),
         noteIds: Array.isArray(meta?.noteIds) ? meta.noteIds.slice(0, 30) : [],
         noteCount: Array.isArray(meta?.noteIds) ? meta.noteIds.length : 0,
-        noteTitles: linkedTitles
+        noteTitles: linkedTitles,
+        finance: meta?.kind === 'finance'
+            ? {
+                pocketCount: financePockets.length,
+                totalBalance: Math.round(financeTotal * 100) / 100,
+                expectedIncome: Number(meta?.finance?.forecast?.expectedIncome || 0),
+                expectedExpenses: Number(meta?.finance?.forecast?.expectedExpenses || 0),
+                horizonWeeks: Number(meta?.finance?.forecast?.horizonWeeks || 0)
+            }
+            : null
     };
 }
 
@@ -2037,6 +2616,176 @@ function buildGptActionBridgeOperations() {
             }
         },
         {
+            name: 'update_finance_instructions',
+            summary: 'Update finance instructions',
+            description: 'Actualiza el texto libre de la meta fija Finanzas.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    instructions: { type: 'string' }
+                },
+                required: ['meta_id', 'instructions']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.updateFinanceInstructions(String(body.meta_id || '').trim(), String(body.instructions || ''));
+                if (!meta?.id) return { ok: false, error: 'Could not update finance instructions' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'create_finance_pocket',
+            summary: 'Create finance pocket',
+            description: 'Crea un bolsillo dentro de Finanzas.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    name: { type: 'string' },
+                    bank: { type: 'string' },
+                    purpose: { type: 'string' },
+                    balance: { type: 'number' }
+                },
+                required: ['meta_id', 'name']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.createFinancePocket(String(body.meta_id || '').trim(), body);
+                if (!meta?.id) return { ok: false, error: 'Could not create finance pocket' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'update_finance_pocket',
+            summary: 'Update finance pocket',
+            description: 'Edita un bolsillo de Finanzas.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    pocket_id: { type: 'string' },
+                    name: { type: 'string' },
+                    bank: { type: 'string' },
+                    purpose: { type: 'string' },
+                    balance: { type: 'number' }
+                },
+                required: ['meta_id', 'pocket_id']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.updateFinancePocket(String(body.meta_id || '').trim(), String(body.pocket_id || '').trim(), body);
+                if (!meta?.id) return { ok: false, error: 'Could not update finance pocket' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'delete_finance_pocket',
+            summary: 'Delete finance pocket',
+            description: 'Elimina un bolsillo de Finanzas.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    pocket_id: { type: 'string' }
+                },
+                required: ['meta_id', 'pocket_id']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.deleteFinancePocket(String(body.meta_id || '').trim(), String(body.pocket_id || '').trim());
+                if (!meta?.id) return { ok: false, error: 'Could not delete finance pocket' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'deposit_finance_pocket',
+            summary: 'Deposit finance pocket',
+            description: 'Carga dinero en un bolsillo.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    pocket_id: { type: 'string' },
+                    amount: { type: 'number' }
+                },
+                required: ['meta_id', 'pocket_id', 'amount']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.adjustFinancePocket(String(body.meta_id || '').trim(), String(body.pocket_id || '').trim(), Number(body.amount || 0), 'deposit');
+                if (!meta?.id) return { ok: false, error: 'Could not deposit in finance pocket' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'withdraw_finance_pocket',
+            summary: 'Withdraw finance pocket',
+            description: 'Descarga dinero de un bolsillo.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    pocket_id: { type: 'string' },
+                    amount: { type: 'number' }
+                },
+                required: ['meta_id', 'pocket_id', 'amount']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.adjustFinancePocket(String(body.meta_id || '').trim(), String(body.pocket_id || '').trim(), Number(body.amount || 0), 'withdraw');
+                if (!meta?.id) return { ok: false, error: 'Could not withdraw from finance pocket' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'move_money_between_finance_pockets',
+            summary: 'Move money between finance pockets',
+            description: 'Mueve dinero entre bolsillos de Finanzas.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    from_pocket_id: { type: 'string' },
+                    to_pocket_id: { type: 'string' },
+                    amount: { type: 'number' }
+                },
+                required: ['meta_id', 'from_pocket_id', 'to_pocket_id', 'amount']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.moveMoneyBetweenFinancePockets(
+                    String(body.meta_id || '').trim(),
+                    String(body.from_pocket_id || '').trim(),
+                    String(body.to_pocket_id || '').trim(),
+                    Number(body.amount || 0)
+                );
+                if (!meta?.id) return { ok: false, error: 'Could not move money between finance pockets' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
+            name: 'update_finance_projection',
+            summary: 'Update finance projection',
+            description: 'Actualiza ingresos, gastos y horizonte de Finanzas.',
+            inputSchema: {
+                type: 'object',
+                properties: {
+                    meta_id: { type: 'string' },
+                    expected_income: { type: 'number' },
+                    expected_expenses: { type: 'number' },
+                    horizon_weeks: { type: 'integer' },
+                    current_label: { type: 'string' },
+                    future_label: { type: 'string' }
+                },
+                required: ['meta_id']
+            },
+            handler: async (body = {}) => {
+                const meta = knowledgeService.updateFinanceProjection(String(body.meta_id || '').trim(), {
+                    expectedIncome: body.expected_income,
+                    expectedExpenses: body.expected_expenses,
+                    horizonWeeks: body.horizon_weeks,
+                    currentLabel: body.current_label,
+                    futureLabel: body.future_label
+                });
+                if (!meta?.id) return { ok: false, error: 'Could not update finance projection' };
+                return { ok: true, meta: summarizeBridgeMeta(meta, getKnowledgeBridgeState().tabs || []), state: getKnowledgeBridgeState() };
+            }
+        },
+        {
             name: 'execute_screen_action',
             summary: 'Prepare computer action',
             description: 'Prepara una accion del computador usando goal, app y steps_hint.',
@@ -2158,19 +2907,24 @@ async function planUnifiedActionIntent(userText, options = {}) {
 ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
     const prompt = String(payload?.prompt || '').trim();
     const runId = String(payload?.runId || `run_${Date.now()}`).trim();
+    ensurePromptRunChatWindow(runId);
 
     try {
-        return await promptAgentRuntime.runPromptChat({
+        const result = await promptAgentRuntime.runPromptChat({
             prompt,
             runId,
             emit: (entry = {}) => {
+                maybeAutoOpenChatWindowForPromptRun(runId, entry);
                 event.sender.send('prompt-agent-progress', {
                     runId,
                     timestamp: Date.now(),
                     ...entry
                 });
+                pushPromptAgentProgressToChatWindow(entry, runId);
             }
         });
+        finalizePromptRunChatWindow(runId);
+        return result;
     } catch (error) {
         console.error('❌ [PromptAgent] Failed:', error);
         event.sender.send('prompt-agent-progress', {
@@ -2181,6 +2935,13 @@ ipcMain.handle('prompt-agent-run', async (event, payload = {}) => {
             visibility: 'public',
             message: 'Falló el runtime del prompt principal'
         });
+        pushPromptAgentProgressToChatWindow({
+            type: 'status',
+            phase: 'error',
+            visibility: 'public',
+            message: 'Falló el runtime del prompt principal'
+        }, runId);
+        finalizePromptRunChatWindow(runId);
         return {
             success: false,
             runId,
@@ -2266,7 +3027,7 @@ ipcMain.handle('chat-set-active-tab', async (event, payload = {}) => {
 });
 
 ipcMain.handle('chat-archive-tab', async (event, payload = {}) => {
-    const result = knowledgeService.deleteNote(payload.tabId);
+    const result = knowledgeService.deleteNote(payload.tabId, payload);
     return result?.state || knowledgeService.getKnowledgeState();
 });
 
@@ -2745,6 +3506,10 @@ let lastMouseButtonState = 0;
 let isRecordingClick = false;
 const COMMAND_MODIFIER_FLAG = 1 << 20;
 const OPTION_MODIFIER_FLAG = 1 << 19;
+const COMMAND_TAP_MAX_MS = 260;
+const COMMAND_DOUBLE_PRESS_WINDOW_MS = 360;
+const WINDOW_SWIPE_MIN_DELTA = 45;
+const WINDOW_EDGE_MARGIN = 20;
 
 const commandHoldOverride = {
     isPressed: false,
@@ -2756,9 +3521,145 @@ const commandHoldOverride = {
     interruptedFlowContext: null,
     hasNativeModifierSupport: null
 };
+const commandDoubleTapState = {
+    isDown: false,
+    startedAt: 0,
+    eligibleTap: false,
+    lastTapAt: 0
+};
 
 let activeScreenFlow = null;
 let activeScreenFlowSeq = 0;
+
+function toggleWindowModeFromDoubleCommand() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (currentWindowMode === WINDOW_MODES.BOOTLOADER) return;
+
+    const targetMode = currentWindowMode === WINDOW_MODES.LARGE
+        ? getPreferredCompactMode()
+        : WINDOW_MODES.LARGE;
+
+    applyWindowMode(targetMode);
+}
+
+function registerCommandTap(now = Date.now()) {
+    if ((now - commandDoubleTapState.lastTapAt) <= COMMAND_DOUBLE_PRESS_WINDOW_MS) {
+        commandDoubleTapState.lastTapAt = 0;
+        toggleWindowModeFromDoubleCommand();
+        return;
+    }
+
+    commandDoubleTapState.lastTapAt = now;
+}
+
+function classifyWindowSwipe(deltaX, deltaY) {
+    const normalizedDeltaX = -deltaX;
+    const normalizedDeltaY = -deltaY;
+    const absX = Math.abs(normalizedDeltaX);
+    const absY = Math.abs(normalizedDeltaY);
+
+    if (absX < WINDOW_SWIPE_MIN_DELTA && absY < WINDOW_SWIPE_MIN_DELTA) {
+        return null;
+    }
+
+    const diagonalIntent = absX >= WINDOW_SWIPE_MIN_DELTA
+        && absY >= WINDOW_SWIPE_MIN_DELTA
+        && (Math.min(absX, absY) / Math.max(absX, absY)) >= 0.55;
+
+    if (diagonalIntent) {
+        return {
+            kind: 'diagonal',
+            horizontal: normalizedDeltaX >= 0 ? 'right' : 'left',
+            vertical: normalizedDeltaY >= 0 ? 'down' : 'up'
+        };
+    }
+
+    if (absX >= absY) {
+        return {
+            kind: 'horizontal',
+            horizontal: normalizedDeltaX >= 0 ? 'right' : 'left',
+            vertical: null
+        };
+    }
+
+    return {
+        kind: 'vertical',
+        horizontal: null,
+        vertical: normalizedDeltaY >= 0 ? 'down' : 'up'
+    };
+}
+
+function getSnapEdgesForBounds(bounds, area) {
+    return {
+        left: area.x + WINDOW_EDGE_MARGIN,
+        right: area.x + area.width - bounds.width - WINDOW_EDGE_MARGIN,
+        top: area.y + WINDOW_EDGE_MARGIN,
+        bottom: area.y + area.height - bounds.height - WINDOW_EDGE_MARGIN
+    };
+}
+
+function moveCompactWindowForSwipe(direction, bounds, area) {
+    const edges = getSnapEdgesForBounds(bounds, area);
+    let targetX = bounds.x;
+    let targetY = bounds.y;
+
+    if (direction.kind === 'diagonal') {
+        targetX = direction.horizontal === 'right' ? edges.right : edges.left;
+        targetY = direction.vertical === 'down' ? edges.bottom : edges.top;
+    } else if (direction.kind === 'horizontal') {
+        targetX = direction.horizontal === 'right' ? edges.right : edges.left;
+    } else if (direction.kind === 'vertical') {
+        targetY = direction.vertical === 'down' ? edges.bottom : edges.top;
+    }
+
+    return { x: targetX, y: targetY };
+}
+
+function moveLargeWindowForSwipe(direction, bounds, area) {
+    const edges = getSnapEdgesForBounds(bounds, area);
+    const currentCenterX = bounds.x + (bounds.width / 2);
+    const areaCenterX = area.x + (area.width / 2);
+    const isCurrentlyOnLeft = currentCenterX < areaCenterX;
+    let targetX = isCurrentlyOnLeft ? edges.right : edges.left;
+    let targetY = bounds.y;
+
+    if (direction.kind === 'horizontal' || direction.kind === 'diagonal') {
+        targetX = direction.horizontal === 'right' ? edges.right : edges.left;
+    }
+
+    if (direction.kind === 'diagonal') {
+        targetY = direction.vertical === 'down' ? edges.bottom : edges.top;
+    }
+
+    return { x: targetX, y: targetY };
+}
+
+function moveWindowViaTrackpadSwipe(payload = {}) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const deltaX = Number(payload.deltaX);
+    const deltaY = Number(payload.deltaY);
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return;
+
+    const direction = classifyWindowSwipe(deltaX, deltaY);
+    if (!direction) return;
+
+    const bounds = mainWindow.getBounds();
+    const display = screen.getDisplayMatching(bounds);
+    const area = display.workArea;
+    const nextPoint = currentWindowMode === WINDOW_MODES.LARGE
+        ? moveLargeWindowForSwipe(direction, bounds, area)
+        : moveCompactWindowForSwipe(direction, bounds, area);
+
+    const clamped = clampBoundsToDisplay({
+        ...bounds,
+        x: nextPoint.x,
+        y: nextPoint.y
+    });
+
+    if (!clamped) return;
+    animateMainWindowTo(clamped.x, clamped.y);
+}
 
 function syncActiveScreenFlow(sessionId) {
     const flow = sessionId ? executionSessions.toFlow(sessionId) : null;
@@ -3306,10 +4207,35 @@ setInterval(async () => {
                     console.log('⌨️ [CommandHold] Native modifier polling enabled (Command + Option)');
                     commandHoldOverride.hasNativeModifierSupport = true;
                 }
+                const now = Date.now();
                 const modifiers = nativeAddon.getModifierFlags();
                 const commandDown = (modifiers & COMMAND_MODIFIER_FLAG) !== 0;
                 const optionDown = (modifiers & OPTION_MODIFIER_FLAG) !== 0;
                 const commandHoldComboDown = commandDown && optionDown;
+                const commandOnlyDown = commandDown && !optionDown;
+
+                if (commandOnlyDown && !commandDoubleTapState.isDown) {
+                    commandDoubleTapState.isDown = true;
+                    commandDoubleTapState.startedAt = now;
+                    commandDoubleTapState.eligibleTap = true;
+                } else if (commandDoubleTapState.isDown && !commandOnlyDown) {
+                    const tapDuration = now - commandDoubleTapState.startedAt;
+                    const eligibleTap = commandDoubleTapState.eligibleTap
+                        && tapDuration <= COMMAND_TAP_MAX_MS
+                        && !commandHoldComboDown
+                        && !commandHoldOverride.isPressed;
+                    commandDoubleTapState.isDown = false;
+                    commandDoubleTapState.startedAt = 0;
+                    commandDoubleTapState.eligibleTap = false;
+
+                    if (eligibleTap) {
+                        registerCommandTap(now);
+                    }
+                }
+
+                if (optionDown && commandDoubleTapState.isDown) {
+                    commandDoubleTapState.eligibleTap = false;
+                }
 
                 if (commandHoldComboDown && !commandHoldOverride.isPressed) {
                     commandHoldOverride.isPressed = true;
@@ -3354,6 +4280,10 @@ ipcMain.on('set-window-mode', (event, mode) => {
     applyWindowMode(mode);
 });
 
+ipcMain.on('move-window-via-trackpad-swipe', (event, payload) => {
+    moveWindowViaTrackpadSwipe(payload);
+});
+
 ipcMain.on('window-drag-start', (event, { mouseX, mouseY }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) return;
@@ -3384,7 +4314,7 @@ ipcMain.on('window-move', (event, { x, y }) => {
 
 ipcMain.handle('toggle-chat-window', () => {
     if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.close();
+        closeChatWindowWithTransition();
     } else {
         createChatWindow();
     }
@@ -3921,6 +4851,11 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+    if (windowBoundsSaveTimer) {
+        clearTimeout(windowBoundsSaveTimer);
+        windowBoundsSaveTimer = null;
+    }
+    saveSettings();
     if (browserCoreService) {
         void browserCoreService.stop().catch(() => { });
     }
@@ -4701,7 +5636,7 @@ async function stopChatGPTVoiceConversation() {
 async function forceInterruptChatGPTVoice() {
     await recoverChatPageIfNeeded();
 
-    LoggingSwitch.uiux('turn_taking', 'force_interrupt_attempt');
+    logTurnTakingUiux('force_interrupt_attempt');
 
     const interruptSelectors = [
         'button[aria-label*="Interrupt" i]',
@@ -4717,7 +5652,7 @@ async function forceInterruptChatGPTVoice() {
             const locator = chatPage.locator(sel);
             if (await locator.count() > 0 && await locator.first().isVisible()) {
                 await locator.first().click();
-                LoggingSwitch.uiux('turn_taking', 'force_interrupt_selector_clicked', { selector: sel });
+                logTurnTakingUiux('force_interrupt_selector_clicked', { selector: sel });
                 return { success: true, mode: 'selector', selector: sel };
             }
         } catch (_) {
@@ -4727,14 +5662,14 @@ async function forceInterruptChatGPTVoice() {
 
     try {
         await chatPage.keyboard.press('Escape');
-        LoggingSwitch.uiux('turn_taking', 'force_interrupt_escape_sent');
+        logTurnTakingUiux('force_interrupt_escape_sent');
         await chatPage.waitForTimeout(220);
     } catch (_) {
         // ignored
     }
 
     const bridgeDisabled = await disableChatGPTVoiceBridge();
-    LoggingSwitch.uiux('turn_taking', 'force_interrupt_bridge_disabled', {
+    logTurnTakingUiux('force_interrupt_bridge_disabled', {
         success: !!bridgeDisabled.success,
         error: bridgeDisabled.error || ''
     });
@@ -4746,7 +5681,7 @@ async function forceInterruptChatGPTVoice() {
 
     await chatPage.waitForTimeout(280);
     const startResult = await startChatGPTVoiceConversation({ skipGreeting: true });
-    LoggingSwitch.uiux('turn_taking', 'force_interrupt_restart_result', { success: !!startResult.success });
+    logTurnTakingUiux('force_interrupt_restart_result', { success: !!startResult.success });
     return startResult.success
         ? { success: true, mode: 'restart' }
         : { success: false, error: startResult.error || 'Could not restart voice after interruption' };
@@ -4774,7 +5709,7 @@ ipcMain.handle('chatgpt-force-interrupt', async () => {
         const result = await forceInterruptChatGPTVoice();
         return result;
     } catch (error) {
-        LoggingSwitch.uiux('turn_taking', 'force_interrupt_error', { error: error.message || 'unknown' });
+        logTurnTakingUiux('force_interrupt_error', { error: error.message || 'unknown' });
         return { success: false, error: error.message };
     }
 });
@@ -4782,9 +5717,9 @@ ipcMain.handle('chatgpt-force-interrupt', async () => {
 ipcMain.handle('chatgpt-set-synthetic-wait', async (event, payload = {}) => {
     const enabled = !!payload.enabled;
     const mode = String(payload.mode || 'hold').trim().toLowerCase() === 'interrupt' ? 'interrupt' : 'hold';
-    LoggingSwitch.uiux('turn_taking', 'bridge_toggle_requested', { enabled, mode });
+    logTurnTakingUiux('bridge_toggle_requested', { enabled, mode });
     const result = await setChatGPTSyntheticWaitEnabled({ enabled, mode });
-    LoggingSwitch.uiux('turn_taking', 'bridge_toggle_result', {
+    logTurnTakingUiux('bridge_toggle_result', {
         enabled,
         mode,
         success: !!result.success,

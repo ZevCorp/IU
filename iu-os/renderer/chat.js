@@ -17,7 +17,8 @@ const state = {
   executionModalMetaId: null,
   newNoteModalMetaId: null,
   existingNoteModalMetaId: null,
-  existingNoteSelection: []
+  existingNoteSelection: [],
+  livePresentation: null
 };
 
 const refs = {
@@ -38,7 +39,14 @@ const refs = {
 let saveTimer = null;
 let lastEditorSyncTabId = null;
 const META_SOURCE_PREFIX = 'meta:';
+const FIXED_FINANCE_META_ID = 'meta_finanzas';
 const metaFeedUiState = new Map();
+const tabsScrollState = {
+  notes: 0,
+  metas: 0
+};
+let livePresentationTimer = null;
+let livePresentationClearTimer = null;
 
 function emitUiUx(event, data = {}) {
   if (!window.uChat?.logUiUx) return;
@@ -50,7 +58,8 @@ function emitUiUx(event, data = {}) {
 }
 
 function tabLabel(tab) {
-  const title = String(tab?.title || '').trim();
+  const live = getLiveNotePresentation(tab?.id);
+  const title = String(live?.title ?? tab?.title ?? '').trim();
   return title || 'Nueva nota';
 }
 
@@ -83,6 +92,128 @@ function normalizeExecutionType(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'dynamic' || raw === 'oneoff') return raw;
   return 'recurrent';
+}
+
+function sanitizeMoney(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.round(numeric * 100) / 100;
+}
+
+function sanitizePositiveInt(value, fallback = 4, min = 1, max = 52) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function formatMoney(value, currency = 'COP') {
+  try {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: String(currency || 'COP').trim() || 'COP',
+      maximumFractionDigits: 0
+    }).format(Number(value || 0));
+  } catch (_) {
+    return `${Number(value || 0).toFixed(0)} ${currency || 'COP'}`;
+  }
+}
+
+function sanitizeFinancePocket(pocket = {}) {
+  const id = String(pocket.id || `pocket_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`).trim();
+  return {
+    id,
+    name: String(pocket.name || '').trim() || 'Bolsillo',
+    bank: String(pocket.bank || '').trim(),
+    purpose: String(pocket.purpose || '').trim(),
+    balance: sanitizeMoney(pocket.balance)
+  };
+}
+
+function createDefaultFinanceState() {
+  return {
+    version: 1,
+    currency: 'COP',
+    pockets: [],
+    forecast: {
+      expectedIncome: 0,
+      expectedExpenses: 0,
+      horizonWeeks: 4
+    },
+    timeline: {
+      currentLabel: 'Tiempo actual',
+      futureLabel: 'Tiempo futuro'
+    },
+    agentProfile: {
+      mode: 'specialized_finance_agent',
+      architecture: 'main-agent-compatible',
+      tools: [
+        'update_finance_instructions',
+        'create_finance_pocket',
+        'update_finance_pocket',
+        'delete_finance_pocket',
+        'deposit_finance_pocket',
+        'withdraw_finance_pocket',
+        'move_money_between_finance_pockets',
+        'update_finance_projection'
+      ]
+    }
+  };
+}
+
+function sanitizeFinanceState(finance = {}) {
+  const base = createDefaultFinanceState();
+  const rawPockets = Array.isArray(finance.pockets) ? finance.pockets : [];
+  const seen = new Set();
+  const pockets = [];
+  for (const rawPocket of rawPockets) {
+    const pocket = sanitizeFinancePocket(rawPocket);
+    if (seen.has(pocket.id)) continue;
+    seen.add(pocket.id);
+    pockets.push(pocket);
+  }
+  return {
+    version: 1,
+    currency: String(finance.currency || base.currency).trim() || base.currency,
+    pockets,
+    forecast: {
+      expectedIncome: sanitizeMoney(finance?.forecast?.expectedIncome),
+      expectedExpenses: sanitizeMoney(finance?.forecast?.expectedExpenses),
+      horizonWeeks: sanitizePositiveInt(finance?.forecast?.horizonWeeks, base.forecast.horizonWeeks)
+    },
+    timeline: {
+      currentLabel: String(finance?.timeline?.currentLabel || base.timeline.currentLabel).trim() || base.timeline.currentLabel,
+      futureLabel: String(finance?.timeline?.futureLabel || base.timeline.futureLabel).trim() || base.timeline.futureLabel
+    },
+    agentProfile: {
+      mode: String(finance?.agentProfile?.mode || base.agentProfile.mode).trim() || base.agentProfile.mode,
+      architecture: String(finance?.agentProfile?.architecture || base.agentProfile.architecture).trim() || base.agentProfile.architecture,
+      tools: uniqueIds(finance?.agentProfile?.tools || base.agentProfile.tools)
+    }
+  };
+}
+
+function isFinanceMeta(meta) {
+  return String(meta?.kind || '').trim().toLowerCase() === 'finance' || String(meta?.id || '').trim() === FIXED_FINANCE_META_ID;
+}
+
+function getFinanceSummary(meta) {
+  const finance = sanitizeFinanceState(meta?.finance);
+  const currentTotal = finance.pockets.reduce((sum, pocket) => sum + Number(pocket.balance || 0), 0);
+  const expectedIncome = Number(finance.forecast.expectedIncome || 0);
+  const expectedExpenses = Number(finance.forecast.expectedExpenses || 0);
+  const net = expectedIncome - expectedExpenses;
+  const futureTotal = currentTotal + net;
+  const weeklyExpense = finance.forecast.horizonWeeks > 0 ? expectedExpenses / finance.forecast.horizonWeeks : 0;
+  const runwayWeeks = weeklyExpense > 0 ? currentTotal / weeklyExpense : null;
+  return {
+    currentTotal,
+    futureTotal,
+    net,
+    expectedIncome,
+    expectedExpenses,
+    horizonWeeks: finance.forecast.horizonWeeks,
+    runwayWeeks
+  };
 }
 
 function loadMetaViewMode() {
@@ -160,6 +291,19 @@ function autoResizeNoteBody() {
   refs.noteMarkers.style.height = `${next}px`;
 }
 
+function rememberTabsScroll(kind, element) {
+  if (!element) return;
+  tabsScrollState[kind] = element.scrollLeft;
+}
+
+function restoreTabsScroll(kind, element) {
+  if (!element) return;
+  const target = Math.max(0, Number(tabsScrollState[kind] || 0));
+  requestAnimationFrame(() => {
+    element.scrollLeft = target;
+  });
+}
+
 function reorderMetas(metaId, targetMetaId, position = 'before') {
   const sourceIndex = state.metas.findIndex((meta) => meta.id === metaId);
   const targetIndex = state.metas.findIndex((meta) => meta.id === targetMetaId);
@@ -188,6 +332,8 @@ function moveMetaToIndex(metaId, index) {
 }
 
 function removeMeta(metaId) {
+  const meta = state.metas.find((item) => item.id === metaId);
+  if (meta?.isFixed) return;
   const next = state.metas.filter((meta) => meta.id !== metaId);
   if (next.length === state.metas.length) return;
 
@@ -233,6 +379,8 @@ function sanitizeMeta(meta) {
 
   return {
     id: String(meta.id || ''),
+    kind: isFinanceMeta(meta) ? 'finance' : 'generic',
+    isFixed: Boolean(meta.isFixed) || isFinanceMeta(meta),
     title: String(meta.title || meta.name || '').trim(),
     description: String(meta.description || '').trim(),
     noteIds: legacyNoteIds,
@@ -254,7 +402,8 @@ function sanitizeMeta(meta) {
         phase: String(log.phase || 'info'),
         message: String(log.message || '').trim()
       })).filter((log) => log.message).slice(-24)
-      : []
+      : [],
+    finance: isFinanceMeta(meta) ? sanitizeFinanceState(meta.finance) : null
   };
 }
 
@@ -267,6 +416,7 @@ function saveMetas() {
 
 function cleanupMetasAgainstTabs() {
   const validIds = new Set(state.tabs.map((tab) => tab.id));
+  let changed = false;
   state.metas = state.metas.map((meta) => {
     const next = {
       ...meta,
@@ -275,9 +425,19 @@ function cleanupMetasAgainstTabs() {
       excludedNoteIds: meta.excludedNoteIds.filter((id) => validIds.has(id)),
       learningLinks: (meta.learningLinks || []).filter((link) => (String(link.sourceNoteId || '').startsWith(META_SOURCE_PREFIX) || validIds.has(link.sourceNoteId)) && validIds.has(link.linkedNoteId))
     };
-    return { ...next, noteIds: recomputeMetaNoteIds(next) };
+    const normalized = { ...next, noteIds: recomputeMetaNoteIds(next) };
+    if (
+      normalized.noteIds.length !== meta.noteIds.length ||
+      normalized.manualNoteIds.length !== meta.manualNoteIds.length ||
+      normalized.agentNoteIds.length !== meta.agentNoteIds.length ||
+      normalized.excludedNoteIds.length !== meta.excludedNoteIds.length ||
+      normalized.learningLinks.length !== (meta.learningLinks || []).length
+    ) {
+      changed = true;
+    }
+    return normalized;
   });
-  saveMetas();
+  if (changed) saveMetas();
 }
 
 function uniqueIds(list) {
@@ -331,6 +491,240 @@ function getMetaForNote(noteId) {
   }
 
   return null;
+}
+
+function isPromptAgentSource(source) {
+  return String(source || '').trim().toLowerCase() === 'prompt_agent';
+}
+
+function clearLivePresentation(options = {}) {
+  clearInterval(livePresentationTimer);
+  livePresentationTimer = null;
+  clearTimeout(livePresentationClearTimer);
+  livePresentationClearTimer = null;
+  if (options.keepState) return;
+  state.livePresentation = null;
+  refs.notesView.classList.remove('live-focus-view');
+  refs.projectsView.classList.remove('live-focus-view');
+  refs.noteTitle.classList.remove('live-writing');
+  refs.noteBody.classList.remove('live-writing');
+}
+
+function scheduleLivePresentationClear(snapshot = null) {
+  clearTimeout(livePresentationClearTimer);
+  livePresentationClearTimer = setTimeout(() => {
+    const live = state.livePresentation;
+    if (!live) return;
+    clearLivePresentation();
+    if (live.kind === 'meta') {
+      renderMetasView();
+      renderNoteMarkers();
+      return;
+    }
+    renderNoteTabs();
+    if (snapshot) {
+      applySnapshot(snapshot, { syncEditor: true });
+    } else {
+      syncEditorFromState(true);
+      renderNoteMarkers();
+    }
+  }, 1400);
+}
+
+function getStreamStep(text, index) {
+  const total = String(text || '').length;
+  if (total <= index) return 0;
+  return Math.max(1, Math.min(8, Math.ceil((total - index) / 14)));
+}
+
+function renderLivePresentationFrame() {
+  const live = state.livePresentation;
+  if (!live) return;
+  if (live.kind === 'meta') {
+    renderMetasView();
+    renderNoteMarkers();
+    return;
+  }
+  renderNoteTabs();
+  syncEditorFromState(true);
+  renderNoteMarkers();
+}
+
+function startLivePresentation(payload = {}) {
+  const kind = String(payload.kind || '').trim();
+  const id = String(payload.id || '').trim();
+  if (!kind || !id) return;
+
+  clearLivePresentation();
+  state.livePresentation = {
+    kind,
+    action: String(payload.action || 'update').trim(),
+    id,
+    title: String(payload.title || '').trim(),
+    description: String(payload.description || ''),
+    body: String(payload.body || ''),
+    titleIndex: 0,
+    descriptionIndex: 0,
+    bodyIndex: 0,
+    streaming: true,
+    startedAt: Date.now()
+  };
+
+  if (kind === 'meta') {
+    state.activeMetaId = id;
+    state.metaViewMode = 'expanded';
+    refs.projectsView.classList.add('live-focus-view');
+    setMode('projects');
+  } else {
+    state.activeTabId = id;
+    refs.notesView.classList.add('live-focus-view');
+    setMode('notes');
+  }
+
+  renderLivePresentationFrame();
+
+  livePresentationTimer = setInterval(() => {
+    const live = state.livePresentation;
+    if (!live) {
+      clearLivePresentation();
+      return;
+    }
+
+    let changed = false;
+    if (live.titleIndex < live.title.length) {
+      live.titleIndex = Math.min(live.title.length, live.titleIndex + getStreamStep(live.title, live.titleIndex));
+      changed = true;
+    }
+    if (live.descriptionIndex < live.description.length) {
+      live.descriptionIndex = Math.min(live.description.length, live.descriptionIndex + getStreamStep(live.description, live.descriptionIndex));
+      changed = true;
+    }
+    if (live.bodyIndex < live.body.length) {
+      live.bodyIndex = Math.min(live.body.length, live.bodyIndex + getStreamStep(live.body, live.bodyIndex));
+      changed = true;
+    }
+
+    renderLivePresentationFrame();
+
+    if (!changed) {
+      live.streaming = false;
+      clearInterval(livePresentationTimer);
+      livePresentationTimer = null;
+      scheduleLivePresentationClear();
+    }
+  }, 34);
+}
+
+function getLiveMetaPresentation(metaId) {
+  const live = state.livePresentation;
+  if (!live || live.kind !== 'meta' || live.id !== String(metaId || '').trim()) return null;
+  return {
+    title: live.title.slice(0, live.titleIndex),
+    description: live.description.slice(0, live.descriptionIndex),
+    streaming: live.streaming !== false
+  };
+}
+
+function getLiveNotePresentation(noteId) {
+  const live = state.livePresentation;
+  if (!live || live.kind !== 'note' || live.id !== String(noteId || '').trim()) return null;
+  return {
+    title: live.title.slice(0, live.titleIndex),
+    body: live.body.slice(0, live.bodyIndex),
+    streaming: live.streaming !== false
+  };
+}
+
+function applyLiveNotePresentation() {
+  const live = getLiveNotePresentation(state.activeTabId);
+  const active = Boolean(live);
+  refs.noteTitle.classList.toggle('live-writing', active);
+  refs.noteBody.classList.toggle('live-writing', active);
+  refs.notesView.classList.toggle('live-focus-view', active);
+  if (!live) return false;
+  refs.noteTitle.value = live.title;
+  refs.noteBody.value = live.body;
+  autoResizeNoteBody();
+  refs.noteMarkers.scrollTop = refs.noteBody.scrollTop;
+  refs.noteMarkers.scrollLeft = refs.noteBody.scrollLeft;
+  return true;
+}
+
+function handleAgentToolStart(payload = {}) {
+  if (String(payload.type || '').trim() !== 'tool_call' || String(payload.phase || '').trim() !== 'start') return;
+  const toolName = String(payload.toolName || '').trim();
+  const args = payload.args && typeof payload.args === 'object' ? payload.args : {};
+  const financeToolNames = new Set([
+    'update_finance_instructions',
+    'create_finance_pocket',
+    'update_finance_pocket',
+    'delete_finance_pocket',
+    'deposit_finance_pocket',
+    'withdraw_finance_pocket',
+    'move_money_between_finance_pockets',
+    'update_finance_projection'
+  ]);
+
+  if (toolName === 'create_meta' || toolName === 'update_meta') {
+    if (args.meta_id) state.activeMetaId = String(args.meta_id).trim();
+    state.metaViewMode = 'expanded';
+    refs.projectsView.classList.add('live-focus-view');
+    setMode('projects');
+    renderMetasView();
+    return;
+  }
+
+  if (toolName === 'create_note' || toolName === 'update_note' || toolName === 'append_to_note' || toolName === 'replace_in_note') {
+    if (args.note_id) state.activeTabId = String(args.note_id).trim();
+    refs.notesView.classList.add('live-focus-view');
+    setMode('notes');
+    renderNoteTabs();
+    syncEditorFromState(true);
+  }
+
+  if (financeToolNames.has(toolName)) {
+    if (args.meta_id) state.activeMetaId = String(args.meta_id).trim();
+    state.metaViewMode = 'expanded';
+    refs.projectsView.classList.add('live-focus-view');
+    setMode('projects');
+    renderMetasView();
+  }
+}
+
+function startLivePresentationFromChange(change = {}) {
+  if (!isPromptAgentSource(change.source)) return;
+
+  if (change.entity === 'meta' && (change.action === 'create' || change.action === 'update')) {
+    const meta = change.meta;
+    if (!meta?.id) return;
+    startLivePresentation({
+      kind: 'meta',
+      action: change.action,
+      id: meta.id,
+      title: meta.title || '',
+      description: meta.description || ''
+    });
+    return;
+  }
+
+  if (change.entity === 'note' && (change.action === 'create' || change.action === 'update')) {
+    const note = change.note;
+    if (!note?.id) return;
+    startLivePresentation({
+      kind: 'note',
+      action: change.action,
+      id: note.id,
+      title: note.title || '',
+      body: note.body || ''
+    });
+  }
+}
+
+function handleKnowledgeStateChanged(payload = {}) {
+  if (!payload?.state) return;
+  if (String(payload?.change?.source || '').trim().toLowerCase() === 'chat_window') return;
+  applySnapshot(payload.state, { syncEditor: true });
+  startLivePresentationFromChange(payload.change || {});
 }
 
 function applySnapshot(snapshot, options = {}) {
@@ -395,16 +789,17 @@ function closeMetaOverlays() {
 
 async function closeTabWithoutSaving(tabId) {
   clearTimeout(saveTimer);
-  const next = await window.uChat.archiveTab(tabId);
+  const next = await window.uChat.archiveTab({ tabId, source: 'chat_window' });
   applySnapshot(next, { syncEditor: true });
 }
 
 function renderNoteTabs() {
+  rememberTabsScroll('notes', refs.noteTabs);
   refs.noteTabs.innerHTML = '';
 
   for (const tab of state.tabs) {
     const root = document.createElement('div');
-    root.className = `note-tab${tab.id === state.activeTabId ? ' active' : ''}`;
+    root.className = `note-tab${tab.id === state.activeTabId ? ' active' : ''}${getLiveNotePresentation(tab.id) ? ' live-focus-tab' : ''}`;
 
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
@@ -429,6 +824,8 @@ function renderNoteTabs() {
     root.appendChild(closeBtn);
     refs.noteTabs.appendChild(root);
   }
+
+  restoreTabsScroll('notes', refs.noteTabs);
 }
 
 function syncEditorFromState(force = false) {
@@ -443,6 +840,8 @@ function syncEditorFromState(force = false) {
     refs.noteMarkers.scrollLeft = refs.noteBody.scrollLeft;
     lastEditorSyncTabId = tab.id;
   }
+
+  applyLiveNotePresentation();
 }
 
 function findKeywordMatches(text, links) {
@@ -542,7 +941,8 @@ async function saveTabSoon() {
       await window.uChat.updateTab({
         tabId: tab.id,
         title: refs.noteTitle.value,
-        body: refs.noteBody.value
+        body: refs.noteBody.value,
+        source: 'chat_window'
       });
       renderNoteTabs();
       renderMetasView();
@@ -635,7 +1035,16 @@ function createNotePill(tab, options = {}) {
 function updateMeta(metaId, patch = {}, rerender = false) {
   state.metas = state.metas.map((meta) => {
     if (meta.id !== metaId) return meta;
-    return { ...meta, ...patch };
+    const next = { ...meta, ...patch };
+    if (meta.isFixed) {
+      next.title = meta.title;
+      next.kind = meta.kind;
+      next.isFixed = true;
+    }
+    if (isFinanceMeta(next)) {
+      next.finance = sanitizeFinanceState(next.finance);
+    }
+    return next;
   });
   saveMetas();
   if (rerender) renderMetasView();
@@ -797,6 +1206,10 @@ function ensureActiveMeta() {
 }
 
 function getMetaStatusMessage(meta) {
+  if (isFinanceMeta(meta)) {
+    const summary = getFinanceSummary(meta);
+    return `Disponible ahora: ${formatMoney(summary.currentTotal, meta?.finance?.currency || 'COP')}`;
+  }
   const lines = Array.isArray(meta?.agentLogs) ? meta.agentLogs : [];
   const lastLog = String(lines[lines.length - 1]?.message || '').trim();
   if (meta?.agentStatus === 'running') return lastLog;
@@ -815,6 +1228,11 @@ function shouldGlowMetaStatus(meta, message) {
 }
 
 function getMetaTabTinyMessage(meta) {
+  if (isFinanceMeta(meta)) {
+    const summary = getFinanceSummary(meta);
+    const netLabel = summary.net >= 0 ? 'superávit' : 'déficit';
+    return `${meta?.finance?.timeline?.futureLabel || 'Tiempo futuro'}: ${formatMoney(summary.futureTotal, meta?.finance?.currency || 'COP')} · ${netLabel}`;
+  }
   if (meta?.executionPromptPending) return 'Añadir ejecución autónoma';
   if (meta?.executionConfig?.enabled) {
     const whenText = String(meta.executionConfig.whenText || '').trim();
@@ -944,7 +1362,7 @@ async function createAndAttachNoteToMeta(metaId, title, body) {
   if (!noteTitle && !noteBody.trim()) return;
 
   const sourceTabId = state.activeTabId;
-  const created = await window.uChat.createTab({ templateId: 'blank', title: noteTitle });
+  const created = await window.uChat.createTab({ templateId: 'blank', title: noteTitle, source: 'chat_window' });
   applySnapshot(created?.state || null, { syncEditor: false });
 
   let newTabId = created?.state?.activeTabId || null;
@@ -957,7 +1375,8 @@ async function createAndAttachNoteToMeta(metaId, title, body) {
   const updated = await window.uChat.updateTab({
     tabId: newTabId,
     title: noteTitle,
-    body: noteBody
+    body: noteBody,
+    source: 'chat_window'
   });
   applySnapshot(updated?.state || null, { syncEditor: false });
 
@@ -1163,10 +1582,323 @@ function renderMetaModal() {
   }
 }
 
+function patchFinanceMeta(metaId, updater, rerender = false) {
+  const targetMeta = getMetaById(metaId);
+  if (!targetMeta || !isFinanceMeta(targetMeta)) return null;
+  const base = sanitizeFinanceState(targetMeta.finance);
+  const nextFinance = typeof updater === 'function'
+    ? sanitizeFinanceState(updater(base) || base)
+    : sanitizeFinanceState({ ...base, ...(updater || {}) });
+  updateMeta(metaId, { finance: nextFinance, isSaved: false }, rerender);
+  return nextFinance;
+}
+
+function mutateFinancePocket(metaId, pocketId, updater, rerender = false) {
+  return patchFinanceMeta(metaId, (finance) => {
+    const pockets = finance.pockets.map((pocket) => {
+      if (pocket.id !== pocketId) return pocket;
+      const nextPocket = typeof updater === 'function' ? updater({ ...pocket }) : { ...pocket, ...(updater || {}) };
+      return sanitizeFinancePocket({ ...nextPocket, id: pocket.id });
+    });
+    return { ...finance, pockets };
+  }, rerender);
+}
+
+function createFinancePocketCard(meta, pocket) {
+  const card = document.createElement('div');
+  card.className = 'finance-pocket-card';
+
+  const top = document.createElement('div');
+  top.className = 'finance-pocket-top';
+
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'finance-pocket-input finance-pocket-name';
+  nameInput.placeholder = 'Nombre del bolsillo';
+  nameInput.value = String(pocket.name || '');
+  nameInput.addEventListener('input', () => {
+    mutateFinancePocket(meta.id, pocket.id, { name: nameInput.value }, false);
+  });
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'finance-pocket-delete';
+  removeBtn.textContent = 'Eliminar';
+  removeBtn.addEventListener('click', () => {
+    patchFinanceMeta(meta.id, (finance) => ({
+      ...finance,
+      pockets: finance.pockets.filter((item) => item.id !== pocket.id)
+    }), true);
+  });
+
+  top.appendChild(nameInput);
+  top.appendChild(removeBtn);
+
+  const bankInput = document.createElement('input');
+  bankInput.type = 'text';
+  bankInput.className = 'finance-pocket-input';
+  bankInput.placeholder = 'Banco o app';
+  bankInput.value = String(pocket.bank || '');
+  bankInput.addEventListener('input', () => {
+    mutateFinancePocket(meta.id, pocket.id, { bank: bankInput.value }, false);
+  });
+
+  const purposeInput = document.createElement('input');
+  purposeInput.type = 'text';
+  purposeInput.className = 'finance-pocket-input';
+  purposeInput.placeholder = 'Uso de este bolsillo';
+  purposeInput.value = String(pocket.purpose || '');
+  purposeInput.addEventListener('input', () => {
+    mutateFinancePocket(meta.id, pocket.id, { purpose: purposeInput.value }, false);
+  });
+
+  const balanceRow = document.createElement('div');
+  balanceRow.className = 'finance-pocket-balance-row';
+
+  const balanceLabel = document.createElement('span');
+  balanceLabel.className = 'finance-pocket-balance-label';
+  balanceLabel.textContent = 'Saldo';
+
+  const balanceInput = document.createElement('input');
+  balanceInput.type = 'number';
+  balanceInput.step = '1000';
+  balanceInput.className = 'finance-pocket-balance-input';
+  balanceInput.value = String(Number(pocket.balance || 0));
+  balanceInput.addEventListener('input', () => {
+    mutateFinancePocket(meta.id, pocket.id, { balance: sanitizeMoney(balanceInput.value) }, false);
+  });
+
+  balanceRow.appendChild(balanceLabel);
+  balanceRow.appendChild(balanceInput);
+
+  const amountRow = document.createElement('div');
+  amountRow.className = 'finance-pocket-amount-row';
+
+  const amountInput = document.createElement('input');
+  amountInput.type = 'number';
+  amountInput.step = '1000';
+  amountInput.className = 'finance-pocket-amount-input';
+  amountInput.placeholder = 'Monto';
+
+  const depositBtn = document.createElement('button');
+  depositBtn.type = 'button';
+  depositBtn.className = 'finance-pocket-action positive';
+  depositBtn.textContent = 'Cargar';
+  depositBtn.addEventListener('click', () => {
+    const amount = Math.abs(sanitizeMoney(amountInput.value));
+    if (!amount) return;
+    mutateFinancePocket(meta.id, pocket.id, (current) => ({
+      ...current,
+      balance: sanitizeMoney(current.balance + amount)
+    }), true);
+  });
+
+  const withdrawBtn = document.createElement('button');
+  withdrawBtn.type = 'button';
+  withdrawBtn.className = 'finance-pocket-action negative';
+  withdrawBtn.textContent = 'Descargar';
+  withdrawBtn.addEventListener('click', () => {
+    const amount = Math.abs(sanitizeMoney(amountInput.value));
+    if (!amount) return;
+    mutateFinancePocket(meta.id, pocket.id, (current) => ({
+      ...current,
+      balance: sanitizeMoney(current.balance - amount)
+    }), true);
+  });
+
+  amountRow.appendChild(amountInput);
+  amountRow.appendChild(depositBtn);
+  amountRow.appendChild(withdrawBtn);
+
+  const currentBalance = document.createElement('div');
+  currentBalance.className = 'finance-pocket-balance-pill';
+  currentBalance.textContent = formatMoney(pocket.balance, meta?.finance?.currency || 'COP');
+
+  card.appendChild(top);
+  card.appendChild(bankInput);
+  card.appendChild(purposeInput);
+  card.appendChild(balanceRow);
+  card.appendChild(amountRow);
+  card.appendChild(currentBalance);
+  return card;
+}
+
+function createFinancePocketsSection(meta) {
+  const section = document.createElement('section');
+  section.className = 'finance-section';
+
+  const header = document.createElement('div');
+  header.className = 'finance-section-header';
+
+  const title = document.createElement('h4');
+  title.className = 'finance-section-title';
+  title.textContent = 'Bolsillos';
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'finance-section-add';
+  addBtn.textContent = '+ Agregar bolsillo';
+  addBtn.addEventListener('click', () => {
+    patchFinanceMeta(meta.id, (finance) => ({
+      ...finance,
+      pockets: [...finance.pockets, sanitizeFinancePocket({ name: `Bolsillo ${finance.pockets.length + 1}` })]
+    }), true);
+  });
+
+  header.appendChild(title);
+  header.appendChild(addBtn);
+
+  const grid = document.createElement('div');
+  grid.className = 'finance-pocket-grid';
+  const pockets = Array.isArray(meta?.finance?.pockets) ? meta.finance.pockets : [];
+  for (const pocket of pockets) {
+    grid.appendChild(createFinancePocketCard(meta, pocket));
+  }
+
+  if (!pockets.length) {
+    const empty = document.createElement('div');
+    empty.className = 'finance-pocket-empty';
+    empty.textContent = 'Aún no hay bolsillos. Crea el primero para empezar a distribuir el dinero real.';
+    grid.appendChild(empty);
+  }
+
+  section.appendChild(header);
+  section.appendChild(grid);
+  return section;
+}
+
+function createFinanceTimelineSection(meta) {
+  const section = document.createElement('section');
+  section.className = 'finance-section finance-time-section';
+  const finance = sanitizeFinanceState(meta.finance);
+  const summary = getFinanceSummary(meta);
+  const commitProjection = (rerender) => {
+    patchFinanceMeta(meta.id, {
+      ...finance,
+      timeline: {
+        ...finance.timeline,
+        currentLabel: currentLabelInput.value,
+        futureLabel: futureLabelInput.value
+      },
+      forecast: {
+        expectedIncome: sanitizeMoney(incomeInput.value),
+        expectedExpenses: sanitizeMoney(expenseInput.value),
+        horizonWeeks: sanitizePositiveInt(horizonInput.value, finance.forecast.horizonWeeks)
+      }
+    }, rerender);
+  };
+
+  const header = document.createElement('div');
+  header.className = 'finance-section-header';
+
+  const title = document.createElement('h4');
+  title.className = 'finance-section-title';
+  title.textContent = 'Tiempo actual y futuro';
+  header.appendChild(title);
+
+  const cards = document.createElement('div');
+  cards.className = 'finance-time-cards';
+
+  const currentCard = document.createElement('div');
+  currentCard.className = 'finance-time-card current';
+  currentCard.innerHTML = `
+    <span class="finance-time-label">${escapeHtml(finance.timeline.currentLabel)}</span>
+    <strong class="finance-time-value">${escapeHtml(formatMoney(summary.currentTotal, finance.currency))}</strong>
+    <span class="finance-time-sub">Saldo distribuido hoy en bolsillos</span>
+  `;
+
+  const futureCard = document.createElement('div');
+  const tone = summary.futureTotal >= 0 ? 'positive' : 'negative';
+  futureCard.className = `finance-time-card future ${tone}`;
+  futureCard.innerHTML = `
+    <span class="finance-time-label">${escapeHtml(finance.timeline.futureLabel)}</span>
+    <strong class="finance-time-value">${escapeHtml(formatMoney(summary.futureTotal, finance.currency))}</strong>
+    <span class="finance-time-sub">Proyección a ${escapeHtml(String(finance.forecast.horizonWeeks))} semanas</span>
+  `;
+
+  cards.appendChild(currentCard);
+  cards.appendChild(futureCard);
+
+  const inputs = document.createElement('div');
+  inputs.className = 'finance-time-inputs';
+
+  const currentLabelInput = document.createElement('input');
+  currentLabelInput.type = 'text';
+  currentLabelInput.className = 'finance-time-input';
+  currentLabelInput.placeholder = 'Etiqueta actual';
+  currentLabelInput.value = finance.timeline.currentLabel;
+  currentLabelInput.addEventListener('input', () => commitProjection(false));
+  currentLabelInput.addEventListener('change', () => commitProjection(true));
+
+  const futureLabelInput = document.createElement('input');
+  futureLabelInput.type = 'text';
+  futureLabelInput.className = 'finance-time-input';
+  futureLabelInput.placeholder = 'Etiqueta futura';
+  futureLabelInput.value = finance.timeline.futureLabel;
+  futureLabelInput.addEventListener('input', () => commitProjection(false));
+  futureLabelInput.addEventListener('change', () => commitProjection(true));
+
+  const incomeInput = document.createElement('input');
+  incomeInput.type = 'number';
+  incomeInput.step = '1000';
+  incomeInput.className = 'finance-time-input';
+  incomeInput.placeholder = 'Ingresos previstos';
+  incomeInput.value = String(finance.forecast.expectedIncome || 0);
+  incomeInput.addEventListener('input', () => commitProjection(false));
+  incomeInput.addEventListener('change', () => commitProjection(true));
+
+  const expenseInput = document.createElement('input');
+  expenseInput.type = 'number';
+  expenseInput.step = '1000';
+  expenseInput.className = 'finance-time-input';
+  expenseInput.placeholder = 'Gastos previstos';
+  expenseInput.value = String(finance.forecast.expectedExpenses || 0);
+  expenseInput.addEventListener('input', () => commitProjection(false));
+  expenseInput.addEventListener('change', () => commitProjection(true));
+
+  const horizonInput = document.createElement('input');
+  horizonInput.type = 'number';
+  horizonInput.min = '1';
+  horizonInput.max = '52';
+  horizonInput.className = 'finance-time-input';
+  horizonInput.placeholder = 'Semanas';
+  horizonInput.value = String(finance.forecast.horizonWeeks || 4);
+  horizonInput.addEventListener('input', () => commitProjection(false));
+  horizonInput.addEventListener('change', () => commitProjection(true));
+
+  inputs.appendChild(currentLabelInput);
+  inputs.appendChild(futureLabelInput);
+  inputs.appendChild(incomeInput);
+  inputs.appendChild(expenseInput);
+  inputs.appendChild(horizonInput);
+
+  const signal = document.createElement('div');
+  signal.className = `finance-signal ${summary.net >= 0 ? 'positive' : 'negative'}`;
+  signal.textContent = summary.net >= 0
+    ? `Proyección con superávit de ${formatMoney(summary.net, finance.currency)}`
+    : `Proyección con déficit de ${formatMoney(Math.abs(summary.net), finance.currency)}`;
+
+  section.appendChild(header);
+  section.appendChild(cards);
+  section.appendChild(inputs);
+  section.appendChild(signal);
+  if (summary.runwayWeeks !== null) {
+    const runway = document.createElement('div');
+    runway.className = 'finance-runway';
+    runway.textContent = `Holgura estimada: ${summary.runwayWeeks.toFixed(1)} semanas de cobertura con el saldo actual.`;
+    section.appendChild(runway);
+  }
+  return section;
+}
+
 function createMetaCard(meta, options = {}) {
   const expanded = options.expanded === true;
+  const financeMeta = isFinanceMeta(meta);
+  const liveMeta = getLiveMetaPresentation(meta.id);
+  const displayTitle = liveMeta ? liveMeta.title : meta.title;
+  const displayDescription = liveMeta ? liveMeta.description : meta.description;
   const card = document.createElement('div');
-  card.className = `group-drop ${expanded ? 'meta-expanded-card' : 'meta-compact-card'}${state.activeMetaId === meta.id ? ' active-meta' : ''}${meta.isSaved ? ' saved-meta' : ''}`;
+  card.className = `group-drop ${expanded ? 'meta-expanded-card' : 'meta-compact-card'}${state.activeMetaId === meta.id ? ' active-meta' : ''}${meta.isSaved ? ' saved-meta' : ''}${liveMeta ? ' live-focus-card' : ''}${financeMeta ? ' finance-meta-card' : ''}`;
   card.addEventListener('mousedown', (event) => {
     if (event.target.closest('input, textarea, button, [draggable="true"]')) return;
     if (state.activeMetaId !== meta.id) {
@@ -1176,7 +1908,7 @@ function createMetaCard(meta, options = {}) {
     }
   });
 
-  if (!expanded && state.metas.length > 1) {
+  if (!expanded && state.metas.length > 1 && !meta.isFixed) {
     const dragHandle = document.createElement('button');
     dragHandle.type = 'button';
     dragHandle.className = 'meta-drag-handle';
@@ -1214,8 +1946,15 @@ function createMetaCard(meta, options = {}) {
   if (!alwaysEditable && meta.isSaved) {
     const savedTitle = document.createElement('div');
     savedTitle.className = 'meta-saved-title';
-    savedTitle.textContent = meta.title || 'Meta sin titulo';
+    savedTitle.textContent = displayTitle || 'Meta sin titulo';
     top.appendChild(savedTitle);
+
+    if (financeMeta) {
+      const badge = document.createElement('span');
+      badge.className = 'finance-fixed-badge';
+      badge.textContent = 'Meta fija';
+      top.appendChild(badge);
+    }
 
     const editBtn = document.createElement('button');
     editBtn.type = 'button';
@@ -1234,21 +1973,39 @@ function createMetaCard(meta, options = {}) {
     });
     actions.appendChild(editBtn);
   } else {
-    titleInput = document.createElement('input');
-    titleInput.type = 'text';
-    titleInput.className = 'meta-title-input';
-    titleInput.placeholder = 'Titulo de meta';
-    titleInput.value = meta.title || '';
-    titleInput.addEventListener('input', () => {
-      updateMeta(meta.id, { title: titleInput.value, isSaved: false }, false);
-    });
-    top.appendChild(titleInput);
+    if (financeMeta) {
+      const financeHeader = document.createElement('div');
+      financeHeader.className = 'finance-fixed-header';
+      const financeTitle = document.createElement('div');
+      financeTitle.className = 'meta-saved-title';
+      financeTitle.textContent = 'Finanzas';
+      const financeSub = document.createElement('div');
+      financeSub.className = 'finance-fixed-subtitle';
+      financeSub.textContent = 'Agente especializado con bolsillos, instrucciones y lectura temporal.';
+      financeHeader.appendChild(financeTitle);
+      financeHeader.appendChild(financeSub);
+      top.appendChild(financeHeader);
+    } else {
+      titleInput = document.createElement('input');
+      titleInput.type = 'text';
+      titleInput.className = 'meta-title-input';
+      titleInput.placeholder = 'Titulo de meta';
+      titleInput.value = displayTitle || '';
+      titleInput.classList.toggle('live-writing', Boolean(liveMeta));
+      titleInput.addEventListener('input', () => {
+        updateMeta(meta.id, { title: titleInput.value, isSaved: false }, false);
+      });
+      top.appendChild(titleInput);
+    }
 
     if (expanded) {
       descriptionInput = document.createElement('textarea');
       descriptionInput.className = 'meta-description-input';
-      descriptionInput.placeholder = 'Descripcion de meta';
-      descriptionInput.value = meta.description || '';
+      descriptionInput.placeholder = financeMeta
+        ? 'Instrucciones vivas del agente financiero. Aquí se anotan reglas, decisiones del usuario, criterios por banco y feedback diario.'
+        : 'Descripcion de meta';
+      descriptionInput.value = displayDescription || '';
+      descriptionInput.classList.toggle('live-writing', Boolean(liveMeta));
       descriptionInput.addEventListener('input', () => {
         updateMeta(meta.id, { description: descriptionInput.value, isSaved: false }, false);
       });
@@ -1260,7 +2017,7 @@ function createMetaCard(meta, options = {}) {
     saveBtn.innerHTML = getCheckIconSvg();
     saveBtn.title = 'Guardar meta';
     saveBtn.addEventListener('click', async () => {
-      const nextTitle = String(titleInput?.value || '').trim();
+      const nextTitle = financeMeta ? 'Finanzas' : String(titleInput?.value || '').trim();
       const nextDescription = descriptionInput ? String(descriptionInput.value || '') : String(meta.description || '');
       state.activeMetaId = meta.id;
       updateMeta(meta.id, {
@@ -1331,7 +2088,9 @@ function createMetaCard(meta, options = {}) {
     });
 
     menu.appendChild(viewModeBtn);
-    menu.appendChild(removeBtn);
+    if (!meta.isFixed) {
+      menu.appendChild(removeBtn);
+    }
     menu.appendChild(attachBtn);
     moreShell.appendChild(menu);
   }
@@ -1407,6 +2166,11 @@ function createMetaCard(meta, options = {}) {
     body.appendChild(descriptionInput);
   }
 
+  if (expanded && financeMeta) {
+    body.appendChild(createFinancePocketsSection(meta));
+    body.appendChild(createFinanceTimelineSection(meta));
+  }
+
   const notesSection = createMetaNotesSection(meta);
   if (notesSection) {
     body.appendChild(notesSection);
@@ -1423,13 +2187,14 @@ function createExpandedMetaTabs() {
   const tabs = document.createElement('div');
   tabs.className = 'meta-expand-tabs note-tabs';
   for (const meta of state.metas) {
+    const liveMeta = getLiveMetaPresentation(meta.id);
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `meta-expand-tab note-tab${meta.id === state.activeMetaId ? ' active' : ''}`;
+    button.className = `meta-expand-tab note-tab${meta.id === state.activeMetaId ? ' active' : ''}${liveMeta ? ' live-focus-tab' : ''}`;
 
     const title = document.createElement('span');
     title.className = 'meta-expand-tab-title';
-    title.textContent = meta.title || 'Meta sin titulo';
+    title.textContent = liveMeta?.title || meta.title || 'Meta sin titulo';
     button.appendChild(title);
 
     if (meta.id === state.activeMetaId) {
@@ -1461,11 +2226,13 @@ function createExpandedMetaTabs() {
 
   row.appendChild(tabs);
   row.appendChild(addBtn);
+  restoreTabsScroll('metas', tabs);
   return row;
 }
 
 function renderMetasView() {
   ensureActiveMeta();
+  rememberTabsScroll('metas', refs.projectGroups.querySelector('.meta-expand-tabs'));
   refs.projectGroups.innerHTML = '';
   refs.projectGroups.classList.remove('compact-layout', 'expanded-layout');
   refs.projectsView.classList.toggle('has-metas', state.metas.length > 0);
@@ -1520,12 +2287,15 @@ function renderMetasView() {
 }
 
 function addMeta() {
+  clearLivePresentation();
   closeMetaOverlays();
   const id = `meta_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
   emitUiUx('meta_created', { metaId: id });
   state.activeMetaId = id;
   state.metas.unshift({
     id,
+    kind: 'generic',
+    isFixed: false,
     title: '',
     description: '',
     noteIds: [],
@@ -1537,7 +2307,8 @@ function addMeta() {
     executionConfig: { type: 'recurrent', whenText: '', enabled: false },
     executionPromptPending: false,
     agentStatus: 'idle',
-    agentLogs: []
+    agentLogs: [],
+    finance: null
   });
   saveMetas();
   renderMetasView();
@@ -1551,15 +2322,23 @@ function focusActiveMetaEditor() {
   if (!activeCard) return;
   activeCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   const titleInput = activeCard.querySelector('.meta-title-input');
-  if (!titleInput) return;
-  titleInput.focus();
-  const end = titleInput.value.length;
-  titleInput.setSelectionRange(end, end);
+  if (titleInput) {
+    titleInput.focus();
+    const end = titleInput.value.length;
+    titleInput.setSelectionRange(end, end);
+    return;
+  }
+  const descriptionInput = activeCard.querySelector('.meta-description-input');
+  if (descriptionInput) {
+    descriptionInput.focus();
+    const end = descriptionInput.value.length;
+    descriptionInput.setSelectionRange(end, end);
+  }
 }
 
 async function createLinkedBlankNote(noteTitle) {
   const sourceSnapshot = getActiveTab();
-  const created = await window.uChat.createTab({ templateId: 'blank', title: noteTitle || '' });
+  const created = await window.uChat.createTab({ templateId: 'blank', title: noteTitle || '', source: 'chat_window' });
   applySnapshot(created?.state || null, { syncEditor: false });
 
   const newTab = state.tabs.find((tab) => normalizeKey(tab.title) === normalizeKey(noteTitle) && !String(tab.body || '').trim());
@@ -1584,7 +2363,7 @@ function bindEvents() {
 
   refs.noteTabAdd.addEventListener('click', async () => {
     emitUiUx('note_created_from_plus');
-    const created = await window.uChat.createTab({ templateId: 'blank', title: '' });
+    const created = await window.uChat.createTab({ templateId: 'blank', title: '', source: 'chat_window' });
     applySnapshot(created?.state || null, { syncEditor: true });
     setMode('notes');
   });
@@ -1632,6 +2411,18 @@ async function init() {
   await initThemeSync();
   state.metaViewMode = loadMetaViewMode();
   bindEvents();
+
+  if (window.uChat?.onKnowledgeStateChanged) {
+    window.uChat.onKnowledgeStateChanged((payload) => {
+      handleKnowledgeStateChanged(payload);
+    });
+  }
+
+  if (window.uChat?.onAgentProgress) {
+    window.uChat.onAgentProgress((payload) => {
+      handleAgentToolStart(payload);
+    });
+  }
 
   if (window.uChat?.onMetaAgentProgress) {
     window.uChat.onMetaAgentProgress((payload) => {

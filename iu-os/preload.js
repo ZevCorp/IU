@@ -8,6 +8,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 // Expose safe APIs to renderer
 contextBridge.exposeInMainWorld('iuOS', {
+    turnTakingLogsEnabled: process.env.IU_TURN_TAKING_LOGS === '1',
     // Screen information
     getScreenSize: () => ipcRenderer.invoke('get-screen-size'),
 
@@ -97,6 +98,7 @@ contextBridge.exposeInMainWorld('iuOS', {
     // Window Mode Control
     setWindowMode: (mode) => ipcRenderer.send('set-window-mode', mode),
     onWindowModeChanged: (callback) => ipcRenderer.on('window-mode-changed', (event, mode) => callback(mode)),
+    moveWindowViaTrackpadSwipe: (payload) => ipcRenderer.send('move-window-via-trackpad-swipe', payload),
     startDrag: () => ipcRenderer.send('window-drag-start'),
     windowMove: (pos) => ipcRenderer.send('window-move', pos),
 

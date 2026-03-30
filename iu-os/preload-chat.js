@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld('uChat', {
     createTab: (payload) => ipcRenderer.invoke('chat-create-tab', payload),
     updateTab: (payload) => ipcRenderer.invoke('chat-update-tab', payload),
     setActiveTab: (tabId) => ipcRenderer.invoke('chat-set-active-tab', { tabId }),
-    archiveTab: (tabId) => ipcRenderer.invoke('chat-archive-tab', { tabId }),
+    archiveTab: (payload) => ipcRenderer.invoke('chat-archive-tab', typeof payload === 'object' ? payload : { tabId: payload }),
     createExecution: (payload) => ipcRenderer.invoke('chat-create-execution', payload),
     setActiveExecution: (executionId) => ipcRenderer.invoke('chat-set-active-execution', { executionId }),
     moveExecution: (payload) => ipcRenderer.invoke('chat-move-execution', payload),
@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('uChat', {
     logUiUx: (payload) => ipcRenderer.send('uiux-log', payload),
     toggleVariablePersistence: (payload) => ipcRenderer.invoke('chat-toggle-variable-persistence', payload),
     onMetaAgentProgress: (callback) => ipcRenderer.on('meta-agent-progress', (event, payload) => callback(payload)),
+    onKnowledgeStateChanged: (callback) => ipcRenderer.on('chat-knowledge-state', (event, payload) => callback(payload)),
+    onAgentProgress: (callback) => ipcRenderer.on('chat-agent-progress', (event, payload) => callback(payload)),
     onUiThemeChanged: (callback) => ipcRenderer.on('chat-ui-theme', (event, payload) => callback(payload)),
     close: () => ipcRenderer.send('chat-close')
 });

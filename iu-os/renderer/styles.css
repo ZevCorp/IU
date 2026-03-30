@@ -33,6 +33,9 @@
 
   /* Typography */
   --font-primary: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --prompt-chat-dock-width: min(calc(100vw - 32px), 820px);
+  --prompt-chat-history-max-height: min(42vh, 380px);
+  --prompt-chat-face-offset: -38px;
 }
 
 /* Light Theme */
@@ -119,7 +122,14 @@ body {
   height: 100%;
   max-width: 300px;
   max-height: 400px;
-  transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateY(0);
+  will-change: transform;
+  transition:
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    max-width 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    max-height 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    width 0.8s cubic-bezier(0.16, 1, 0.3, 1),
+    height 0.8s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* =====================================================
@@ -790,7 +800,8 @@ body:hover .chat-toggle-btn,
 body:hover .menu-toggle,
 body:hover .transfer-btn-top,
 body:hover .prompt-chat-dock,
-.prompt-chat-dock:focus-within {
+body.prompt-chat-active .prompt-chat-dock,
+body:not(.window-blurred) .prompt-chat-dock:focus-within {
   opacity: 1;
   pointer-events: auto;
 }
@@ -982,18 +993,19 @@ body:hover .prompt-chat-dock,
   position: absolute;
   left: 50%;
   bottom: 14px;
-  transform: translateX(-50%) translateY(0);
-  width: min(calc(100vw - 28px), 760px);
+  transform: translateX(-50%) translateY(10px);
+  width: var(--prompt-chat-dock-width);
   z-index: 220;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.18s ease, transform 220ms ease;
+  transition: opacity 180ms ease, transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
   user-select: text;
   -webkit-user-select: text;
 }
 
 body:hover .prompt-chat-dock,
-.prompt-chat-dock:focus-within {
+body.prompt-chat-active .prompt-chat-dock,
+body:not(.window-blurred) .prompt-chat-dock:focus-within {
   opacity: 1;
   pointer-events: auto;
   transform: translateX(-50%) translateY(0);
@@ -1002,18 +1014,17 @@ body:hover .prompt-chat-dock,
 .prompt-chat-panel {
   position: relative;
   display: grid;
-  gap: 10px;
-  padding: 14px;
-  border-radius: 24px;
-  background:
-    radial-gradient(circle at top, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.64) 34%, rgba(255, 255, 255, 0.58) 100%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(248, 249, 252, 0.82));
-  border: 1px solid rgba(255, 255, 255, 0.72);
+  gap: 12px;
+  padding: 16px;
+  border-radius: 28px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(246, 246, 247, 0.88));
+  border: 1px solid rgba(17, 22, 31, 0.08);
   box-shadow:
-    0 28px 80px rgba(15, 19, 28, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.84);
-  backdrop-filter: blur(28px) saturate(145%);
-  -webkit-backdrop-filter: blur(28px) saturate(145%);
+    0 28px 80px rgba(12, 14, 18, 0.14),
+    0 10px 24px rgba(12, 14, 18, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(26px) saturate(135%);
+  -webkit-backdrop-filter: blur(26px) saturate(135%);
   overflow: hidden;
 }
 
@@ -1023,7 +1034,15 @@ body:hover .prompt-chat-dock,
   padding-top: 0;
 }
 
+.prompt-chat-dock.is-collapsed .prompt-chat-panel {
+  gap: 0;
+}
+
 .prompt-chat-dock:not(.has-messages) .prompt-chat-history-shell {
+  display: none;
+}
+
+.prompt-chat-dock.is-collapsed .prompt-chat-history-shell {
   display: none;
 }
 
@@ -1031,9 +1050,9 @@ body:hover .prompt-chat-dock,
   pointer-events: none;
   position: absolute;
   inset: 0 0 auto 0;
-  height: 28px;
+  height: 34px;
   z-index: 2;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(255, 255, 255, 0));
+  background: linear-gradient(180deg, rgba(246, 246, 247, 0.96), rgba(246, 246, 247, 0));
 }
 
 .prompt-chat-empty {
@@ -1052,11 +1071,11 @@ body:hover .prompt-chat-dock,
 .prompt-chat-history {
   position: relative;
   z-index: 1;
-  max-height: min(23vh, 190px);
+  max-height: var(--prompt-chat-history-max-height);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 0 2px 4px;
+  padding: 2px 4px 6px;
   display: block;
   user-select: text;
   -webkit-user-select: text;
@@ -1068,13 +1087,13 @@ body:hover .prompt-chat-dock,
 }
 
 .prompt-chat-history > * + * {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .prompt-chat-message {
   display: grid;
   gap: 0;
-  max-width: min(100%, 500px);
+  max-width: min(100%, 560px);
   flex-shrink: 0;
   user-select: text;
   -webkit-user-select: text;
@@ -1082,13 +1101,13 @@ body:hover .prompt-chat-dock,
 
 .prompt-chat-message-bubble {
   position: relative;
-  padding: 13px 15px;
-  border-radius: 20px;
+  padding: 14px 16px;
+  border-radius: 22px;
   border: 1px solid rgba(16, 22, 30, 0.08);
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(243, 243, 244, 0.96);
   box-shadow:
-    0 10px 24px rgba(16, 22, 30, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    0 12px 28px rgba(16, 22, 30, 0.07),
+    inset 0 1px 0 rgba(255, 255, 255, 0.76);
   color: #121723;
   overflow-wrap: anywhere;
 }
@@ -1104,12 +1123,12 @@ body:hover .prompt-chat-dock,
 }
 
 .prompt-chat-message.from-user .prompt-chat-message-bubble {
-  background: linear-gradient(180deg, #161c25 0%, #0f141c 100%);
-  border-color: rgba(17, 22, 31, 0.22);
+  background: linear-gradient(180deg, #1b1b1d 0%, #0f0f10 100%);
+  border-color: rgba(17, 22, 31, 0.3);
   box-shadow:
-    0 16px 32px rgba(11, 15, 23, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  color: #f4f7fb;
+    0 16px 34px rgba(11, 15, 23, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  color: rgba(248, 248, 249, 0.98);
 }
 
 .prompt-chat-message.from-assistant {
@@ -1118,7 +1137,7 @@ body:hover .prompt-chat-dock,
 }
 
 .prompt-chat-message.from-assistant .prompt-chat-message-bubble {
-  background: rgba(255, 255, 255, 0.82);
+  background: rgba(243, 243, 244, 0.96);
 }
 
 .prompt-chat-message.status {
@@ -1128,12 +1147,12 @@ body:hover .prompt-chat-dock,
 }
 
 .prompt-chat-message.status .prompt-chat-message-bubble {
-  padding: 10px 14px;
+  padding: 10px 15px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.54);
-  border-color: rgba(16, 22, 30, 0.08);
+  background: rgba(24, 24, 27, 0.08);
+  border-color: rgba(16, 22, 30, 0.06);
   box-shadow: none;
-  color: rgba(17, 22, 31, 0.66);
+  color: rgba(17, 22, 31, 0.62);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -1141,26 +1160,67 @@ body:hover .prompt-chat-dock,
 .prompt-chat-message.note-title .prompt-chat-message-bubble {
   padding: 10px 12px;
   border-radius: 16px;
-  background: rgba(240, 244, 249, 0.92);
-  color: rgba(22, 27, 35, 0.88);
+  background: rgba(236, 236, 238, 0.96);
+  color: rgba(22, 27, 35, 0.82);
   font-size: 12px;
   font-weight: 600;
 }
 
+.prompt-chat-activity-indicator {
+  justify-self: start;
+  max-width: min(100%, 560px);
+  padding: 2px 2px 0;
+  color: rgba(22, 27, 35, 0.38);
+  font-size: 16px;
+  line-height: 1.62;
+  letter-spacing: 0.01em;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.prompt-chat-activity-indicator-text {
+  position: relative;
+  display: inline-block;
+  color: rgba(22, 27, 35, 0.38);
+}
+
+.prompt-chat-activity-indicator-text::after {
+  content: attr(data-label);
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0) 34%,
+    rgba(255, 255, 255, 0.12) 42%,
+    rgba(255, 255, 255, 0.98) 50%,
+    rgba(255, 255, 255, 0.12) 58%,
+    rgba(255, 255, 255, 0) 66%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 180% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: prompt-chat-activity-shimmer 2.4s linear infinite;
+  pointer-events: none;
+}
+
 .prompt-chat-event {
   justify-self: start;
-  max-width: min(100%, 500px);
+  max-width: min(100%, 580px);
   flex-shrink: 0;
 }
 
 .prompt-chat-event-card {
   display: grid;
-  gap: 7px;
-  padding: 12px 14px;
-  border-radius: 18px;
-  border: 1px solid rgba(17, 24, 39, 0.09);
-  background: linear-gradient(180deg, rgba(252, 254, 255, 0.92), rgba(243, 247, 252, 0.88));
-  box-shadow: 0 14px 26px rgba(18, 24, 34, 0.08);
+  gap: 8px;
+  padding: 13px 15px;
+  border-radius: 22px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  background: linear-gradient(180deg, rgba(247, 247, 248, 0.98), rgba(239, 239, 241, 0.94));
+  box-shadow: 0 14px 30px rgba(18, 24, 34, 0.07);
 }
 
 .prompt-chat-event-eyebrow {
@@ -1168,7 +1228,7 @@ body:hover .prompt-chat-dock,
   line-height: 1;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: rgba(21, 27, 35, 0.48);
+  color: rgba(21, 27, 35, 0.44);
 }
 
 .prompt-chat-event-title {
@@ -1181,7 +1241,7 @@ body:hover .prompt-chat-dock,
 .prompt-chat-event-detail {
   font-size: 12px;
   line-height: 1.45;
-  color: rgba(18, 23, 35, 0.72);
+  color: rgba(18, 23, 35, 0.68);
 }
 
 .prompt-chat-event-items {
@@ -1191,36 +1251,14 @@ body:hover .prompt-chat-dock,
   gap: 3px;
   font-size: 12px;
   line-height: 1.4;
-  color: rgba(18, 23, 35, 0.78);
-}
-
-.prompt-chat-event-explored .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(247, 252, 255, 0.96), rgba(238, 247, 255, 0.92));
-}
-
-.prompt-chat-event-created .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(247, 255, 249, 0.96), rgba(236, 249, 240, 0.92));
-}
-
-.prompt-chat-event-edited .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(255, 252, 245, 0.96), rgba(251, 245, 231, 0.92));
-}
-
-.prompt-chat-event-deleted .prompt-chat-event-card,
-.prompt-chat-event-error .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(255, 247, 247, 0.96), rgba(251, 235, 235, 0.92));
-}
-
-.prompt-chat-event-action .prompt-chat-event-card,
-.prompt-chat-event-summary .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(248, 247, 255, 0.96), rgba(239, 237, 251, 0.92));
+  color: rgba(18, 23, 35, 0.74);
 }
 
 .prompt-chat-rich-text {
   display: grid;
-  gap: 8px;
+  gap: 9px;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.62;
 }
 
 .prompt-chat-rich-text p,
@@ -1244,6 +1282,18 @@ body:hover .prompt-chat-dock,
   font-weight: 700;
 }
 
+.prompt-chat-rich-text.is-streaming::after {
+  content: '';
+  display: inline-block;
+  width: 0.56em;
+  height: 1.05em;
+  margin-left: 0.08em;
+  vertical-align: -0.14em;
+  border-radius: 999px;
+  background: rgba(20, 24, 31, 0.42);
+  animation: prompt-chat-stream-caret 0.9s steps(1) infinite;
+}
+
 .prompt-chat-rich-text em {
   font-style: italic;
 }
@@ -1253,7 +1303,7 @@ body:hover .prompt-chat-dock,
   font-size: 0.92em;
   padding: 0.16em 0.4em;
   border-radius: 8px;
-  background: rgba(15, 23, 35, 0.08);
+  background: rgba(15, 23, 35, 0.09);
 }
 
 .prompt-chat-rich-text pre {
@@ -1272,10 +1322,30 @@ body:hover .prompt-chat-dock,
   color: inherit;
 }
 
+@keyframes prompt-chat-activity-shimmer {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: -180% 50%;
+  }
+}
+
+@keyframes prompt-chat-stream-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
 .prompt-chat-rich-text blockquote {
   padding-left: 14px;
-  border-left: 2px solid rgba(17, 22, 31, 0.18);
-  color: rgba(17, 22, 31, 0.72);
+  border-left: 2px solid rgba(17, 22, 31, 0.14);
+  color: rgba(17, 22, 31, 0.66);
 }
 
 .prompt-chat-rich-text a {
@@ -1294,20 +1364,20 @@ body:hover .prompt-chat-dock,
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
-  padding: 9px 10px 9px 16px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid rgba(17, 22, 31, 0.1);
+  padding: 10px 10px 10px 16px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(17, 22, 31, 0.08);
   box-shadow:
-    0 16px 40px rgba(16, 22, 30, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    0 16px 42px rgba(16, 22, 30, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.76);
 }
 
 .prompt-chat-input-shell:focus-within {
-  border-color: rgba(17, 22, 31, 0.2);
+  border-color: rgba(17, 22, 31, 0.16);
   box-shadow:
-    0 20px 44px rgba(16, 22, 30, 0.14),
-    0 0 0 4px rgba(17, 22, 31, 0.05);
+    0 18px 44px rgba(16, 22, 30, 0.1),
+    0 0 0 4px rgba(17, 22, 31, 0.04);
 }
 
 .prompt-chat-input {
@@ -1352,9 +1422,9 @@ body:hover .prompt-chat-dock,
   height: 38px;
   border-radius: 50%;
   color: #ffffff;
-  background: linear-gradient(180deg, #161c25 0%, #0f141c 100%);
-  border: 1px solid rgba(17, 22, 31, 0.22);
-  box-shadow: 0 12px 24px rgba(11, 15, 23, 0.22);
+  background: linear-gradient(180deg, #171718 0%, #0b0b0c 100%);
+  border: 1px solid rgba(17, 22, 31, 0.26);
+  box-shadow: 0 12px 24px rgba(11, 15, 23, 0.16);
 }
 
 .prompt-chat-voice-btn {
@@ -1426,48 +1496,55 @@ body.mode-medium .prompt-chat-voice-btn {
 }
 
 [data-theme="dark"] .prompt-chat-panel {
-  background:
-    radial-gradient(circle at top, rgba(28, 34, 46, 0.92), rgba(16, 20, 28, 0.84) 42%, rgba(11, 14, 20, 0.82) 100%),
-    linear-gradient(180deg, rgba(20, 25, 34, 0.88), rgba(9, 12, 18, 0.9));
-  border-color: rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, rgba(28, 28, 30, 0.92), rgba(18, 18, 20, 0.88));
+  border-color: rgba(255, 255, 255, 0.08);
   box-shadow:
-    0 30px 80px rgba(0, 0, 0, 0.42),
+    0 30px 80px rgba(0, 0, 0, 0.38),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 [data-theme="dark"] .prompt-chat-fade {
-  background: linear-gradient(180deg, rgba(17, 22, 30, 0.9), rgba(17, 22, 30, 0));
+  background: linear-gradient(180deg, rgba(24, 24, 26, 0.96), rgba(24, 24, 26, 0));
 }
 
 [data-theme="dark"] .prompt-chat-message-bubble {
-  background: rgba(15, 19, 28, 0.84);
+  background: rgba(34, 34, 36, 0.92);
   border-color: rgba(255, 255, 255, 0.08);
   color: rgba(246, 248, 252, 0.94);
   box-shadow:
-    0 16px 36px rgba(0, 0, 0, 0.24),
+    0 16px 36px rgba(0, 0, 0, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 [data-theme="dark"] .prompt-chat-message.from-user .prompt-chat-message-bubble {
-  background: linear-gradient(180deg, #edf2f9 0%, #dce4ef 100%);
-  border-color: rgba(255, 255, 255, 0.18);
-  color: #0f141c;
+  background: linear-gradient(180deg, #f7f7f8 0%, #e7e7ea 100%);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: #101114;
 }
 
 [data-theme="dark"] .prompt-chat-message.status .prompt-chat-message-bubble {
   background: rgba(255, 255, 255, 0.08);
-  color: rgba(235, 240, 247, 0.72);
+  color: rgba(235, 240, 247, 0.68);
 }
 
 [data-theme="dark"] .prompt-chat-message.note-title .prompt-chat-message-bubble {
   background: rgba(255, 255, 255, 0.08);
-  color: rgba(245, 248, 252, 0.9);
+  color: rgba(245, 248, 252, 0.86);
+}
+
+[data-theme="dark"] .prompt-chat-activity-indicator,
+[data-theme="dark"] .prompt-chat-activity-indicator-text {
+  color: rgba(235, 240, 247, 0.42);
+}
+
+[data-theme="dark"] .prompt-chat-rich-text.is-streaming::after {
+  background: rgba(244, 247, 252, 0.62);
 }
 
 [data-theme="dark"] .prompt-chat-event-card {
   border-color: rgba(255, 255, 255, 0.08);
-  background: linear-gradient(180deg, rgba(18, 24, 33, 0.92), rgba(12, 16, 24, 0.88));
-  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.22);
+  background: linear-gradient(180deg, rgba(34, 34, 36, 0.94), rgba(25, 25, 27, 0.9));
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.18);
 }
 
 [data-theme="dark"] .prompt-chat-event-eyebrow {
@@ -1480,29 +1557,7 @@ body.mode-medium .prompt-chat-voice-btn {
 
 [data-theme="dark"] .prompt-chat-event-detail,
 [data-theme="dark"] .prompt-chat-event-items {
-  color: rgba(233, 238, 245, 0.72);
-}
-
-[data-theme="dark"] .prompt-chat-event-explored .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(16, 29, 42, 0.94), rgba(11, 22, 33, 0.9));
-}
-
-[data-theme="dark"] .prompt-chat-event-created .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(14, 33, 25, 0.94), rgba(10, 24, 19, 0.9));
-}
-
-[data-theme="dark"] .prompt-chat-event-edited .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(37, 28, 13, 0.94), rgba(24, 19, 10, 0.9));
-}
-
-[data-theme="dark"] .prompt-chat-event-deleted .prompt-chat-event-card,
-[data-theme="dark"] .prompt-chat-event-error .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(46, 20, 20, 0.94), rgba(28, 12, 12, 0.9));
-}
-
-[data-theme="dark"] .prompt-chat-event-action .prompt-chat-event-card,
-[data-theme="dark"] .prompt-chat-event-summary .prompt-chat-event-card {
-  background: linear-gradient(180deg, rgba(28, 22, 48, 0.94), rgba(18, 14, 31, 0.9));
+  color: rgba(233, 238, 245, 0.68);
 }
 
 [data-theme="dark"] .prompt-chat-rich-text code {
@@ -1519,10 +1574,10 @@ body.mode-medium .prompt-chat-voice-btn {
 }
 
 [data-theme="dark"] .prompt-chat-input-shell {
-  background: rgba(11, 14, 20, 0.72);
+  background: rgba(18, 18, 20, 0.84);
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow:
-    0 18px 42px rgba(0, 0, 0, 0.24),
+    0 18px 42px rgba(0, 0, 0, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
@@ -1548,9 +1603,9 @@ body.mode-medium .prompt-chat-voice-btn {
 }
 
 [data-theme="dark"] .prompt-chat-send-btn {
-  background: linear-gradient(180deg, #f7fbff 0%, #dce4ef 100%);
+  background: linear-gradient(180deg, #fafafa 0%, #e7e7ea 100%);
   border-color: rgba(255, 255, 255, 0.16);
-  color: #0f141c;
+  color: #101114;
 }
 
 body.mode-medium #face-container {
@@ -1622,12 +1677,12 @@ body:hover .chat-voice-fab,
 
 @media (max-height: 760px) {
   .prompt-chat-dock {
-    width: min(calc(100vw - 24px), 620px);
+    width: min(calc(100vw - 24px), 700px);
     bottom: 8px;
   }
 
   .prompt-chat-history {
-    max-height: min(16vh, 112px);
+    max-height: min(28vh, 220px);
   }
 
   .prompt-chat-panel {
@@ -1638,10 +1693,11 @@ body:hover .chat-voice-fab,
     max-width: 270px;
     max-height: 360px;
   }
+}
 
-  #face-container {
-    transform: translateY(-6px) scale(0.94);
-  }
+body:not(.mode-small):not(.compact-mode-active).prompt-chat-active.prompt-chat-expanded #face-svg,
+body:not(.mode-small):not(.compact-mode-active):hover.prompt-chat-persistent-expanded #face-svg {
+  transform: translateY(var(--prompt-chat-face-offset));
 }
 
 /* Toast Message */
