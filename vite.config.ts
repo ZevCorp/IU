@@ -19,6 +19,7 @@ export default defineConfig({
                 poc: resolve(__dirname, 'poc-face.html'),
                 dashboard: resolve(__dirname, 'dashboard.html'),
                 download: resolve(__dirname, 'download.html'),
+                oauth: resolve(__dirname, 'oauth.html'),
             },
         },
     },
