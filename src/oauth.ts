@@ -4,7 +4,7 @@ let sb: any;
 let authorizationId: string | null;
 
 function show(v: string) {
-  ['loading-view', 'login-view', 'consent-view', 'success-view', 'error-view'].forEach((id) => {
+  ['loading-view', 'direct-view', 'login-view', 'consent-view', 'error-view'].forEach((id) => {
     const el = document.getElementById(id);
     if (el) el.style.display = id === v ? 'block' : 'none';
   });
@@ -20,25 +20,14 @@ async function loadConsent() {
   try {
     const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
     if (error || !data) {
-      showError(error?.message || 'No se pudieron cargar los detalles de autorización.');
+      showError(error?.message || 'No se pudieron cargar los parámetros del enlace neuronal.');
       return;
     }
-    const clientNameEl = document.getElementById('client-name');
-    if (clientNameEl) clientNameEl.textContent = data.client?.name || 'Aplicación Externa';
-    
-    const sl = document.getElementById('scopes-list');
-    if (sl) {
-      sl.innerHTML = '';
-      (data.scopes || []).forEach((s: string) => {
-        const c = document.createElement('span');
-        c.className = 'scope-pill';
-        c.textContent = s;
-        sl.appendChild(c);
-      });
-    }
+    // Omitimos cargar data.client?.name porque la UI ahora está hardcodeada
+    // asumiendo que es el Custom GPT para una estética inmersiva IÜ OS.
     show('consent-view');
   } catch (e: any) {
-    showError(e.message || 'Error inesperado al cargar la autorización.');
+    showError(e.message || 'Error inesperado al intentar establecer el enlace.');
   }
 }
 
@@ -46,24 +35,19 @@ async function checkState() {
   const { data } = await sb.auth.getUser();
   
   if (!authorizationId) {
-    // Si no hay authorizationId, es un login genérico (ej. entraron directo a oauth.html)
-    if (data?.user) {
-        show('success-view');
-    } else {
-        const titleEl = document.getElementById('login-title');
-        const subEl = document.getElementById('login-subtitle');
-        if (titleEl) titleEl.textContent = "Bienvenido a I&Ü";
-        if (subEl) subEl.textContent = "Inicia sesión para acceder a tu plataforma";
-        show('login-view');
-    }
+    // Si no hay authorizationId, la página se abrió por error o manualmente.
+    // Explicamos que debe ir al GPT. (Quitamos el flujo de "login genérico").
+    show('direct-view');
     return;
   }
 
-  // Flujo OAuth: si no está logueado, pedimos login. Si sí, vamos al consent.
+  // Flujo OAuth: si no está logueado en la web, pedimos identidad.
   if (!data?.user) {
     show('login-view');
     return;
   }
+  
+  // Si ya tiene sesión activa en el navegador, directo al consent
   await loadConsent();
 }
 
@@ -94,30 +78,26 @@ document.addEventListener('DOMContentLoaded', () => {
       const btn = (e.target as HTMLFormElement).querySelector('button');
       if (btn) {
         btn.disabled = true;
-        btn.textContent = 'Autenticando...';
+        btn.textContent = 'Verificando...';
       }
       
       const { error } = await sb.auth.signInWithPassword({ email, password });
       
       if (btn) {
         btn.disabled = false;
-        btn.textContent = 'Entrar';
+        btn.textContent = 'Acreditar Identidad';
       }
       
       if (error) {
         if (errEl) {
-          errEl.textContent = error.message === 'Invalid login credentials' ? 'Credenciales incorrectas.' : error.message;
+          errEl.textContent = error.message === 'Invalid login credentials' ? 'Credenciales incorrectas o identidad no reconocida.' : error.message;
           errEl.style.display = 'block';
         }
         return;
       }
       
-      // Post-login check
-      if (authorizationId) {
-        await loadConsent();
-      } else {
-        show('success-view');
-      }
+      // Si el login fue exitoso, ir al consent (authorizationId está garantizado a este punto por el flow)
+      await loadConsent();
     });
   }
 
@@ -128,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const btn = this as HTMLButtonElement;
       const errEl = document.getElementById('consent-error');
       btn.disabled = true;
-      btn.textContent = 'Preparando entorno...';
+      btn.textContent = 'Estableciendo enlace seguro...';
       if (errEl) errEl.style.display = 'none';
       
       try {
@@ -139,7 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
             errEl.style.display = 'block';
           }
           btn.disabled = false;
-          btn.textContent = 'Autorizar App';
+          btn.textContent = 'Aprobar Vinculación Temporal';
           return;
         }
         if (data.redirect_to) {
@@ -151,7 +131,7 @@ document.addEventListener('DOMContentLoaded', () => {
           errEl.style.display = 'block';
         }
         btn.disabled = false;
-        btn.textContent = 'Autorizar App';
+        btn.textContent = 'Aprobar Vinculación Temporal';
       }
     });
   }
@@ -163,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
       try {
         const { data, error } = await sb.auth.oauth.denyAuthorization(authorizationId);
         if (error || !data) {
-          showError(error?.message || 'Error al denegar acceso.');
+          showError(error?.message || 'Error al rechazar el enlace.');
           return;
         }
         if (data.redirect_to) {
@@ -174,13 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
-
-  const btnDashboard = document.getElementById('btn-dashboard');
-  if (btnDashboard) {
-    btnDashboard.addEventListener('click', () => {
-       window.location.href = '/dashboard.html';
-    });
-  }
 });
 
+// Iniciamos
 init();
