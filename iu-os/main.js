@@ -55,6 +55,27 @@ ipcMain.handle('get-picovoice-config', () => {
     };
 });
 
+ipcMain.handle('get-custom-gpt-setup', () => {
+    const supabaseBaseUrl = String(process.env.IU_SUPABASE_ACTION_FUNCTION_URL || '').trim()
+        || ((process.env.IU_SUPABASE_URL || process.env.SUPABASE_URL)
+            ? `${String(process.env.IU_SUPABASE_URL || process.env.SUPABASE_URL).replace(/\/$/, '')}/functions/v1/custom-gpt-relay`
+            : '');
+
+    return {
+        transport: GPT_ACTION_TRANSPORT,
+        customGptUrl: CHATGPT_CUSTOM_GPT_URL || null,
+        systemPrompt: CUSTOM_GPT_SYSTEM_PROMPT,
+        operations: CUSTOM_GPT_ACTIONS.map((operation) => ({
+            name: operation.name,
+            summary: operation.summary,
+            description: operation.description
+        })),
+        openApiUrl: shouldUseSupabaseGptRelay() && supabaseBaseUrl
+            ? `${supabaseBaseUrl}/openapi.json`
+            : (gptActionBridge ? gptActionBridge.getOpenApiUrl() : null)
+    };
+});
+
 ipcMain.handle('logging-get-mode', () => {
     return { mode: LoggingSwitch.getMode() };
 });
@@ -140,6 +161,8 @@ const ScreenAgent = require('./ScreenAgent');
 const Brain = require('./Brain');
 const AgentRuntime = require('./AgentRuntime');
 const GPTActionBridge = require('./GPTActionBridge');
+const SupabaseActionRelay = require('./SupabaseActionRelay');
+const { CUSTOM_GPT_ACTIONS, CUSTOM_GPT_SYSTEM_PROMPT } = require('./CustomGptConfig');
 const ExecutionSessionManager = require('./ExecutionSessionManager');
 const NotebookExecutionManager = require('./NotebookExecutionManager');
 const KnowledgeService = require('./KnowledgeService');
@@ -155,6 +178,7 @@ let browserAgent = null; // Instanciado tras crear la mainWindow
 let browserCoreService = null;
 let browserCoreClient = null;
 let gptActionBridge = null;
+let supabaseActionRelay = null;
 const executionSessions = new ExecutionSessionManager();
 let inceptionBootstrapper = null;
 
@@ -2862,6 +2886,32 @@ function buildGptActionBridgeOperations() {
     ];
 }
 
+function findGptActionBridgeOperation(operationName) {
+    const name = String(operationName || '').trim();
+    if (!name) return null;
+    return buildGptActionBridgeOperations().find((operation) => operation.name === name) || null;
+}
+
+async function executeGptActionOperation(operationName, body = {}, meta = {}) {
+    const operation = findGptActionBridgeOperation(operationName);
+    if (!operation) {
+        return {
+            ok: false,
+            error: `Unknown GPT operation: ${operationName}`
+        };
+    }
+
+    try {
+        return await operation.handler(body, meta);
+    } catch (error) {
+        console.error(`❌ [GPTAction] ${operationName} failed:`, error);
+        return {
+            ok: false,
+            error: error?.message || `Operation failed: ${operationName}`
+        };
+    }
+}
+
 async function ensureGptActionBridge() {
     if (gptActionBridge) {
         return gptActionBridge.start();
@@ -2877,6 +2927,34 @@ async function ensureGptActionBridge() {
 
     const started = await gptActionBridge.start();
     LoggingSwitch.execution('GPTActionBridge', `Ready on ${gptActionBridge.getOpenApiUrl()}`);
+    return started;
+}
+
+async function ensureSupabaseActionRelay() {
+    if (supabaseActionRelay) {
+        return supabaseActionRelay.start();
+    }
+
+    supabaseActionRelay = new SupabaseActionRelay({
+        supabaseUrl: process.env.IU_SUPABASE_URL || process.env.SUPABASE_URL || '',
+        supabaseKey: process.env.IU_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '',
+        functionBaseUrl: process.env.IU_SUPABASE_ACTION_FUNCTION_URL || '',
+        desktopId: process.env.IU_SUPABASE_DESKTOP_ID || '',
+        desktopSecret: process.env.IU_SUPABASE_DESKTOP_SECRET || '',
+        deviceId: process.env.DEVICE_ID || '',
+        customGptUrl: CHATGPT_CUSTOM_GPT_URL,
+        logger: console,
+        onExecute: async (operationName, body, meta) => {
+            return executeGptActionOperation(operationName, body, meta);
+        }
+    });
+
+    const started = await supabaseActionRelay.start();
+    if (started.ok) {
+        LoggingSwitch.execution('SupabaseRelay', `Voice session ready${started.session_id ? ` (${started.session_id})` : ''}`);
+    } else {
+        console.warn('⚠️ [SupabaseRelay] Not ready:', started.error || (started.skipped ? 'missing configuration' : 'unknown'));
+    }
     return started;
 }
 
@@ -4856,6 +4934,9 @@ app.on('before-quit', () => {
         windowBoundsSaveTimer = null;
     }
     saveSettings();
+    if (supabaseActionRelay) {
+        void supabaseActionRelay.stop().catch(() => { });
+    }
     if (browserCoreService) {
         void browserCoreService.stop().catch(() => { });
     }
@@ -5054,9 +5135,18 @@ let chatContext = null;
 let chatPage = null;
 const CHATGPT_CUSTOM_GPT_URL = String(process.env.IU_CHATGPT_CUSTOM_GPT_URL || process.env.CHATGPT_CUSTOM_GPT_URL || '').trim();
 const CHATGPT_HOME_URL = CHATGPT_CUSTOM_GPT_URL || 'https://chatgpt.com/';
+const GPT_ACTION_TRANSPORT = String(process.env.IU_GPT_ACTION_TRANSPORT || 'supabase').trim().toLowerCase();
 
 function isCustomGptModeEnabled() {
     return Boolean(CHATGPT_CUSTOM_GPT_URL);
+}
+
+function shouldUseSupabaseGptRelay() {
+    return isCustomGptModeEnabled() && GPT_ACTION_TRANSPORT === 'supabase';
+}
+
+function shouldUseLocalGptActionBridge() {
+    return GPT_ACTION_TRANSPORT === 'local';
 }
 
 function startChatGptVoiceUiMonitoring() {
@@ -5074,7 +5164,11 @@ function isChromeInternalPage(url = '') {
 async function setupChatGPT() {
     console.log('🤖 Setting up ChatGPT integration...');
     try {
-        await ensureGptActionBridge();
+        if (shouldUseLocalGptActionBridge()) {
+            await ensureGptActionBridge();
+        } else if (shouldUseSupabaseGptRelay()) {
+            LoggingSwitch.execution('SupabaseRelay', 'Configured for session-scoped long polling during active voice only.');
+        }
         await ensureManagedChrome(CHATGPT_HOME_URL, [], { source: 'main.setupChatGPT' });
         const browser = await chromium.connectOverCDP(`http://127.0.0.1:${MANAGED_CHROME_PORT}`);
         const contexts = browser.contexts();
@@ -5578,6 +5672,13 @@ async function startChatGPTVoiceConversation(options = {}) {
     console.log('🖱️ Clicked "Start Voice" successfully');
     await chatPage.waitForTimeout(1500);
 
+    if (shouldUseSupabaseGptRelay()) {
+        const relay = await ensureSupabaseActionRelay();
+        if (!relay?.ok) {
+            console.warn('⚠️ [SupabaseRelay] Voice started without active Supabase tool session:', relay?.error || 'unknown');
+        }
+    }
+
     if (!skipGreeting) {
         console.log('✍️ Sending greeting context...');
         const composer = chatPage.locator('#prompt-textarea');
@@ -5629,6 +5730,12 @@ async function stopChatGPTVoiceConversation() {
 
     if (!stopped) {
         await chatPage.keyboard.press('Escape');
+    }
+
+    if (supabaseActionRelay && shouldUseSupabaseGptRelay()) {
+        await supabaseActionRelay.stop().catch((error) => {
+            console.warn('⚠️ [SupabaseRelay] Could not stop voice session:', error?.message || error);
+        });
     }
     return { success: true, state: 'idle' };
 }
