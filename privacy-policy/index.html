@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Política de privacidad de IU OS para la integración con GPT personalizado, autenticación y acciones conectadas.">
+    <title>IU OS | Política de Privacidad</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #06070a;
+            --panel: rgba(14, 17, 24, 0.88);
+            --line: rgba(255, 255, 255, 0.08);
+            --text: #eef2ff;
+            --muted: #b6bfd6;
+            --accent: #7dd3fc;
+            --accent-2: #c4b5fd;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top, rgba(125, 211, 252, 0.16), transparent 34%),
+                radial-gradient(circle at 80% 20%, rgba(196, 181, 253, 0.16), transparent 28%),
+                linear-gradient(180deg, #050608 0%, #090b12 48%, #050608 100%);
+        }
+
+        main {
+            width: min(880px, calc(100% - 32px));
+            margin: 0 auto;
+            padding: 56px 0 80px;
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--line);
+            border-radius: 28px;
+            backdrop-filter: blur(18px);
+            padding: 40px 28px;
+            box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+        }
+
+        .eyebrow {
+            display: inline-block;
+            margin-bottom: 18px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--accent);
+            background: rgba(125, 211, 252, 0.08);
+            border: 1px solid rgba(125, 211, 252, 0.18);
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            font-size: clamp(2rem, 5vw, 3.5rem);
+            line-height: 0.98;
+            letter-spacing: -0.04em;
+        }
+
+        .intro {
+            margin: 0 0 28px;
+            color: var(--muted);
+            font-size: 1rem;
+            line-height: 1.7;
+        }
+
+        .meta {
+            margin: 0 0 34px;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+
+        section + section {
+            margin-top: 26px;
+            padding-top: 26px;
+            border-top: 1px solid var(--line);
+        }
+
+        h2 {
+            margin: 0 0 12px;
+            font-size: 1.2rem;
+            letter-spacing: -0.02em;
+        }
+
+        p, li {
+            color: var(--muted);
+            line-height: 1.75;
+            font-size: 0.98rem;
+        }
+
+        ul {
+            margin: 14px 0 0;
+            padding-left: 20px;
+        }
+
+        a {
+            color: var(--accent);
+        }
+
+        .brand {
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .footer {
+            margin-top: 34px;
+            color: var(--muted);
+            font-size: 0.92rem;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 28px;
+            color: var(--accent-2);
+            text-decoration: none;
+        }
+
+        @media (max-width: 640px) {
+            main {
+                width: min(100%, calc(100% - 20px));
+                padding: 20px 0 40px;
+            }
+
+            .card {
+                padding: 24px 18px;
+                border-radius: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main>
+        <article class="card">
+            <div class="eyebrow">IU OS</div>
+            <h1>Política de Privacidad</h1>
+            <p class="intro">
+                Esta política explica cómo <span class="brand">IU OS / I&amp;Ü</span> trata la información cuando una persona usa
+                nuestro GPT personalizado, la autenticación asociada y las herramientas conectadas a su asistente local.
+            </p>
+            <p class="meta">Última actualización: 1 de abril de 2026</p>
+
+            <section>
+                <h2>1. Información que podemos tratar</h2>
+                <p>Podemos tratar información necesaria para prestar la experiencia del asistente, incluyendo:</p>
+                <ul>
+                    <li>datos de cuenta e identidad, como correo electrónico y usuario autenticado mediante Supabase;</li>
+                    <li>solicitudes enviadas al GPT personalizado y resultados de herramientas;</li>
+                    <li>contenido que la persona decida consultar, crear o modificar, como notas, metas, recordatorios y configuraciones;</li>
+                    <li>resúmenes de turnos de voz y contexto operacional necesario para sincronizar el sistema;</li>
+                    <li>eventos técnicos mínimos para seguridad, diagnóstico y prevención de abuso.</li>
+                </ul>
+            </section>
+
+            <section>
+                <h2>2. Cómo usamos la información</h2>
+                <p>Usamos la información para autenticar al usuario, ejecutar las herramientas que solicita, sincronizar su asistente con su equipo local, mantener continuidad conversacional y mejorar la confiabilidad, seguridad y trazabilidad operativa del servicio.</p>
+            </section>
+
+            <section>
+                <h2>3. Integraciones y proveedores</h2>
+                <p>La autenticación y parte de la infraestructura pueden apoyarse en proveedores externos, incluyendo Supabase para identidad, base de datos y funciones, y OpenAI para la experiencia del GPT personalizado. Cada proveedor puede tratar datos conforme a sus propios términos y políticas.</p>
+            </section>
+
+            <section>
+                <h2>4. Ejecución local y acciones en dispositivos</h2>
+                <p>Algunas acciones solicitadas por el usuario pueden ejecutarse en su propio dispositivo o asistente local. IU OS está diseñado para usar herramientas explícitas para esas acciones. El usuario es responsable de revisar y autorizar el uso del sistema en sus dispositivos y entornos.</p>
+            </section>
+
+            <section>
+                <h2>5. Conservación y seguridad</h2>
+                <p>Conservamos la información solo durante el tiempo necesario para operar el servicio, mantener la seguridad, resolver incidentes y cumplir obligaciones aplicables. Aplicamos medidas razonables de seguridad técnicas y organizativas, aunque ningún sistema puede garantizar seguridad absoluta.</p>
+            </section>
+
+            <section>
+                <h2>6. Compartición de información</h2>
+                <p>No vendemos información personal. Podemos compartir información con proveedores de infraestructura y servicios estrictamente necesarios para operar el producto, o cuando sea necesario para cumplir una obligación legal, proteger derechos o investigar abuso o fraude.</p>
+            </section>
+
+            <section>
+                <h2>7. Derechos y contacto</h2>
+                <p>Si deseas solicitar acceso, corrección, eliminación o hacer preguntas sobre privacidad, puedes contactarnos a través de los canales oficiales del proyecto IU OS. Atenderemos la solicitud dentro de un plazo razonable, sujeto a requisitos técnicos y legales aplicables.</p>
+            </section>
+
+            <section>
+                <h2>8. Cambios a esta política</h2>
+                <p>Podemos actualizar esta política para reflejar cambios del producto, arquitectura o requisitos legales. La versión vigente será la publicada en esta misma URL.</p>
+            </section>
+
+            <p class="footer">
+                URL de referencia para integraciones: <a href="https://iu-1.onrender.com/privacy-policy/">https://iu-1.onrender.com/privacy-policy/</a>
+            </p>
+
+            <a class="back-link" href="/">Volver al sitio principal</a>
+        </article>
+    </main>
+</body>
+</html>

@@ -20,6 +20,7 @@ export default defineConfig({
                 dashboard: resolve(__dirname, 'dashboard.html'),
                 download: resolve(__dirname, 'download.html'),
                 oauth: resolve(__dirname, 'oauth.html'),
+                privacyPolicy: resolve(__dirname, 'privacy-policy/index.html'),
             },
         },
     },
