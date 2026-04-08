@@ -1421,6 +1421,11 @@ body {
   font: 700 16px/1.2 'Manrope', sans-serif;
 }
 
+.meta-modal-copy {
+  color: var(--meta-card-subtext);
+  font: 600 13px/1.45 'Manrope', sans-serif;
+}
+
 .meta-modal-input,
 .meta-modal-textarea {
   width: 100%;

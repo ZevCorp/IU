@@ -3075,7 +3075,7 @@ function getPromptChatActivityLabel(toolName) {
     ) {
         return 'Editing';
     }
-    if (name === 'execute_screen_action' || name === 'play_agario' || name === 'schedule_reminder') {
+    if (name === 'execute_managed_action' || name === 'execute_screen_action' || name === 'play_agario' || name === 'schedule_reminder') {
         return 'Acting';
     }
     return 'Thinking';
@@ -4186,12 +4186,24 @@ if (window.iuOS && window.iuOS.onActionConfirmRequest) {
 if (window.iuOS && window.iuOS.onActionStatus) {
     window.iuOS.onActionStatus((data) => {
         try {
-            console.log('[App] Action status:', data.status);
+            const rawStatus = String(data?.status || data?.phase || '').trim().toLowerCase();
+            console.log('[App] Action status:', rawStatus, data);
+            emitPromptChatUiUx('action_status_received', {
+                status: rawStatus,
+                step: String(data?.step || data?.action || '').substring(0, 160),
+                error: String(data?.error || '').substring(0, 160)
+            });
             const loadingOverlay = document.getElementById('loading-overlay');
+            const status =
+                rawStatus === 'starting' || rawStatus === 'confirming' || rawStatus === 'analyzing' || rawStatus === 'extracting_graph' || rawStatus === 'acting'
+                    ? 'executing'
+                    : rawStatus === 'completed'
+                        ? 'complete'
+                        : rawStatus;
 
-            switch (data.status) {
+            switch (status) {
                 case 'executing':
-                    showCompactPopup(data.step || 'Ejecutando...');
+                    showCompactPopup(data.step || data.action || 'Ejecutando...');
                     if (loadingOverlay) loadingOverlay.classList.remove('hidden');
                     if (face) face.transitionTo('looking_at_screen', 600);
                     break;
@@ -4218,11 +4230,16 @@ if (window.iuOS && window.iuOS.onActionStatus) {
                     break;
                 case 'error':
                     if (loadingOverlay) loadingOverlay.classList.add('hidden');
-                    showCompactPopup(`✗ Error`);
+                    showCompactPopup(data?.error ? `✗ ${data.error}` : '✗ Error');
                     const appError = document.getElementById('app');
                     if (appError) appError.classList.remove('compact-action-mode');
                     if (face) face.transitionTo('neutral', 400);
                     setTimeout(hideCompactPopup, 3000);
+                    break;
+                case 'waiting_user':
+                    if (loadingOverlay) loadingOverlay.classList.add('hidden');
+                    showCompactPopup(data?.summary || 'Necesito una aclaración para continuar.');
+                    if (face) face.transitionTo('neutral', 500);
                     break;
                 case 'stopped':
                     if (loadingOverlay) loadingOverlay.classList.add('hidden');

@@ -18,6 +18,10 @@ const state = {
   newNoteModalMetaId: null,
   existingNoteModalMetaId: null,
   existingNoteSelection: [],
+  openClawImportModalMetaId: null,
+  openClawImportPreview: null,
+  openClawImportBusy: false,
+  openClawImportError: '',
   livePresentation: null
 };
 
@@ -774,6 +778,7 @@ function setMetaViewMode(mode) {
   state.metaNotesMenuMetaId = null;
   state.metaNotesMenuAnchor = 'section';
   state.executionModalMetaId = null;
+  state.openClawImportModalMetaId = null;
   renderMetasView();
 }
 
@@ -785,6 +790,10 @@ function closeMetaOverlays() {
   state.newNoteModalMetaId = null;
   state.existingNoteModalMetaId = null;
   state.existingNoteSelection = [];
+  state.openClawImportModalMetaId = null;
+  state.openClawImportPreview = null;
+  state.openClawImportBusy = false;
+  state.openClawImportError = '';
 }
 
 async function closeTabWithoutSaving(tabId) {
@@ -1062,6 +1071,59 @@ function appendMetaAgentLog(metaId, phase, message) {
   });
   saveMetas();
   renderMetasView();
+}
+
+async function loadOpenClawImportPreview() {
+  if (!window.uChat?.previewOpenClawKnowledge || !state.openClawImportModalMetaId) return;
+  state.openClawImportBusy = true;
+  state.openClawImportError = '';
+  renderMetasView();
+  try {
+    const preview = await window.uChat.previewOpenClawKnowledge();
+    state.openClawImportPreview = preview || null;
+    state.openClawImportError = preview?.ok || preview?.found ? '' : String(preview?.reason || preview?.error || 'No encontré OpenClaw local.');
+  } catch (error) {
+    state.openClawImportPreview = null;
+    state.openClawImportError = String(error?.message || error || 'No pude inspeccionar OpenClaw.');
+  } finally {
+    state.openClawImportBusy = false;
+    renderMetasView();
+  }
+}
+
+function openOpenClawImportModal(metaId) {
+  closeMetaOverlays();
+  state.openClawImportModalMetaId = metaId;
+  state.openClawImportPreview = null;
+  state.openClawImportBusy = true;
+  state.openClawImportError = '';
+  renderMetasView();
+  loadOpenClawImportPreview();
+}
+
+async function confirmOpenClawKnowledgeImport(metaId) {
+  if (!window.uChat?.importOpenClawKnowledge) return;
+  state.openClawImportBusy = true;
+  state.openClawImportError = '';
+  appendMetaAgentLog(metaId, 'planning', 'El asistente main está inspeccionando OpenClaw y organizando el conocimiento.');
+  renderMetasView();
+  try {
+    const result = await window.uChat.importOpenClawKnowledge({ metaId });
+    if (!result?.success) {
+      throw new Error(result?.error || 'No se pudo importar OpenClaw.');
+    }
+    if (result?.state) {
+      applySnapshot(result.state, { syncEditor: false });
+    }
+    appendMetaAgentLog(metaId, 'done', String(result.assistantReply || 'Conocimiento de OpenClaw importado.'));
+    closeMetaOverlays();
+    renderMetasView();
+  } catch (error) {
+    state.openClawImportError = String(error?.message || error || 'No se pudo importar OpenClaw.');
+    appendMetaAgentLog(metaId, 'error', state.openClawImportError);
+    state.openClawImportBusy = false;
+    renderMetasView();
+  }
 }
 
 function applyMetaAgentProgress(payload = {}) {
@@ -1490,6 +1552,80 @@ function renderMetaModal() {
       state.newNoteModalMetaId = null;
       renderMetasView();
       await createAndAttachNoteToMeta(targetMetaId, title, body);
+    });
+
+    modal.appendChild(panel);
+    refs.metaModalRoot.appendChild(modal);
+    return;
+  }
+
+  if (state.openClawImportModalMetaId) {
+    const meta = getMetaById(state.openClawImportModalMetaId);
+    if (!meta) {
+      state.openClawImportModalMetaId = null;
+      state.openClawImportPreview = null;
+      state.openClawImportBusy = false;
+      state.openClawImportError = '';
+      return;
+    }
+
+    const modal = document.createElement('div');
+    modal.className = 'meta-modal-backdrop';
+    modal.addEventListener('click', (event) => {
+      if (event.target !== modal || state.openClawImportBusy) return;
+      closeMetaOverlays();
+      renderMetasView();
+    });
+
+    const panel = document.createElement('div');
+    panel.className = 'meta-modal-panel';
+
+    const preview = state.openClawImportPreview;
+    const counts = preview?.counts || {};
+    const summaryLines = preview?.ok
+      ? [
+          `Documentos detectados: ${Number(counts.total || 0)}`,
+          `Identidad: ${Number(counts.identity || 0)}`,
+          `Runtime: ${Number(counts.runtime || 0)}`,
+          `Workspace general: ${Number(counts.workspace || 0)}`,
+          `Memoria semántica (memory/): ${Number(counts.memory || 0)}`,
+          `Config: ${Number(counts.config || 0)}`
+        ]
+      : [];
+
+    panel.innerHTML = `
+      <h3 class="meta-modal-title">Conocimiento de OpenClaw</h3>
+      <div class="meta-modal-copy">
+        El asistente main va a inspeccionar tu instalación local de OpenClaw, organizarla como notas y metas de Ü, e indexar <code>workspace/memory</code> en memoria semántica si existe.
+      </div>
+      ${preview?.ok ? `
+        <div class="meta-modal-copy"><strong>Meta de entrada:</strong> ${escapeHtml(meta.title || 'Meta sin título')}</div>
+        <div class="meta-modal-copy"><strong>Workspace:</strong> <code>${escapeHtml(preview.workspaceDir || '')}</code></div>
+        <div class="meta-modal-copy">${summaryLines.map((line) => escapeHtml(line)).join('<br />')}</div>
+      ` : state.openClawImportBusy ? `
+        <div class="meta-modal-copy">Buscando tu instalación de OpenClaw...</div>
+      ` : `
+        <div class="meta-modal-copy">${escapeHtml(state.openClawImportError || 'No encontré OpenClaw local.')}</div>
+      `}
+      <div class="meta-modal-actions">
+        <button type="button" class="meta-modal-btn subtle">Cancelar</button>
+        <button type="button" class="meta-modal-btn"${preview?.ok && !state.openClawImportBusy ? '' : ' disabled'}>${state.openClawImportBusy && !preview?.ok ? 'Buscando...' : (state.openClawImportBusy ? 'Importando...' : 'Importar con asistente main')}</button>
+      </div>
+    `;
+
+    const buttons = panel.querySelectorAll('.meta-modal-btn');
+    const cancelBtn = buttons[0];
+    const confirmBtn = buttons[1];
+
+    cancelBtn.addEventListener('click', () => {
+      if (state.openClawImportBusy) return;
+      closeMetaOverlays();
+      renderMetasView();
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      if (state.openClawImportBusy || !preview?.ok) return;
+      await confirmOpenClawKnowledgeImport(meta.id);
     });
 
     modal.appendChild(panel);
@@ -2087,11 +2223,22 @@ function createMetaCard(meta, options = {}) {
       renderMetasView();
     });
 
+    const openClawBtn = document.createElement('button');
+    openClawBtn.type = 'button';
+    openClawBtn.className = 'meta-actions-option';
+    openClawBtn.textContent = 'Conocimiento de OpenClaw';
+    openClawBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      state.metaActionsMenuMetaId = null;
+      openOpenClawImportModal(meta.id);
+    });
+
     menu.appendChild(viewModeBtn);
     if (!meta.isFixed) {
       menu.appendChild(removeBtn);
     }
     menu.appendChild(attachBtn);
+    menu.appendChild(openClawBtn);
     moreShell.appendChild(menu);
   }
 
@@ -2401,7 +2548,7 @@ function bindEvents() {
 
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    if (!state.newNoteModalMetaId && !state.existingNoteModalMetaId && !state.metaNotesMenuMetaId && !state.metaActionsMenuMetaId && !state.executionModalMetaId) return;
+    if (!state.newNoteModalMetaId && !state.existingNoteModalMetaId && !state.metaNotesMenuMetaId && !state.metaActionsMenuMetaId && !state.executionModalMetaId && !state.openClawImportModalMetaId) return;
     closeMetaOverlays();
     renderMetasView();
   });

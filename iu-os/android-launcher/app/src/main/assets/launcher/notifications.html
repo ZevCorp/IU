@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>IU Notifications</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./notifications.css">
+</head>
+<body>
+  <div class="notifications-shell">
+    <header class="notifications-header">
+      <div>
+        <div class="eyebrow">Multiwindow del sistema</div>
+        <h1>Filtro de notificaciones</h1>
+        <p class="notifications-copy">La cola retenida vive aquí. Tú sigues enfocado y Time Manager decide qué sube, qué espera y qué ya puede aparecer.</p>
+      </div>
+      <button id="simulate-btn" type="button">Simular</button>
+    </header>
+
+    <section class="summary-grid">
+      <article class="summary-card">
+        <span class="summary-label">Estado</span>
+        <strong>DND / Focus completo</strong>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Entrega</span>
+        <strong>Time Manager decide el momento</strong>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">Disparo actual</span>
+        <strong id="queue-count">0 retenidas</strong>
+      </article>
+    </section>
+
+    <main id="notification-list" class="notification-list"></main>
+  </div>
+
+  <script src="./android-bridge.js"></script>
+  <script src="./notifications.js"></script>
+</body>
+</html>

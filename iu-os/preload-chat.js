@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('uChat', {
     runMetaAgent: (payload) => ipcRenderer.invoke('meta-agent-run', payload),
     getMetas: () => ipcRenderer.invoke('chat-get-metas'),
     saveMetas: (metas) => ipcRenderer.invoke('chat-save-metas', { metas }),
+    previewOpenClawKnowledge: () => ipcRenderer.invoke('knowledge-preview-openclaw'),
+    importOpenClawKnowledge: (payload) => ipcRenderer.invoke('knowledge-import-openclaw', payload),
     getUiTheme: () => ipcRenderer.invoke('get-ui-theme'),
     getLoggingMode: () => ipcRenderer.invoke('logging-get-mode'),
     setLoggingMode: (mode) => ipcRenderer.invoke('logging-set-mode', { mode }),

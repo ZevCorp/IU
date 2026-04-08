@@ -11,6 +11,16 @@ class StickyFaceController {
         this.commandAttentionInterval = null;
     }
 
+    runInWindow(script, label = 'script') {
+        if (!this.window || this.window.isDestroyed()) {
+            return Promise.resolve(false);
+        }
+        return this.window.webContents.executeJavaScript(script).then(() => true).catch((error) => {
+            console.warn(`⚠️ [StickyFace] ${label} failed:`, error?.message || error);
+            return false;
+        });
+    }
+
     start() {
         if (this.window && !this.window.isDestroyed()) {
             this.window.show();
@@ -125,13 +135,18 @@ class StickyFaceController {
                 #btn-chat-toggle, #btn-voice-icon, #btn-transfer-top,
                 .transfer-btn-top, #menu-toggle, .menu-toggle,
                 #controls-panel, #nav-hud, #intent-carousel,
-                #transcript-container, #checklist-container, #neural-canvas {
+                #transcript-container, #checklist-container, #neural-canvas,
+                #prompt-chat-dock, #prompt-chat-voice-floating-btn,
+                #compact-popup, #loading-overlay, #turn-taking-debug,
+                #action-confirmation, #bootloader-overlay, #inception-onboarding-card {
                     display: none !important;
                 }
-            `);
+            `).catch((error) => {
+                console.warn('⚠️ [StickyFace] insertCSS failed:', error?.message || error);
+            });
 
             // Inject message element and controller
-            this.window.webContents.executeJavaScript(`
+            void this.runInWindow(`
                 const msg = document.createElement('div');
                 msg.id = 'floating-message';
                 document.body.appendChild(msg);
@@ -168,8 +183,10 @@ class StickyFaceController {
                 window.hideStickyMessage = () => {
                     msg.classList.remove('visible');
                 };
-                if (window.uFace) window.uFace.setEyeColor('#ffffff');
-            `);
+                if (window.face && window.face.setEyeColor) {
+                    window.face.setEyeColor('#ffffff');
+                }
+            `, 'bootstrap sticky ui');
 
             this.window.show();
             this.startTracking();
@@ -215,15 +232,15 @@ class StickyFaceController {
 
     setExpression(expression) {
         this.currentExpression = expression;
-        if (this.window && !this.window.isDestroyed()) {
-            this.window.webContents.executeJavaScript(`if (window.setExpression) window.setExpression('${expression}')`);
-        }
+        void this.runInWindow(`if (window.setExpression) window.setExpression(${JSON.stringify(String(expression || 'idle'))})`, 'setExpression');
     }
 
     setFaceColor(color) {
-        if (this.window && !this.window.isDestroyed()) {
-            this.window.webContents.executeJavaScript(`if (window.face) face.setEyeColor('${color}')`);
-        }
+        void this.runInWindow(`
+            if (window.face && window.face.setEyeColor) {
+                window.face.setEyeColor(${JSON.stringify(String(color || '#ffffff'))});
+            }
+        `, 'setFaceColor');
     }
 
     showMessage(text, duration = 3000) {
@@ -232,12 +249,12 @@ class StickyFaceController {
                 ? text
                 : { body: String(text || '') };
             const safePayload = JSON.stringify(payload);
-            this.window.webContents.executeJavaScript(`window.showStickyMessage(${safePayload})`);
+            void this.runInWindow(`if (window.showStickyMessage) window.showStickyMessage(${safePayload})`, 'showMessage');
             if (this.messageTimeout) clearTimeout(this.messageTimeout);
             if (duration > 0) {
                 this.messageTimeout = setTimeout(() => {
                     if (this.window && !this.window.isDestroyed()) {
-                        this.window.webContents.executeJavaScript(`window.hideStickyMessage()`);
+                        void this.runInWindow(`if (window.hideStickyMessage) window.hideStickyMessage()`, 'hideMessage');
                     }
                 }, duration);
             }
@@ -253,12 +270,12 @@ class StickyFaceController {
             tick++;
             const useThinking = tick % 2 === 0;
             const preset = useThinking ? 'thinking' : 'mild_attention';
-            this.window.webContents.executeJavaScript(`
+            void this.runInWindow(`
                 if (window.setExpression) window.setExpression('${preset}');
                 if (window.face && window.face.lookAt) {
                     window.face.lookAt(${useThinking ? 0.42 : 0.58}, 0.50);
                 }
-            `).catch(() => { });
+            `, 'commandAttentionTick');
         }, 520);
     }
 

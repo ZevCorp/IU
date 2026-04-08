@@ -4,3 +4,12 @@ dist/
 *.log
 yolo_venv/
 .yolo_model_cache/
+
+# Android/Gradle
+.gradle/
+**/.gradle/
+build/
+**/build/
+local.properties
+.idea/
+*.iml

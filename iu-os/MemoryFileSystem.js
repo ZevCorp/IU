@@ -16,6 +16,7 @@ class MemoryFileSystem {
         const userData = app.getPath('userData');
         this.brainDir = path.join(userData, 'brain');
         this.episodicDir = path.join(this.brainDir, 'episodic');
+        this.importsDir = path.join(this.brainDir, 'imports');
 
         this.ensureDirectories();
     }
@@ -26,6 +27,9 @@ class MemoryFileSystem {
         }
         if (!fs.existsSync(this.episodicDir)) {
             fs.mkdirSync(this.episodicDir, { recursive: true });
+        }
+        if (!fs.existsSync(this.importsDir)) {
+            fs.mkdirSync(this.importsDir, { recursive: true });
         }
 
         // Ensure MEMORY.md exists
@@ -69,6 +73,40 @@ class MemoryFileSystem {
         return '';
     }
 
+    writeImportMemory(relativeName, content) {
+        const safeRelative = String(relativeName || 'import.md')
+            .replace(/^([/\\])+/, '')
+            .replace(/\.\.(\/|\\)/g, '');
+        const fullPath = path.join(this.importsDir, safeRelative || 'import.md');
+        fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+        fs.writeFileSync(fullPath, String(content || ''), 'utf-8');
+        return fullPath;
+    }
+
+    _collectMarkdownFiles(rootDir, maxDepth = 4) {
+        const files = [];
+        const walk = (currentDir, depth) => {
+            if (!currentDir || depth > maxDepth || !fs.existsSync(currentDir)) return;
+            let entries = [];
+            try {
+                entries = fs.readdirSync(currentDir, { withFileTypes: true });
+            } catch (e) {
+                return;
+            }
+            for (const entry of entries) {
+                const fullPath = path.join(currentDir, entry.name);
+                if (entry.isDirectory()) {
+                    walk(fullPath, depth + 1);
+                    continue;
+                }
+                if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+                files.push(fullPath);
+            }
+        };
+        walk(rootDir, 0);
+        return files.sort();
+    }
+
     /**
      * Get all memory files for indexing (Core + Recent Episodic)
      * Limit episodic to last 7 days to keep index manageable for now.
@@ -104,6 +142,20 @@ class MemoryFileSystem {
             });
         } catch (e) {
             console.error('❌ [MemoryFS] Failed to read episodic logs:', e);
+        }
+
+        // 3. Imported semantic memory bundles
+        try {
+            const imports = this._collectMarkdownFiles(this.importsDir, 4);
+            imports.forEach(importFile => {
+                files.push({
+                    path: importFile,
+                    type: 'import',
+                    content: fs.readFileSync(importFile, 'utf-8')
+                });
+            });
+        } catch (e) {
+            console.error('❌ [MemoryFS] Failed to read imported memory files:', e);
         }
 
         return files;

@@ -1,3 +1,10 @@
+const {
+    MANAGED_EXECUTOR_OPENCLAW,
+    MANAGED_EXECUTOR_IU_DESKTOP,
+    isManagedActionToolName,
+    parseManagedActionArgs
+} = require('./ManagedActionDefinition');
+
 class AgentRuntime {
     constructor(options = {}) {
         this.modelSwitch = options.modelSwitch;
@@ -16,6 +23,7 @@ class AgentRuntime {
         this.executeActionTool = typeof options.executeActionTool === 'function'
             ? options.executeActionTool
             : (async () => null);
+        this.openClawBridge = options.openClawBridge || null;
     }
 
     async planActionIntent(options = {}) {
@@ -64,6 +72,9 @@ class AgentRuntime {
             '- Si la intencion no es una accion clara y allowReply es false, no inventes acciones.',
             '- No menciones tool calls, JSON ni pipeline interno.',
             '- Si una accion requiere varias apps, en app pon solo la primera y deja el resto en steps_hint.',
+            `- Usa ${MANAGED_EXECUTOR_OPENCLAW} cuando la tarea sea principalmente de navegador o web.`,
+            `- Usa ${MANAGED_EXECUTOR_IU_DESKTOP} para GUI desktop, AX, mouse o teclado sobre apps nativas.`,
+            '- Siempre incluye executor_reason cuando prepares una accion.',
             `Modo actual: ${mode}.`,
             `FECHA Y HORA ACTUAL: ${new Date().toLocaleString('es-ES')}`
         ];
@@ -136,6 +147,11 @@ class AgentRuntime {
         const prompt = String(options.prompt || '').trim();
         const runId = String(options.runId || `prompt_run_${Date.now()}`).trim();
         const emit = typeof options.emit === 'function' ? options.emit : () => {};
+        const recent = this._normalizeRecentMessages(options.recent);
+        const longTerm = String(options.longTerm || '').trim();
+        const learnedWorkflows = Array.isArray(options.learnedWorkflows)
+            ? options.learnedWorkflows.filter(Boolean).slice(0, 4)
+            : [];
 
         if (!prompt) {
             emit({
@@ -183,6 +199,86 @@ class AgentRuntime {
         const failures = [];
         const toolRegistry = this._createToolRegistry({ emit, changes, runId });
         const workspaceDigest = this._buildWorkspaceDigest();
+        const actionFastPath = await this.planActionIntent({
+            text: prompt,
+            recent,
+            longTerm,
+            learnedWorkflows,
+            allowReply: false,
+            mode: 'prompt_chat'
+        }).catch(() => null);
+
+        if (actionFastPath?.kind === 'action' && actionFastPath?.toolCall) {
+            const toolName = String(actionFastPath.toolCall?.function?.name || '').trim();
+            const args = this._parseToolArgs(actionFastPath.toolCall?.function?.arguments);
+            if (toolName) {
+                const preamble = this._looksLikeInternalReasoning(actionFastPath.reply)
+                    ? ''
+                    : this._extractAssistantStatusMessage(actionFastPath.reply);
+                if (preamble) {
+                    emit({
+                        type: 'assistant_message',
+                        phase: 'execution',
+                        message: preamble
+                    });
+                }
+
+                emit({
+                    type: 'tool_call',
+                    phase: 'start',
+                    toolName,
+                    args: this._buildToolCallPreview(toolName, args)
+                });
+
+                let result;
+                try {
+                    result = await this.executeActionTool({
+                        name: toolName,
+                        args,
+                        runId
+                    });
+                } catch (error) {
+                    result = {
+                        ok: false,
+                        error: error?.message || `Falló ${toolName}`
+                    };
+                }
+
+                if (result?.action) {
+                    changes.actions.push(result.action);
+                }
+                if (result?.ok === false) {
+                    failures.push(String(result?.error || `Falló ${toolName}`));
+                }
+                emit({
+                    type: 'tool_call',
+                    phase: 'result',
+                    toolName,
+                    ok: result?.ok !== false,
+                    args: this._buildToolCallPreview(toolName, args),
+                    result: this._buildToolCallPreview(toolName, result)
+                });
+
+                const publicEvent = this._buildPublicToolEvent(toolName, args, result);
+                if (publicEvent) {
+                    toolEvents.push(publicEvent);
+                    emit({
+                        type: 'tool_event',
+                        runId,
+                        ...publicEvent
+                    });
+                }
+
+                const assistantReply = this._buildFastPathActionReply(result, actionFastPath.reply);
+                return {
+                    success: true,
+                    runId,
+                    assistantReply,
+                    toolEvents,
+                    changes
+                };
+            }
+        }
 
         const messages = [
             {
@@ -195,6 +291,7 @@ class AgentRuntime {
                     'Reglas duras:',
                     '- Si una operación es destructiva (borrar nota/meta), solo ejecútala cuando la intención del usuario sea explícita.',
                     '- No hables del pipeline interno, no menciones JSON ni tool calls.',
+                    '- No expongas razonamiento interno, cadenas tipo "The user wants..." ni listas de planificación ocultas.',
                     '- Si necesitas contexto, usa herramientas; no adivines.',
                     '- Si el usuario solo conversa, responde normal y no fuerces herramientas.',
                     '- Si el usuario escribe solo un nombre, tema, frase suelta o algo ambiguo, no lo conviertas automaticamente en una accion sobre notas o metas.',
@@ -215,18 +312,46 @@ class AgentRuntime {
                     '- Mantén la respuesta final breve, directa y útil.'
                 ].join('\n')
             },
+            ...(learnedWorkflows.length > 0
+                ? [{
+                    role: 'system',
+                    content: [
+                        'Aprendizajes relevantes del usuario:',
+                        ...learnedWorkflows.map((workflow, index) => {
+                            const name = String(workflow?.workflowName || workflow?.name || `Workflow ${index + 1}`).trim();
+                            const summary = String(workflow?.summary || workflow?.description || '').trim();
+                            const style = String(workflow?.executionStyle || '').trim();
+                            return `${index + 1}. ${name}${summary ? ` - ${summary}` : ''}${style ? ` (${style})` : ''}`;
+                        })
+                    ].join('\n')
+                }]
+                : []),
+            ...(longTerm
+                ? [{
+                    role: 'system',
+                    content: `Memoria semántica relevante:\n${longTerm}`
+                }]
+                : []),
+            ...(recent.length > 0
+                ? [{
+                    role: 'system',
+                    content: `Hilo reciente del usuario:\n${recent.map((message) => `${message.role.toUpperCase()}: ${message.content}`).join('\n')}`
+                }]
+                : []),
+            {
+                role: 'system',
+                content: `Estado actual de notas y metas:\n${JSON.stringify(workspaceDigest)}`
+            },
             {
                 role: 'user',
-                content: JSON.stringify({
-                    prompt,
-                    workspace: workspaceDigest
-                })
+                content: prompt
             }
         ];
 
         const maxTurns = Math.max(4, Math.min(10, Number(options.maxTurns || 8)));
         let assistantReply = '';
         let emptyResponseRetries = 0;
+        let reasoningRetryCount = 0;
 
         for (let turn = 1; turn <= maxTurns; turn += 1) {
             const response = await this.modelSwitch.chatCompletion({
@@ -255,6 +380,14 @@ class AgentRuntime {
                         continue;
                     }
                     failures.push('El modelo no devolvió una respuesta útil para esta solicitud.');
+                } else if (this._looksLikeInternalReasoning(assistantReply) && reasoningRetryCount < 1 && turn < maxTurns) {
+                    reasoningRetryCount += 1;
+                    assistantReply = '';
+                    messages.push({
+                        role: 'system',
+                        content: 'Tu mensaje anterior expuso razonamiento interno o un plan oculto. Reintenta ahora con una respuesta final natural en español o usando tools si hace falta, sin mostrar análisis interno.'
+                    });
+                    continue;
                 }
                 break;
             }
@@ -1182,6 +1315,158 @@ class AgentRuntime {
             };
         });
 
+        if (this.openClawBridge) {
+            register({
+                type: 'function',
+                function: {
+                    name: 'list_openclaw_documents',
+                    description: 'Lista los markdowns y la configuración disponibles en la instalación local de OpenClaw.',
+                    parameters: {
+                        type: 'object',
+                        properties: {}
+                    }
+                }
+            }, async () => {
+                const result = this.openClawBridge.scanOpenClawWorkspace();
+                if (!result?.ok) {
+                    return { ok: false, error: result?.reason || 'No encontré OpenClaw local.' };
+                }
+                return {
+                    ok: true,
+                    workspaceDir: result.workspaceDir,
+                    configPath: result.configPath,
+                    counts: result.counts,
+                    documents: result.documents.map((document) => ({
+                        document_id: document.documentId,
+                        title: document.title,
+                        category: document.category,
+                        relative_path: document.relativePath,
+                        char_count: document.charCount,
+                        updated_at: document.updatedAt
+                    }))
+                };
+            });
+
+            register({
+                type: 'function',
+                function: {
+                    name: 'get_openclaw_document',
+                    description: 'Lee un markdown o la configuración importable de OpenClaw.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            document_id: { type: 'string', description: 'ID del documento devuelto por list_openclaw_documents.' },
+                            max_chars: { type: 'integer', description: 'Máximo de caracteres a devolver.' }
+                        },
+                        required: ['document_id']
+                    }
+                }
+            }, async (args = {}) => {
+                const result = this.openClawBridge.readOpenClawDocument(
+                    String(args.document_id || '').trim(),
+                    this._clampInt(args.max_chars, 12000, 300, 60000)
+                );
+                if (!result?.ok) {
+                    return { ok: false, error: result?.error || 'No pude leer ese documento de OpenClaw.' };
+                }
+                return {
+                    ok: true,
+                    document: {
+                        document_id: result.document.documentId,
+                        title: result.document.title,
+                        category: result.document.category,
+                        relative_path: result.document.relativePath,
+                        body: result.document.body
+                    }
+                };
+            });
+
+            register({
+                type: 'function',
+                function: {
+                    name: 'import_openclaw_documents',
+                    description: 'Importa uno o varios documentos de OpenClaw como notas de Ü, evitando duplicados. Puede adjuntarlos a una meta existente.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            document_ids: {
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: 'IDs de documentos devueltos por list_openclaw_documents.'
+                            },
+                            target_meta_id: { type: 'string', description: 'Meta opcional a la que se deben adjuntar las notas importadas.' }
+                        },
+                        required: ['document_ids']
+                    }
+                }
+            }, async (args = {}) => {
+                const documentIds = Array.isArray(args.document_ids) ? args.document_ids : [];
+                const result = await this.openClawBridge.importOpenClawDocuments({
+                    knowledgeService: this.knowledgeService,
+                    documentIds,
+                    targetMetaId: String(args.target_meta_id || '').trim()
+                });
+                if (!result?.ok) {
+                    return { ok: false, error: result?.error || result?.reason || 'No pude importar esos documentos de OpenClaw.' };
+                }
+                const importedNotes = [];
+                for (const entry of result.imported || []) {
+                    const note = this._findNote(entry.noteId);
+                    if (note) {
+                        importedNotes.push({ id: note.id, title: note.title || entry.title || 'Sin titulo' });
+                        registryContext.changes.updatedNotes.push({ id: note.id, title: note.title || entry.title || 'Sin titulo' });
+                    }
+                    if (args.target_meta_id) {
+                        const meta = this._findMeta(String(args.target_meta_id || '').trim());
+                        if (meta && note) {
+                            registryContext.changes.attachments.push({
+                                metaId: meta.id,
+                                metaTitle: meta.title || 'Meta sin titulo',
+                                noteId: note.id,
+                                noteTitle: note.title || entry.title || 'Sin titulo'
+                            });
+                        }
+                    }
+                }
+                return {
+                    ok: true,
+                    imported_count: Number(result.importedCount || 0),
+                    notes: importedNotes
+                };
+            });
+
+            register({
+                type: 'function',
+                function: {
+                    name: 'sync_openclaw_memory',
+                    description: 'Sincroniza los markdowns de OpenClaw ubicados en workspace/memory con la memoria semántica de Ü.',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            document_ids: {
+                                type: 'array',
+                                items: { type: 'string' },
+                                description: 'IDs opcionales de documentos memory para indexar. Si se omiten, usa todos.'
+                            }
+                        }
+                    }
+                }
+            }, async (args = {}) => {
+                const result = await this.openClawBridge.syncOpenClawMemoryToSemanticMemory({
+                    documentIds: Array.isArray(args.document_ids) ? args.document_ids : []
+                });
+                if (!result?.ok) {
+                    return { ok: false, error: result?.error || result?.reason || 'No pude sincronizar la memoria de OpenClaw.' };
+                }
+                return {
+                    ok: true,
+                    skipped: Boolean(result.skipped),
+                    imported_memory_documents: Number(result.importedMemoryDocuments || 0),
+                    memory_path: String(result.memoryPath || '')
+                };
+            });
+        }
+
         for (const actionTool of this.getActionTools()) {
             register(actionTool, async (args = {}, runtimeContext = {}) => {
                 const result = await this.executeActionTool({
@@ -1203,6 +1488,48 @@ class AgentRuntime {
         const text = String(content || '').replace(/\s+/g, ' ').trim();
         if (!text) return '';
         return this.safeSliceText(text, 220);
+    }
+
+    _looksLikeInternalReasoning(content) {
+        const text = String(content || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!text) return false;
+        return [
+            'the user wants to',
+            'we need to break down',
+            'let\'s break down',
+            'i need to',
+            'first, i need to',
+            'the request is',
+            'voy a desglosar',
+            'necesitamos desglosar',
+            'plan:',
+            'internal reasoning'
+        ].some((pattern) => text.includes(pattern));
+    }
+
+    _buildFastPathActionReply(result = {}, suggestedReply = '') {
+        const cleanSuggested = this._looksLikeInternalReasoning(suggestedReply)
+            ? ''
+            : String(suggestedReply || '').trim();
+        if (cleanSuggested) return cleanSuggested;
+
+        const action = result?.action || null;
+        if (action?.type === 'managed_action') {
+            return `Voy a ejecutarlo en ${action.app || 'tu computador'} y te iré mostrando el progreso.`;
+        }
+        if (action?.type === 'reminder') {
+            return 'Listo. Dejé programado ese recordatorio.';
+        }
+        if (action?.type === 'play_agario') {
+            return 'Listo. Preparé Agar.io para lanzarlo.';
+        }
+        if (String(result?.summary || '').trim()) {
+            return `Listo. ${String(result.summary || '').trim()}.`;
+        }
+        if (String(result?.error || '').trim()) {
+            return `No pude completar eso: ${String(result.error || '').trim()}.`;
+        }
+        return 'Listo.';
     }
 
     _shouldRequestExecutionPreamble(options = {}) {
@@ -1276,6 +1603,40 @@ class AgentRuntime {
                 label: 'Explored',
                 summary: `Explored ${Number(result.count || 0)} note${Number(result.count || 0) === 1 ? '' : 's'}`,
                 items: Array.isArray(result.notes) ? result.notes.slice(0, 4).map((note) => note.title) : []
+            };
+        }
+        if (toolName === 'list_openclaw_documents') {
+            return {
+                eventKind: 'explored',
+                label: 'Explored',
+                summary: `Explored ${Number(result?.counts?.total || 0)} OpenClaw document${Number(result?.counts?.total || 0) === 1 ? '' : 's'}`,
+                items: Array.isArray(result.documents) ? result.documents.slice(0, 4).map((document) => document.title) : []
+            };
+        }
+        if (toolName === 'get_openclaw_document') {
+            return {
+                eventKind: 'explored',
+                label: 'Explored',
+                summary: 'Opened 1 OpenClaw document',
+                items: result?.document?.title ? [result.document.title] : []
+            };
+        }
+        if (toolName === 'import_openclaw_documents') {
+            return {
+                eventKind: 'changed',
+                label: 'Changed',
+                summary: `Imported ${Number(result.imported_count || 0)} OpenClaw note${Number(result.imported_count || 0) === 1 ? '' : 's'}`,
+                items: Array.isArray(result.notes) ? result.notes.slice(0, 4).map((note) => note.title) : []
+            };
+        }
+        if (toolName === 'sync_openclaw_memory') {
+            return {
+                eventKind: 'changed',
+                label: 'Changed',
+                summary: result?.skipped
+                    ? 'OpenClaw memory already in sync'
+                    : `Synced ${Number(result.imported_memory_documents || 0)} OpenClaw memory file${Number(result.imported_memory_documents || 0) === 1 ? '' : 's'}`,
+                detail: String(result.memory_path || '').trim()
             };
         }
         if (toolName === 'search_notes') {
@@ -1438,7 +1799,7 @@ class AgentRuntime {
                 summary: 'Deleted 1 meta'
             };
         }
-        if (toolName === 'execute_screen_action' || toolName === 'play_agario' || toolName === 'schedule_reminder') {
+        if (isManagedActionToolName(toolName) || toolName === 'play_agario' || toolName === 'schedule_reminder') {
             return {
                 eventKind: 'action',
                 label: 'Action',
@@ -1758,18 +2119,19 @@ class AgentRuntime {
 
         const args = this._parseToolArgs(call?.function?.arguments);
 
-        if (toolName === 'execute_screen_action') {
-            const goal = String(args.goal || '').trim();
-            const stepsHint = String(args.steps_hint || '').trim();
-            const app = this._sanitizeActionApp(args.app);
-
-            if (!goal || !app || !stepsHint) return null;
+        if (isManagedActionToolName(toolName)) {
+            const parsed = parseManagedActionArgs(args, {
+                fallbackExecutor: MANAGED_EXECUTOR_IU_DESKTOP
+            });
+            if (!parsed.goal || !parsed.app || !parsed.stepsHint) return null;
 
             return {
-                type: 'screen_action',
-                goal,
-                app,
-                stepsHint
+                type: 'managed_action',
+                goal: parsed.goal,
+                app: parsed.app,
+                stepsHint: parsed.stepsHint,
+                executor: parsed.executor,
+                executorReason: parsed.executorReason
             };
         }
 
@@ -1792,18 +2154,6 @@ class AgentRuntime {
         }
 
         return null;
-    }
-
-    _sanitizeActionApp(value) {
-        let cleanApp = String(value || '').trim();
-        if (!cleanApp) return '';
-        const separators = [' y ', ' Y ', ' and ', ' AND ', ',', ' y,', ' and,'];
-        for (const separator of separators) {
-            if (cleanApp.includes(separator)) {
-                cleanApp = cleanApp.split(separator)[0].trim();
-            }
-        }
-        return cleanApp;
     }
 
     _parseToolArgs(raw) {

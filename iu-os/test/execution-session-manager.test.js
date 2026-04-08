@@ -48,8 +48,9 @@ test('ExecutionSessionManager builds continuation without losing session identit
 
     assert.equal(continuation.session.id, session.id);
     assert.equal(continuation.app, 'Chrome');
-    assert.match(continuation.goal, /Ya estoy dentro/);
+    assert.equal(continuation.goal, 'Subir trabajo en Canvas');
     assert.match(continuation.stepsHint, /NO reinicies el flujo/);
+    assert.match(continuation.stepsHint, /Ya estoy dentro/);
     assert.match(continuation.stepsHint, /Business Intelligence/);
     assert.equal(continuation.session.resumeCount, 1);
     assert.equal(continuation.session.status, 'running');

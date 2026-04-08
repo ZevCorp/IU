@@ -66,6 +66,36 @@ class NotebookExecutionManager {
         return this.getState();
     }
 
+    replaceState(nextState = {}) {
+        this._ensureLoaded();
+        const sanitized = this._sanitizeStore(nextState);
+        const visibleTabs = sanitized.tabs.filter((tab) => !tab.archivedAt);
+
+        if (visibleTabs.length === 0) {
+            this.store = this._buildInitialStore();
+            this._save();
+            return this.getState();
+        }
+
+        const visibleTabIds = new Set(visibleTabs.map((tab) => tab.id));
+        let executions = sanitized.executions.filter((execution) => visibleTabIds.has(execution.tabId));
+
+        if (executions.length === 0) {
+            executions = visibleTabs.map((tab) => this._createExecutionRecord(tab.id, { title: `Chat · ${tab.title}` }));
+        }
+
+        this.store = {
+            version: 1,
+            tabs: sanitized.tabs,
+            executions,
+            activeTabId: sanitized.activeTabId,
+            activeExecutionId: sanitized.activeExecutionId
+        };
+        this._repairActivePointers();
+        this._save();
+        return this.getState();
+    }
+
     getState() {
         this._ensureLoaded();
         const activeTabs = this.store.tabs.filter((tab) => !tab.archivedAt);

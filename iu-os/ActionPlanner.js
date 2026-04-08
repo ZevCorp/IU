@@ -7,36 +7,22 @@
 
 const ModelSwitch = require('./ModelSwitch');
 const LearningAgent = require('./LearningAgent');
+const {
+    MANAGED_ACTION_TOOL_NAME,
+    MANAGED_EXECUTOR_OPENCLAW,
+    MANAGED_EXECUTOR_IU_DESKTOP,
+    buildManagedActionToolDefinition,
+    isManagedActionToolName,
+    parseManagedActionArgs
+} = require('./ManagedActionDefinition');
 
 class ActionPlanner {
     constructor(openai) {
         this.openai = openai;
         this.tools = [
-            {
-                type: "function",
-                function: {
-                    name: "execute_screen_action",
-                    description: "Execute an action on the user's screen. Opens an app and performs clicks/typing to accomplish the user's goal.",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            goal: {
-                                type: "string",
-                                description: "Clear description of what the user wants to accomplish. E.g. 'Send a voice note to María on WhatsApp'"
-                            },
-                            app: {
-                                type: "string",
-                                description: "The INITIAL application to open. If multiple apps are needed, specify the FIRST one here."
-                            },
-                            steps_hint: {
-                                type: "string",
-                                description: "High-level hint of steps needed. Can include switching apps (e.g. 'Open Notes, copy text, switch to Mail, paste')."
-                            }
-                        },
-                        required: ["goal", "app", "steps_hint"]
-                    }
-                }
-            },
+            buildManagedActionToolDefinition(MANAGED_ACTION_TOOL_NAME, {
+                description: "Prepara una accion del computador y elige entre openclaw e iu_desktop."
+            }),
             {
                 type: "function",
                 function: {
@@ -96,12 +82,16 @@ FECHA Y HORA ACTUAL: ${new Date().toLocaleString('es-ES')}
 
 Recibes instrucciones del usuario.
 Si detectas una petición de RECORDATORIO ("Recuérdame...", "Mañana a las..."), usa 'schedule_reminder' y calcula el parámetro 'minutes'.
-Si detectas que quiere ejecutar algo AHORA en su computador (abrir apps, buscar, escribir, clickear), DEBES llamar a 'execute_screen_action'.
+Si detectas que quiere ejecutar algo AHORA en su computador (abrir apps, buscar, escribir, clickear, navegar, usar terminal o archivos), DEBES llamar a '${MANAGED_ACTION_TOOL_NAME}'.
 
 NO respondas con texto conversacional si la intención es una acción. EJECUTA LA ACCIÓN DIRECTAMENTE.
 Incluso si el usuario es amable ("Por favor podrías..."), NO respondas "Claro que sí", simplemente LLAMA A LA FUNCIÓN.
 
+Debes elegir el executor por CAPACIDAD:
+- Usa '${MANAGED_EXECUTOR_OPENCLAW}' cuando la tarea se resuelve principalmente en navegador o web.
+- Usa '${MANAGED_EXECUTOR_IU_DESKTOP}' cuando requiere GUI desktop arbitraria, AX, mouse/keyboard sobre apps nativas o interacción visual del SO.
 Si la tarea requiere múltiples apps (ej: "Abrir X y luego Y"), usa SOLO la primera app en 'app' y describe el cambio en 'steps_hint'.
+Siempre llena 'executor_reason' con una justificación breve y concreta.
 IMPORTANTE: El campo 'app' debe ser UN SOLO nombre de aplicación (ej: "Calculadora").
 
 Responde en español.`;
@@ -155,10 +145,10 @@ Si hay ambigüedad fuerte entre dos aprendizajes, pide una aclaración breve en 
             console.log('🧠 [Planner] Planning from IMPLICIT intent:', confirmedSuggestion.substring(0, 60));
 
             let systemContent = `Eres U, un asistente digital.
-El usuario confirmó una sugerencia. EJECUTA LA ACCIÓN AHORA MISMO.
-Piensa en qué app abrir y qué pasos seguir.
-Llama la función execute_screen_action.
-NO converses. EJECUTA.`;
+            El usuario confirmó una sugerencia. EJECUTA LA ACCIÓN AHORA MISMO.
+            Piensa en qué app abrir, qué pasos seguir y cuál executor corresponde.
+            Llama la función ${MANAGED_ACTION_TOOL_NAME}.
+            NO converses. EJECUTA.`;
 
             if (context.longTerm) {
                 systemContent += `\n\nMEMORIA A LARGO PLAZO RELEVANTE:\n${context.longTerm}`;
@@ -209,7 +199,7 @@ NO converses. EJECUTA.`;
 OBJETIVO: "${goal}"
 PREFERENCIAS: ${prefsText}
 
-EJECUTA LA TAREA AHORA. Llama a 'execute_screen_action'.
+EJECUTA LA TAREA AHORA. Llama a '${MANAGED_ACTION_TOOL_NAME}' y elige el executor correcto por capacidad.
 NO converses.`;
 
             const messages = [
@@ -244,24 +234,22 @@ NO converses.`;
             const call = message.tool_calls[0];
             const args = JSON.parse(call.function.arguments);
 
-            if (call.function.name === 'execute_screen_action') {
-                // SANITIZATION: Ensure 'app' is a single application name
-                let cleanApp = args.app;
-                if (cleanApp) {
-                    const separators = [' y ', ' Y ', ' and ', ' AND ', ',', ' y,', ' and,'];
-                    for (const sep of separators) {
-                        if (cleanApp.includes(sep)) {
-                            cleanApp = cleanApp.split(sep)[0].trim();
-                        }
-                    }
+            if (isManagedActionToolName(call.function.name)) {
+                const parsed = parseManagedActionArgs(args, {
+                    fallbackExecutor: MANAGED_EXECUTOR_IU_DESKTOP
+                });
+                if (!parsed.goal || !parsed.app || !parsed.stepsHint) {
+                    return null;
                 }
-
-                console.log(`🎯 [Planner] Action planned (raw): ${args.app} -> (sanitized): ${cleanApp}`);
+                console.log(`🎯 [Planner] Action planned (${parsed.executor}): ${parsed.app} -> ${parsed.stepsHint}`);
 
                 return {
-                    goal: args.goal,
-                    app: cleanApp,
-                    stepsHint: args.steps_hint
+                    type: 'managed_action',
+                    goal: parsed.goal,
+                    app: parsed.app,
+                    stepsHint: parsed.stepsHint,
+                    executor: parsed.executor,
+                    executorReason: parsed.executorReason
                 };
             } else if (call.function.name === 'play_agario') {
                 console.log(`🎮 [Planner] Play AgarIO: nickname=${args.nickname}`);

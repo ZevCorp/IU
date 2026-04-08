@@ -269,5 +269,9 @@ export type BrowserScreenshotRequest = {
 
 export type BrowserCoreClientOptions = {
   baseUrl: string;
-  authToken: string;
+  authToken?: string;
+  backend?: "iu-browser-core" | "openclaw";
+  password?: string;
+  defaultProfile?: string;
+  profileAliases?: Partial<Record<BrowserProfileName, string>>;
 };

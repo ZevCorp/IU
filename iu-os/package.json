@@ -30,6 +30,7 @@
     "build": {
         "appId": "com.iu.os",
         "productName": "IU",
+        "afterPack": "scripts/electron-builder-after-pack.js",
         "directories": {
             "output": "dist"
         },
@@ -62,7 +63,11 @@
             }
         ],
         "asar": true,
-        "asarUnpack": [
+    "asarUnpack": [
+      "scripts/**/*",
+      "node_modules/**/*",
+      "node_modules/openclaw/**/*",
+      "node_modules/@sinclair/typebox/**/*",
             "node_modules/playwright/**/*",
             "node_modules/sharp/**/*",
             "node_modules/@img/**/*",
@@ -126,6 +131,7 @@
         "gsap": "^3.12.0",
         "mongodb": "^7.0.0",
         "openai": "^6.17.0",
+        "openclaw": "2026.2.9",
         "playwright": "^1.58.0",
         "playwright-core": "^1.58.2",
         "qrcode": "^1.5.4",

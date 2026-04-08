@@ -10,6 +10,7 @@ class ExecutionSessionManager {
             baseGoal: String(params.goal || ''),
             goal: String(params.goal || ''),
             app: String(params.app || ''),
+            executor: String(params.executor || 'iu_desktop'),
             stepsHint: String(params.stepsHint || ''),
             source: String(params.source || 'unknown'),
             status: 'running',
@@ -48,6 +49,7 @@ class ExecutionSessionManager {
         session.status = 'running';
         session.goal = String(params.goal || session.goal || session.baseGoal || '');
         session.app = String(params.app || session.app || '');
+        session.executor = String(params.executor || session.executor || 'iu_desktop');
         session.stepsHint = String(params.stepsHint || session.stepsHint || '');
         session.waitPrompt = '';
         session.updatedAt = Date.now();
@@ -141,9 +143,8 @@ class ExecutionSessionManager {
         const waitPromptHint = session.waitPrompt
             ? `\nBLOQUEO/ESPERA ANTERIOR:\n- ${session.waitPrompt}`
             : '';
-        const continuationGoal = normalizedTranscript
-            ? `CONTINÚA DESDE EL ESTADO ACTUAL Y EJECUTA ESTA INSTRUCCIÓN EXPLÍCITA DEL USUARIO: "${normalizedTranscript}"`
-            : session.goal || session.baseGoal || '';
+        const preservedGoal = String(session.baseGoal || session.goal || '').trim();
+        const continuationGoal = preservedGoal || String(session.goal || '').trim();
         const continuationStepsHint = `CONTINUIDAD OBLIGATORIA:
 - NO reinicies el flujo ni vuelvas al primer paso.
 - NO repitas subobjetivos ya completados o claramente iniciados, salvo instrucción explícita.
@@ -172,6 +173,7 @@ ${session.stepsHint || ''}`;
             session: this._clone(session),
             goal: continuationGoal,
             app: session.app,
+            executor: session.executor,
             stepsHint: continuationStepsHint,
             runtimeContext: runtime
         };
@@ -188,6 +190,7 @@ ${session.stepsHint || ''}`;
             id: session.id,
             goal: session.goal,
             app: session.app,
+            executor: session.executor,
             stepsHint: session.stepsHint,
             source: session.source,
             startedAt: session.createdAt,
@@ -205,6 +208,7 @@ ${session.stepsHint || ''}`;
             sessionId: session.id,
             goal: session.goal,
             app: session.app,
+            executor: session.executor,
             stepsHint: session.stepsHint,
             pendingTypeText: session.pendingTypeText || '',
             pendingTypeLabel: session.pendingTypeLabel || '',

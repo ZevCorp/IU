@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/launcher_background">
+
+    <WebView
+        android:id="@+id/launcher_webview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:overScrollMode="never" />
+
+    <WebView
+        android:id="@+id/face_bubble_webview"
+        android:layout_width="110dp"
+        android:layout_height="110dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="18dp"
+        android:alpha="0"
+        android:overScrollMode="never"
+        android:visibility="gone" />
+
+    <FrameLayout
+        android:id="@+id/lockscreen_layer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#CC050505"
+        android:clickable="true"
+        android:focusable="true">
+
+        <View
+            android:id="@+id/lockscreen_handle"
+            android:layout_width="64dp"
+            android:layout_height="5dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="96dp"
+            android:background="#80FFFFFF" />
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="28dp"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/lockscreen_launcher_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="#2AFFFFFF"
+                android:text="Launcher"
+                android:textAllCaps="false"
+                android:textColor="@android:color/white" />
+
+            <Button
+                android:id="@+id/lockscreen_unlock_button"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:backgroundTint="#FFFFFFFF"
+                android:text="Desbloquear"
+                android:textAllCaps="false"
+                android:textColor="#FF101114" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/launcher_setup_card"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginLeft="16dp"
+        android:layout_marginTop="16dp"
+        android:layout_marginRight="16dp"
+        android:layout_marginBottom="18dp"
+        android:background="#DD101114"
+        android:elevation="12dp"
+        android:orientation="vertical"
+        android:paddingLeft="18dp"
+        android:paddingTop="18dp"
+        android:paddingRight="18dp"
+        android:paddingBottom="18dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="sans-serif-medium"
+            android:text="Configura IU Launcher"
+            android:textColor="@android:color/white"
+            android:textSize="18sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:alpha="0.82"
+            android:lineSpacingExtra="2dp"
+            android:text="Elige IU Launcher como app de inicio predeterminada para reemplazar tu launcher actual."
+            android:textColor="@android:color/white"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="end"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/launcher_setup_dismiss"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="#2AFFFFFF"
+                android:text="Ahora no"
+                android:textAllCaps="false"
+                android:textColor="@android:color/white" />
+
+            <Button
+                android:id="@+id/launcher_setup_action"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:backgroundTint="#FFFFFFFF"
+                android:text="Elegir launcher"
+                android:textAllCaps="false"
+                android:textColor="#FF101114" />
+        </LinearLayout>
+    </LinearLayout>
+
+</FrameLayout>

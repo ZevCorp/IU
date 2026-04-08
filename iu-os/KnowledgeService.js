@@ -381,6 +381,33 @@ class KnowledgeService {
         };
     }
 
+    importKnowledgeState(nextState = {}, options = {}) {
+        this._ensureLoaded();
+
+        if (this.notebookManager && typeof this.notebookManager.replaceState === 'function') {
+            this.notebookManager.replaceState({
+                tabs: Array.isArray(nextState.tabs) ? nextState.tabs : [],
+                executions: Array.isArray(nextState.executions) ? nextState.executions : [],
+                activeTabId: nextState.activeTabId || null,
+                activeExecutionId: nextState.activeExecutionId || null
+            });
+        }
+
+        const validNoteIds = this._getValidNoteIds();
+        this.store.metas = (Array.isArray(nextState.metas) ? nextState.metas : [])
+            .map((meta) => this._sanitizeMeta(meta, validNoteIds))
+            .filter((meta) => meta.id);
+        this._ensureFixedMetas();
+        this._save();
+        this._notifyChange({
+            entity: 'knowledge',
+            action: 'import_state',
+            source: String(options.source || 'remote_sync').trim() || 'remote_sync',
+            metas: this.getMetas()
+        });
+        return this.getKnowledgeState();
+    }
+
     updateFinanceInstructions(metaId, instructions, options = {}) {
         const meta = this._findFinanceMeta(metaId);
         if (!meta) return null;

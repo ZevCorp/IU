@@ -15,6 +15,8 @@ class Brain {
         this.mainWindow = mainWindow;
         this.planner = actionPlanner;
         this.screenAgent = screenAgent;
+        this.executionDispatcher = null;
+        this.executionBusyChecker = null;
         this.status = 'connected'; // 'connected', 'disconnected'
         this.disconnectEndTime = null;
         this.taskQueue = [];
@@ -29,6 +31,14 @@ class Brain {
 
         // Start the heartbeat immediately
         this._startHeartbeat();
+    }
+
+    setExecutionDispatcher(dispatcher) {
+        this.executionDispatcher = typeof dispatcher === 'function' ? dispatcher : null;
+    }
+
+    setExecutionBusyChecker(checker) {
+        this.executionBusyChecker = typeof checker === 'function' ? checker : null;
     }
 
     _startHeartbeat() {
@@ -105,7 +115,7 @@ class Brain {
             // Process Queue
             if (this.taskQueue.length > 0) {
                 // Check if agent is busy
-                if (this.screenAgent && this.screenAgent.isRunning) return;
+                if ((this.executionBusyChecker && this.executionBusyChecker()) || (this.screenAgent && this.screenAgent.isRunning)) return;
                 const currentTask = this.taskQueue.shift();
                 await this._executeTask(currentTask);
             }
@@ -175,19 +185,23 @@ class Brain {
             console.log(`🧠 [Brain] Planning action for: "${task.label}"`);
             const plan = await this.planner.planAutonomousAction(task.label, preferences);
 
-            if (plan && this.screenAgent) {
+            if (plan && (this.executionDispatcher || this.screenAgent)) {
                 console.log(`🧠 [Brain] EXECUTING PLAN: ${plan.app} -> ${plan.stepsHint}`);
-
-                // Execute via ScreenAgent
                 try {
-                    const result = await this.screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
-                    console.log(`🧠 [Brain] Execution Result: success=${result.success}`);
+                    let result;
+                    if (this.executionDispatcher) {
+                        result = await this.executionDispatcher(plan.goal, plan.app, plan.stepsHint, plan.executor || 'iu_desktop', {
+                            source: 'brain_autonomous'
+                        });
+                    } else {
+                        result = await this.screenAgent.executeAction(plan.goal, plan.app, plan.stepsHint);
+                    }
+                    console.log(`🧠 [Brain] Execution Result: success=${result?.success}`);
                 } catch (e) {
                     console.error(`❌ [Brain] Execution failed: ${e.message}`);
                 }
-
             } else {
-                console.warn('⚠️ [Brain] Failed to plan action or no ScreenAgent available.');
+                console.warn('⚠️ [Brain] Failed to plan action or no executor available.');
             }
         }
     }

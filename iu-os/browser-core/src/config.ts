@@ -4,6 +4,9 @@ import type { BrowserCapabilities, BrowserCoreClientOptions, BrowserProfile, Bro
 export const DEFAULT_BROWSER_SERVICE_PORT = 42315;
 export const DEFAULT_MANAGED_CDP_URL = "http://127.0.0.1:9222";
 export const DEFAULT_USER_CDP_URL = "http://127.0.0.1:9224";
+export function resolveBrowserBackendMode(): "iu-browser-core" {
+  return "iu-browser-core";
+}
 
 export type BrowserCoreConfig = {
   enabled: boolean;
@@ -57,5 +60,6 @@ export function toClientOptions(config: BrowserCoreConfig): BrowserCoreClientOpt
   return {
     baseUrl: `http://127.0.0.1:${config.servicePort}`,
     authToken: config.authToken,
+    backend: "iu-browser-core",
   };
 }

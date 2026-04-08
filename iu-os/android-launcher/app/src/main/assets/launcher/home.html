@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>IÜ Android Launcher</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- QRCode library (local) -->
+  <script src="qrcode.min.js"></script>
+</head>
+
+<body>
+  <div id="app">
+    <!-- Bootloader Overlay -->
+    <div id="bootloader-overlay">
+      <div id="bootloader-sphere"></div>
+      <div id="bootloader-buttons">
+        <div id="boot-btn-left" class="boot-btn">Paz mental</div>
+        <div id="boot-btn-right" class="boot-btn">Tiempo</div>
+        <div id="boot-btn-bottom" class="boot-btn">Experto digital</div>
+      </div>
+      <div id="bootloader-cursor"></div>
+    </div>
+
+    <div id="inception-onboarding-card" class="inception-onboarding hidden" data-no-drag>
+      <div class="inception-onboarding-eyebrow">Primer inicio</div>
+      <div class="inception-onboarding-title">Activa 10M tokens gratis</div>
+      <div id="inception-onboarding-copy" class="inception-onboarding-copy">
+        U puede abrir Inception en IU Chrome y dejar lista tu API personal para usarla como provider de texto.
+      </div>
+      <div class="inception-onboarding-actions">
+        <button id="btn-inception-start" class="inception-primary">Configurar</button>
+        <button id="btn-inception-dismiss" class="inception-secondary">Ahora no</button>
+      </div>
+      <div id="inception-onboarding-status" class="inception-onboarding-status"></div>
+    </div>
+
+    <!-- Hidden Video Input for Vision -->
+    <video class="input_video" style="display: none;"></video>
+
+    <!-- Navigation HUD -->
+    <div id="nav-hud" class="hidden">
+      <span id="nav-hud-text">Face</span>
+    </div>
+
+    <!-- Neural Graph Canvas -->
+    <canvas id="neural-canvas" class="hidden"></canvas>
+
+    <!-- Checklist Overlay -->
+    <div id="checklist-container" class="hidden"></div>
+
+    <!-- Intent Carousel Overlay (includes Thinking label) -->
+    <div id="intent-carousel" class="hidden">
+      <div id="thinking-label">
+        <span class="thinking-text">thinking</span>
+      </div>
+      <div id="intent-track"></div>
+      <div id="intent-label"></div>
+      <div id="intent-details" class="hidden"></div>
+    </div>
+
+    <!-- Loading Overlay for Graph Extraction -->
+    <div id="loading-overlay" class="hidden">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Generando Grafo UI...</div>
+    </div>
+
+    <!-- Face Container - EXACT structure from iü.space -->
+    <div id="face-container">
+      <svg id="face-svg" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" aria-label="Ü Face">
+        <g id="face-group" transform="translate(200, 250)">
+          <!-- Eyebrows -->
+          <g id="eyebrows-group">
+            <path id="left-eyebrow" class="face-stroke" />
+            <path id="right-eyebrow" class="face-stroke" />
+          </g>
+
+          <!-- Eyes (minimalist vertical lines) -->
+          <g id="eyes-group">
+            <g id="left-eye" class="eye-group">
+              <path id="left-eye-top" class="face-stroke" />
+              <path id="left-eye-line" class="face-stroke" />
+              <path id="left-eye-bottom" class="face-stroke" />
+            </g>
+            <g id="right-eye" class="eye-group">
+              <path id="right-eye-top" class="face-stroke" />
+              <path id="right-eye-line" class="face-stroke" />
+              <path id="right-eye-bottom" class="face-stroke" />
+            </g>
+          </g>
+
+          <!-- Mouth -->
+          <g id="mouth-group">
+            <path id="mouth" class="face-stroke" />
+          </g>
+        </g>
+      </svg>
+
+      <!-- Transcript Overlay -->
+      <div id="transcript-container" class="hidden">
+        <p id="transcript-text"></p>
+      </div>
+
+      <!-- Prompt Chat Dock -->
+      <div id="prompt-chat-dock" class="prompt-chat-dock" data-no-drag>
+        <div class="prompt-chat-panel">
+          <div class="prompt-chat-history-shell">
+            <div class="prompt-chat-fade" aria-hidden="true"></div>
+            <div id="prompt-chat-empty" class="prompt-chat-empty" aria-hidden="true"></div>
+            <div id="prompt-chat-history" class="prompt-chat-history" aria-live="polite"></div>
+          </div>
+          <div class="prompt-chat-composer">
+            <div class="prompt-chat-input-shell">
+              <textarea id="prompt-chat-input" class="prompt-chat-input" rows="1" maxlength="240"
+                placeholder="Escribe..."></textarea>
+              <div class="prompt-chat-actions">
+                <!--
+                <button id="prompt-chat-voice-btn" class="prompt-chat-voice-btn" type="button" aria-label="Activar voz">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M12 18a5 5 0 0 0 5-5V6a5 5 0 0 0-10 0v7a5 5 0 0 0 5 5Z"></path>
+                    <path d="M19 10v3a7 7 0 0 1-14 0v-3"></path>
+                    <path d="M12 22v-4"></path>
+                  </svg>
+                </button>
+                -->
+                <button id="prompt-chat-send-btn" class="prompt-chat-send-btn" type="button" aria-label="Enviar">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4 12h11"></path>
+                    <path d="m12 6 6 6-6 6"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <button id="prompt-chat-voice-floating-btn" class="chat-voice-fab" type="button" aria-label="Activar voz">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 18a5 5 0 0 0 5-5V6a5 5 0 0 0-10 0v7a5 5 0 0 0 5 5Z"></path>
+        <path d="M19 10v3a7 7 0 0 1-14 0v-3"></path>
+        <path d="M12 22v-4"></path>
+      </svg>
+    </button>
+
+    <!-- Chat Toggle Button (top-right) -->
+    <button id="btn-chat-toggle" class="chat-toggle-btn" aria-label="Open chat">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    </button>
+
+    <!-- Menu Toggle Button -->
+    <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">
+      <svg class="menu-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect>
+        <path d="M9.5 4.5v15"></path>
+      </svg>
+    </button>
+
+    <button id="btn-transfer-top" class="transfer-btn-top">
+      <span class="transfer-text">Hablar</span>
+    </button>
+
+    <!-- Controls Panel -->
+    <div id="controls-panel" class="collapsed">
+      <div class="controls-viewport">
+        <div id="controls-track" class="controls-track">
+          <section class="controls-view controls-view-main">
+            <div class="controls-grid controls-grid-top" role="group" aria-label="Apariencia">
+              <button id="btn-theme-toggle" class="theme-btn cc-tile active" aria-pressed="true">
+                <span id="theme-icon" class="cc-icon">◐</span>
+                <span id="theme-label" class="cc-label">Dark</span>
+              </button>
+              <button id="btn-glass" class="theme-btn cc-tile cc-tile-contrast" aria-pressed="false">
+                <span class="cc-label">Glass</span>
+              </button>
+            </div>
+
+            <div class="controls-stack" role="group" aria-label="Controles principales">
+              <div class="controls-row controls-row-duo">
+                <button id="btn-hand-gestures" class="state-btn cc-pill cc-pill-half active" aria-pressed="true">
+                  <span class="cc-label">Hands</span>
+                </button>
+                <button id="btn-learning-mode" class="state-btn cc-pill cc-pill-half cc-pill-learning" aria-pressed="false">
+                  <span id="learning-progress" class="learn-progress-fill" aria-hidden="true"></span>
+                  <span class="cc-pill-left">
+                    <span class="cc-label">Learn</span>
+                    <span id="learning-mode-state" class="cc-chip">Off</span>
+                  </span>
+                </button>
+              </div>
+              <button id="btn-qr-share" class="connect-btn cc-pill">
+                <span class="cc-label">Connect to phone</span>
+              </button>
+            </div>
+          </section>
+
+          <section class="controls-view controls-view-experimental">
+            <div class="controls-stack" role="group" aria-label="Controles experimentales">
+              <button id="btn-narration-space" class="state-btn cc-pill">
+                <span class="cc-label">Space</span>
+              </button>
+              <button id="btn-mirar-juntos" class="state-btn cc-pill">
+                <span class="cc-label">Focus</span>
+              </button>
+              <button id="btn-view-learnings" class="state-btn cc-pill">
+                <span class="cc-label">Ver aprendizajes</span>
+              </button>
+            </div>
+            <button id="btn-experimental-back" class="state-btn cc-pill">back</button>
+          </section>
+        </div>
+      </div>
+
+      <div class="status-row" id="connection-status">
+        <div class="status-inline">
+          <span class="status-indicator" id="sync-indicator"></span>
+          <span id="sync-status-text">Not connected</span>
+        </div>
+        <button id="btn-experimental-toggle" class="ghost-link ghost-link-exp" aria-expanded="false">experimental</button>
+      </div>
+    </div>
+
+    <!-- Compact Mode Popup -->
+    <div id="compact-popup">Ejecutando acción...</div>
+    <div id="turn-taking-debug" style="position:fixed; left:16px; bottom:16px; z-index:9998; display:none; min-width:220px; max-width:320px; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,0.14); background:rgba(8,10,16,0.82); color:#f2f5ff; font-size:11px; line-height:1.45; backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); white-space:pre-line;"></div>
+
+    <!-- Minimal Learnings Modal -->
+    <div id="learnings-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.55); z-index:9999; align-items:center; justify-content:center;">
+      <div style="width:min(760px, 92vw); max-height:78vh; overflow:auto; background:#0f1114; border:1px solid rgba(255,255,255,0.14); border-radius:14px; padding:18px 18px 14px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; position:sticky; top:0; z-index:2; background:#0f1114; padding-bottom:8px;">
+          <div style="font-size:18px; font-weight:700; color:#f3f5f7;">Aprendizajes</div>
+          <button id="btn-close-learnings" class="state-btn" aria-label="Cerrar aprendizajes" style="width:30px; height:30px; border-radius:50%; padding:0; display:inline-flex; align-items:center; justify-content:center; font-size:18px; line-height:1;">×</button>
+        </div>
+        <div id="learnings-list" style="display:flex; flex-direction:column; gap:10px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="android-bridge.js"></script>
+  <script src="sync/DeviceSync.js"></script>
+  <script src="sync/QRConnect.js"></script>
+  <script src="vision/VisionManager.js"></script>
+  <script src="systems/AudioLoop.js"></script>
+  <script src="turn-taking/TurnTakingManager.js"></script>
+  <script src="systems/DopamineEngine.js"></script>
+  <script src="neural-graph.js"></script>
+  <!-- Main App -->
+  <script src="app.js"></script>
+</body>
+
+</html>

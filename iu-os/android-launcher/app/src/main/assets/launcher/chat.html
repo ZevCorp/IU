@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>IU Notas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./chat.css">
+</head>
+
+<body>
+  <div class="notes-shell">
+    <header class="mode-header">
+      <div class="mode-switch" role="tablist" aria-label="Vista de notas">
+        <button id="mode-projects-btn" class="mode-btn active" type="button" role="tab" aria-selected="true">
+          <span>Metas</span>
+        </button>
+        <button id="mode-notes-btn" class="mode-btn" type="button" role="tab" aria-selected="false">
+          <span>Notas</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="notes-main">
+      <section id="notes-view" class="view" aria-label="Vista de notas">
+        <div class="editor-scroll">
+          <div class="tabs-row">
+            <div id="note-tabs" class="note-tabs" aria-label="Tabs de notas"></div>
+            <button id="note-tab-add" class="tab-add-btn" type="button" aria-label="Nueva nota">+</button>
+          </div>
+
+          <input id="note-title" class="note-title" type="text" spellcheck="false" placeholder="Titulo" aria-label="Titulo de la nota">
+
+          <div class="note-body-shell">
+            <div id="note-markers" class="note-markers" aria-hidden="true"></div>
+            <textarea id="note-body" class="note-body" spellcheck="true" aria-label="Contenido"></textarea>
+          </div>
+        </div>
+      </section>
+
+      <section id="projects-view" class="view active" aria-label="Vista de metas">
+        <div class="projects-clean">
+          <button id="new-group-plus" class="plus-center-btn" type="button" aria-label="Nueva meta">+</button>
+          <div id="project-groups" class="project-groups"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="meta-modal-root" class="meta-modal-root"></div>
+  <div class="launcher-app-dock">
+    <button type="button" data-dock-action="new-note">+ Nota</button>
+  </div>
+
+  <script src="./android-bridge.js"></script>
+  <script src="./chat.js"></script>
+</body>
+
+</html>

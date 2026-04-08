@@ -583,7 +583,13 @@ class ScreenAgent {
         }
 
         if (this.browserAgent?.openUrl) {
+            this._notify('action-status', {
+                phase: 'confirming',
+                step: 'Abriendo el navegador...'
+            });
+            console.log('🌐 [ScreenAgent] Opening browser URL via BrowserAgent:', { url });
             await this.browserAgent.openUrl(url);
+            console.log('🌐 [ScreenAgent] BrowserAgent openUrl completed:', { url });
             return;
         }
 
@@ -906,7 +912,15 @@ ACCIONES RECOMENDADAS:
         this.currentExecutionState = null;
         this.lastExecutionStateKey = '';
         this.currentBrowserGoalProgress = null;
+        console.log('🖥️ [ScreenAgent] executeAction entered:', {
+            goal: String(goal || '').slice(0, 180),
+            app: app || '',
+            stepsHint: String(stepsHint || '').slice(0, 180),
+            sessionId: options.sessionId || null
+        });
+        this._notify('action-status', { phase: 'starting', goal, app });
         const launchPlan = await this._resolveLaunchPlan(app, goal, stepsHint);
+        console.log('🧭 [ScreenAgent] Launch plan resolved:', launchPlan);
         this.currentApp = launchPlan.semanticApp || this._sanitizeAppName(app);
         this.currentFocusApp = launchPlan.focusApp || this.currentApp;
         this.currentLaunchMode = launchPlan.mode || 'native';
@@ -915,8 +929,6 @@ ACCIONES RECOMENDADAS:
         this.workflowAnchorIndex = 0;
         console.log(`🖥️ [ScreenAgent] Starting HYBRID action loop: "${goal}" in ${app}`);
         console.log(`🧭 [ScreenAgent] Launch plan → semantic="${this.currentApp}", focus="${this.currentFocusApp}", mode=${this.currentLaunchMode}${this.currentTargetUrl ? `, url=${this.currentTargetUrl}` : ''}`);
-
-        this._notify('action-status', { phase: 'starting', goal, app });
 
         // HIDE ALL OWN WINDOWS & SHOW STICKY FACE
         try {
@@ -2392,6 +2404,13 @@ CONTEXTO DE VENTANAS:
      */
     _notify(channel, data) {
         if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+            if (channel === 'action-status' && data && !data.status && data.phase) {
+                this.mainWindow.webContents.send(channel, {
+                    ...data,
+                    status: data.phase
+                });
+                return;
+            }
             this.mainWindow.webContents.send(channel, data);
         }
     }
