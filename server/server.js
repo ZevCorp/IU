@@ -15,6 +15,7 @@
 
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
+import { handleCustomGptHttp } from './custom-gpt-server.js';
 
 // =====================================================
 // Configuration
@@ -58,6 +59,28 @@ const __dirname = path.dirname(__filename);
 
 // Create HTTP server (for health checks and logging)
 const httpServer = http.createServer((req, res) => {
+    const maybePromise = handleCustomGptHttp(req, res);
+    if (maybePromise && typeof maybePromise.then === 'function') {
+        maybePromise.then((handled) => {
+            if (!handled) {
+                handleDefaultHttp(req, res);
+            }
+        }).catch((error) => {
+            console.error('[Server] Custom GPT HTTP handler failed:', error);
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(JSON.stringify({ ok: false, error: 'Custom GPT HTTP handler failed' }));
+        });
+        return;
+    }
+
+    if (maybePromise) {
+        return;
+    }
+
+    handleDefaultHttp(req, res);
+});
+
+function handleDefaultHttp(req, res) {
     // CORS headers for all responses
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -281,7 +304,7 @@ Start-Process $ExePath
 
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Drifting Sagan Sync Server - Use WebSocket to connect');
-});
+}
 
 // Create WebSocket server
 const wss = new WebSocketServer({ server: httpServer });

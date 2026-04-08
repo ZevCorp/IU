@@ -1,7 +1,10 @@
 const SUPABASE_URL = "https://vbpzzixgzlynexpogyzl.supabase.co";
 const SUPABASE_KEY = "sb_publishable_jqBOvvFWjc8jtIy1gflUmA__jh_PavN";
+const GPT_BRIDGE_URL = "https://iu-rw9m.onrender.com";
+
 let sb: any;
-let authorizationId: string | null;
+let requestId: string | null;
+let requestDetails: any = null;
 
 function show(v: string) {
   ['loading-view', 'direct-view', 'login-view', 'consent-view', 'error-view'].forEach((id) => {
@@ -16,38 +19,58 @@ function showError(m: string) {
   show('error-view');
 }
 
-async function loadConsent() {
-  try {
-    const { data, error } = await sb.auth.oauth.getAuthorizationDetails(authorizationId);
-    if (error || !data) {
-      showError(error?.message || 'No se pudieron cargar los parámetros del enlace neuronal.');
-      return;
-    }
-    // Omitimos cargar data.client?.name porque la UI ahora está hardcodeada
-    // asumiendo que es el Custom GPT para una estética inmersiva IÜ OS.
-    show('consent-view');
-  } catch (e: any) {
-    showError(e.message || 'Error inesperado al intentar establecer el enlace.');
+function setConsentScopes(scopes: string[]) {
+  const container = document.getElementById('consent-scopes');
+  if (!container) return;
+  container.innerHTML = '';
+
+  const finalScopes = scopes.length ? scopes : ['Acceso básico a tu cuenta de IU OS'];
+  finalScopes.forEach((scope) => {
+    const row = document.createElement('div');
+    row.className = 'scope-item';
+    row.innerHTML = `<span class="scope-icon">●</span><span>${scope}</span>`;
+    container.appendChild(row);
+  });
+}
+
+async function fetchRequestDetails() {
+  if (!requestId) {
+    show('direct-view');
+    return null;
   }
+
+  const response = await fetch(`${GPT_BRIDGE_URL}/gpt/oauth/request?request_id=${encodeURIComponent(requestId)}`);
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.ok || !payload?.request) {
+    throw new Error(payload?.error || 'No se pudo recuperar la solicitud de acceso.');
+  }
+
+  requestDetails = payload.request;
+  const scopes = Array.isArray(requestDetails.scopes)
+    ? requestDetails.scopes
+    : String(requestDetails.scope || '').split(/\s+/).filter(Boolean);
+  setConsentScopes(scopes);
+  return requestDetails;
+}
+
+async function loadConsent() {
+  await fetchRequestDetails();
+  show('consent-view');
 }
 
 async function checkState() {
   const { data } = await sb.auth.getUser();
-  
-  if (!authorizationId) {
-    // Si no hay authorizationId, la página se abrió por error o manualmente.
-    // Explicamos que debe ir al GPT. (Quitamos el flujo de "login genérico").
+
+  if (!requestId) {
     show('direct-view');
     return;
   }
 
-  // Flujo OAuth: si no está logueado en la web, pedimos identidad.
   if (!data?.user) {
     show('login-view');
     return;
   }
-  
-  // Si ya tiene sesión activa en el navegador, directo al consent
+
   await loadConsent();
 }
 
@@ -60,9 +83,14 @@ async function init() {
   // @ts-ignore
   sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
   const p = new URLSearchParams(window.location.search);
-  authorizationId = p.get('authorization_id');
-  
+  requestId = p.get('request_id');
+
   await checkState();
+}
+
+async function getSupabaseAccessToken() {
+  const { data } = await sb.auth.getSession();
+  return data?.session?.access_token || '';
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -74,29 +102,30 @@ document.addEventListener('DOMContentLoaded', () => {
       const password = (document.getElementById('password') as HTMLInputElement).value;
       const errEl = document.getElementById('login-error');
       if (errEl) errEl.style.display = 'none';
-      
+
       const btn = (e.target as HTMLFormElement).querySelector('button');
       if (btn) {
         btn.disabled = true;
         btn.textContent = 'Verificando...';
       }
-      
+
       const { error } = await sb.auth.signInWithPassword({ email, password });
-      
+
       if (btn) {
         btn.disabled = false;
         btn.textContent = 'Acreditar Identidad';
       }
-      
+
       if (error) {
         if (errEl) {
-          errEl.textContent = error.message === 'Invalid login credentials' ? 'Credenciales incorrectas o identidad no reconocida.' : error.message;
+          errEl.textContent = error.message === 'Invalid login credentials'
+            ? 'Credenciales incorrectas o identidad no reconocida.'
+            : error.message;
           errEl.style.display = 'block';
         }
         return;
       }
-      
-      // Si el login fue exitoso, ir al consent (authorizationId está garantizado a este punto por el flow)
+
       await loadConsent();
     });
   }
@@ -104,30 +133,37 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnApprove = document.getElementById('btn-approve');
   if (btnApprove) {
     btnApprove.addEventListener('click', async function() {
-      if (!authorizationId) return;
+      if (!requestId) return;
       const btn = this as HTMLButtonElement;
       const errEl = document.getElementById('consent-error');
       btn.disabled = true;
       btn.textContent = 'Estableciendo enlace seguro...';
       if (errEl) errEl.style.display = 'none';
-      
+
       try {
-        const { data, error } = await sb.auth.oauth.approveAuthorization(authorizationId);
-        if (error) {
-          if (errEl) {
-            errEl.textContent = error.message;
-            errEl.style.display = 'block';
-          }
-          btn.disabled = false;
-          btn.textContent = 'Aprobar Vinculación Temporal';
-          return;
+        const accessToken = await getSupabaseAccessToken();
+        if (!accessToken) {
+          throw new Error('Tu sesión expiró. Inicia sesión de nuevo.');
         }
-        if (data.redirect_to) {
-             window.location.href = data.redirect_to;
+
+        const response = await fetch(`${GPT_BRIDGE_URL}/gpt/oauth/approve`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`
+          },
+          body: JSON.stringify({ request_id: requestId })
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.ok || !payload?.redirect_to) {
+          throw new Error(payload?.error || 'No se pudo aprobar la conexión.');
         }
+
+        window.location.href = payload.redirect_to;
       } catch (e: any) {
         if (errEl) {
-          errEl.textContent = e.message;
+          errEl.textContent = e.message || 'Error inesperado al aprobar el acceso.';
           errEl.style.display = 'block';
         }
         btn.disabled = false;
@@ -139,22 +175,26 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnDeny = document.getElementById('btn-deny');
   if (btnDeny) {
     btnDeny.addEventListener('click', async () => {
-      if (!authorizationId) return;
+      if (!requestId) return;
       try {
-        const { data, error } = await sb.auth.oauth.denyAuthorization(authorizationId);
-        if (error || !data) {
-          showError(error?.message || 'Error al rechazar el enlace.');
+        const response = await fetch(`${GPT_BRIDGE_URL}/gpt/oauth/deny`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ request_id: requestId })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || !payload?.ok || !payload?.redirect_to) {
+          showError(payload?.error || 'Error al rechazar el enlace.');
           return;
         }
-        if (data.redirect_to) {
-             window.location.href = data.redirect_to;
-        }
+        window.location.href = payload.redirect_to;
       } catch (e: any) {
-        showError(e.message);
+        showError(e.message || 'Error al rechazar el enlace.');
       }
     });
   }
 });
 
-// Iniciamos
 init();

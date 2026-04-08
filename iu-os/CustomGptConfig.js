@@ -399,13 +399,14 @@ const CUSTOM_GPT_ACTIONS = [
 ];
 
 function buildCustomGptOpenApi(options = {}) {
-    const baseUrl = String(options.baseUrl || 'https://example.com').replace(/\/$/, '');
+    const baseUrl = String(options.baseUrl || 'https://example.com').replace(/\/$/, '').replace(/^http:\/\//i, 'https://');
     const title = String(options.title || 'IU OS Custom GPT Relay');
     const description = String(options.description || 'Relay HTTP para el GPT personalizado de IU OS.');
+    const pathPrefix = String(options.pathPrefix || '/custom-gpt/actions').replace(/\/$/, '');
     const paths = {};
 
     for (const action of CUSTOM_GPT_ACTIONS) {
-        paths[`/custom-gpt/actions/${action.name}`] = {
+        paths[`${pathPrefix}/${action.name}`] = {
             post: {
                 operationId: action.name,
                 summary: action.summary,
@@ -429,6 +430,10 @@ function buildCustomGptOpenApi(options = {}) {
                             'application/json': {
                                 schema: {
                                     type: 'object',
+                                    properties: {
+                                        ok: { type: 'boolean' },
+                                        error: { type: 'string' }
+                                    },
                                     additionalProperties: true
                                 }
                             }
@@ -450,11 +455,12 @@ function buildCustomGptOpenApi(options = {}) {
             { url: baseUrl }
         ],
         components: {
+            schemas: {},
             securitySchemes: {
                 bearerAuth: {
                     type: 'http',
                     scheme: 'bearer',
-                    bearerFormat: 'API Key'
+                    bearerFormat: 'Bearer Token'
                 }
             }
         },

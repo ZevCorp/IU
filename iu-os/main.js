@@ -57,6 +57,11 @@ ipcMain.handle('get-picovoice-config', () => {
 });
 
 ipcMain.handle('get-custom-gpt-setup', () => {
+    const publicGptApiBaseUrl = String(
+        process.env.IU_GPT_PUBLIC_API_BASE_URL ||
+        process.env.IU_GPT_RENDER_API_BASE_URL ||
+        'https://iu-rw9m.onrender.com'
+    ).trim().replace(/\/$/, '');
     const supabaseBaseUrl = String(process.env.IU_SUPABASE_ACTION_FUNCTION_URL || '').trim()
         || ((process.env.IU_SUPABASE_URL || process.env.SUPABASE_URL)
             ? `${String(process.env.IU_SUPABASE_URL || process.env.SUPABASE_URL).replace(/\/$/, '')}/functions/v1/custom-gpt-relay`
@@ -71,9 +76,11 @@ ipcMain.handle('get-custom-gpt-setup', () => {
             summary: operation.summary,
             description: operation.description
         })),
-        openApiUrl: shouldUseSupabaseGptRelay() && supabaseBaseUrl
-            ? `${supabaseBaseUrl}/openapi.json`
-            : (gptActionBridge ? gptActionBridge.getOpenApiUrl() : null)
+        openApiUrl: shouldUseSupabaseGptRelay() && publicGptApiBaseUrl
+            ? `${publicGptApiBaseUrl}/gpt/openapi.json`
+            : (shouldUseSupabaseGptRelay() && supabaseBaseUrl
+                ? `${supabaseBaseUrl}/openapi.json`
+                : (gptActionBridge ? gptActionBridge.getOpenApiUrl() : null))
     };
 });
 
