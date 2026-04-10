@@ -23,7 +23,7 @@ test('NotebookExecutionManager bootstraps with a persisted initial tab and execu
     const { manager, storageDir } = createManager();
     const first = manager.bootstrap();
 
-    assert.equal(first.tabs.length, 1);
+    assert.equal(first.tabs.length, 2);
     assert.equal(first.executions.length, 1);
     assert.ok(fs.existsSync(path.join(storageDir, 'notebooks.json')));
 
@@ -32,7 +32,7 @@ test('NotebookExecutionManager bootstraps with a persisted initial tab and execu
         isModelReady: () => false
     }).bootstrap();
 
-    assert.equal(reloaded.tabs.length, 1);
+    assert.equal(reloaded.tabs.length, 2);
     assert.equal(reloaded.executions.length, 1);
     assert.equal(reloaded.activeTabId, first.activeTabId);
 });
@@ -43,11 +43,26 @@ test('createTab creates a default execution bound to the new tab', () => {
 
     const result = manager.createTab({ templateId: 'blank', title: 'Apuntes' });
 
-    assert.equal(result.state.tabs.length, 2);
+    assert.equal(result.state.tabs.length, 3);
     assert.equal(result.state.executions.length, 2);
     assert.equal(result.execution.tabId, result.tab.id);
     assert.equal(result.state.activeExecutionId, result.execution.id);
     assert.match(result.execution.title, /Chat · Apuntes/);
+});
+
+test('bootstraps a fixed Sobre mí tab that cannot be archived', () => {
+    const { manager } = createManager();
+    const state = manager.bootstrap();
+    const aboutTab = state.tabs.find((tab) => tab.id === 'tab_about_me');
+
+    assert.ok(aboutTab);
+    assert.equal(aboutTab.title, 'Sobre mí');
+    assert.equal(aboutTab.isFixed, true);
+
+    const next = manager.archiveTab('tab_about_me');
+    const stillThere = next.tabs.find((tab) => tab.id === 'tab_about_me');
+    assert.ok(stillThere);
+    assert.equal(stillThere.title, 'Sobre mí');
 });
 
 test('archiveTab hides a tab immediately and purges it after retention', () => {

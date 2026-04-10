@@ -208,6 +208,46 @@
                 <span class="cc-label">Connect to phone</span>
               </button>
             </div>
+
+            <section id="openclaw-settings-card" class="openclaw-settings-card" data-no-drag>
+              <div class="openclaw-settings-eyebrow">OpenClaw</div>
+              <div class="openclaw-settings-title">Runtime híbrido para web y terminal</div>
+              <div id="openclaw-settings-copy" class="openclaw-settings-copy">
+                Configura la API inicial de OpenClaw sin abrir consola. IU detecta el onboarding real a partir del wizard del runtime y reusa ese estado en adelante.
+              </div>
+              <div class="openclaw-settings-form">
+                <label class="openclaw-field">
+                  <span>Provider</span>
+                  <select id="openclaw-provider" class="openclaw-input">
+                    <option value="anthropic">Anthropic</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="gemini">Gemini / Google</option>
+                    <option value="xai">xAI</option>
+                  </select>
+                </label>
+                <label class="openclaw-field" id="openclaw-model-field">
+                  <span>OpenRouter model</span>
+                  <select id="openclaw-model" class="openclaw-input">
+                    <option value="">Automático</option>
+                    <option value="openrouter/nvidia/nemotron-3-super-120b-a12b:free">Nemotron 3 Super (OpenRouter)</option>
+                  </select>
+                </label>
+                <label class="openclaw-field">
+                  <span>API key</span>
+                  <input id="openclaw-api-key" class="openclaw-input" type="password" spellcheck="false" autocomplete="off" placeholder="Pega tu API key" />
+                </label>
+                <label class="openclaw-remember">
+                  <input id="openclaw-remember-key" type="checkbox" checked />
+                  <span>Guardar en este dispositivo</span>
+                </label>
+              </div>
+              <div class="openclaw-settings-actions">
+                <button id="openclaw-configure-btn" class="openclaw-primary" type="button">Configurar</button>
+                <button id="openclaw-refresh-btn" class="openclaw-secondary" type="button">Revisar estado</button>
+              </div>
+              <div id="openclaw-settings-status" class="openclaw-settings-status"></div>
+            </section>
           </section>
 
           <section class="controls-view controls-view-experimental">

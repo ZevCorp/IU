@@ -81,7 +81,7 @@ test('installs an IU-managed OpenClaw runtime when no external installation exis
     });
 });
 
-test('uses the bundled managed OpenClaw installation by default even if an external install exists', async () => {
+test('uses the bundled managed OpenClaw installation even if external hints exist in env', async () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iu-openclaw-supervisor-'));
     const externalPackageRoot = path.join(tmpRoot, 'external-openclaw');
     const externalCliPath = path.join(externalPackageRoot, 'openclaw.mjs');
@@ -98,7 +98,6 @@ test('uses the bundled managed OpenClaw installation by default even if an exter
         IU_OPENCLAW_NODE_PATH: externalNodePath,
         IU_OPENCLAW_PACKAGE_ROOT: bundledPackageRoot,
         IU_OPENCLAW_NODE_PATH: bundledNodePath,
-        IU_OPENCLAW_USE_EXTERNAL: null,
         PATH: '',
         HOME: path.join(tmpRoot, 'home'),
     }, async () => {
@@ -114,36 +113,6 @@ test('uses the bundled managed OpenClaw installation by default even if an exter
         assert.equal(fs.realpathSync(install.cliPath), fs.realpathSync(path.join(bundledPackageRoot, 'openclaw.mjs')));
         assert.equal(install.nodePath, bundledNodePath);
         assert.equal(fs.existsSync(bridge.getManagedManifestPath()), true);
-    });
-});
-
-test('can opt into an existing external OpenClaw installation explicitly', async () => {
-    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iu-openclaw-supervisor-'));
-    const externalPackageRoot = path.join(tmpRoot, 'external-openclaw');
-    const externalCliPath = path.join(externalPackageRoot, 'openclaw.mjs');
-    const externalNodePath = path.join(tmpRoot, 'external-node', 'node');
-    createFakeOpenClawPackage(externalPackageRoot, '2026.4.2');
-    createFakeNodeBinary(externalNodePath);
-
-    await withEnv({
-        IU_OPENCLAW_CLI_PATH: externalCliPath,
-        IU_OPENCLAW_NODE_PATH: externalNodePath,
-        IU_OPENCLAW_PACKAGE_ROOT: null,
-        IU_OPENCLAW_USE_EXTERNAL: '1',
-        PATH: '',
-        HOME: path.join(tmpRoot, 'home'),
-    }, async () => {
-        const bridge = new OpenClawSupervisorBridge({
-            userDataPath: path.join(tmpRoot, 'user-data'),
-            manageLaunchAgent: false,
-        });
-
-        const install = await bridge.ensureInstalled();
-
-        assert.equal(install.installedByIU, false);
-        assert.equal(fs.realpathSync(install.cliPath), fs.realpathSync(externalCliPath));
-        assert.equal(install.nodePath, externalNodePath);
-        assert.equal(fs.existsSync(bridge.getManagedManifestPath()), false);
     });
 });
 
@@ -177,5 +146,38 @@ test('uninstalls only the IU-managed runtime and clears its state files', async 
         assert.equal(fs.existsSync(bridge.getManagedInstallRoot()), false);
         assert.equal(fs.existsSync(install.stateDir), false);
         assert.equal(fs.existsSync(install.packageRoot), true);
+    });
+});
+
+test('refreshes the managed manifest when the bundled OpenClaw version changes', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iu-openclaw-supervisor-'));
+    const bundledPackageRoot = path.join(tmpRoot, 'bundled-openclaw');
+    const bundledNodePath = path.join(tmpRoot, 'bundled-node', 'node');
+    createFakeOpenClawPackage(bundledPackageRoot, '2026.9.1');
+    createFakeNodeBinary(bundledNodePath);
+
+    await withEnv({
+        IU_OPENCLAW_PACKAGE_ROOT: bundledPackageRoot,
+        IU_OPENCLAW_NODE_PATH: bundledNodePath,
+        IU_OPENCLAW_CLI_PATH: null,
+        PATH: '',
+        HOME: path.join(tmpRoot, 'home'),
+    }, async () => {
+        const bridge = new OpenClawSupervisorBridge({
+            userDataPath: path.join(tmpRoot, 'user-data'),
+            manageLaunchAgent: false,
+        });
+
+        const firstInstall = await bridge.ensureInstalled();
+        assert.equal(firstInstall.version, '2026.9.1');
+
+        createFakeOpenClawPackage(bundledPackageRoot, '2026.10.4');
+        const secondInstall = await bridge.ensureInstalled();
+        const manifest = JSON.parse(fs.readFileSync(bridge.getManagedManifestPath(), 'utf8'));
+
+        assert.equal(secondInstall.version, '2026.10.4');
+        assert.equal(manifest.version, '2026.10.4');
+        assert.equal(manifest.source, 'iu-bundled');
+        assert.equal(manifest.cliPath, path.join(bundledPackageRoot, 'openclaw.mjs'));
     });
 });

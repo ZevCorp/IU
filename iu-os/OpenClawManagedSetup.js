@@ -4,6 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { execOpenClawCli } = require('./OpenClawProcessRunner');
 const { buildManagedBrowserProfile } = require('./OpenClawRuntimeConfig');
+const {
+    fingerprintOpenClawAuth,
+    readOpenClawSetupSignal,
+    resolveOpenClawProviderApiKey,
+} = require('./OpenClawUiState');
 
 const SETUP_SCHEMA_VERSION = 1;
 
@@ -103,6 +108,7 @@ function buildManagedOnboardingArgs(runtime = {}) {
 }
 
 function buildManagedSetupStamp(runtime = {}) {
+    const auth = resolveOpenClawProviderApiKey(runtime.openClawSettings || {}, runtime.launchEnv || process.env);
     return {
         schemaVersion: SETUP_SCHEMA_VERSION,
         completedAt: new Date().toISOString(),
@@ -112,6 +118,8 @@ function buildManagedSetupStamp(runtime = {}) {
         stateDir: safeTrim(runtime.stateDir),
         gatewayPort: Number(runtime.gatewayPort) || 18789,
         modelPrimary: safeTrim(runtime.modelPrimary),
+        authProvider: safeTrim(auth.provider) || 'anthropic',
+        authFingerprint: fingerprintOpenClawAuth(runtime.openClawSettings || {}, runtime.launchEnv || process.env),
     };
 }
 
@@ -126,6 +134,10 @@ function patchManagedConfig(runtime = {}) {
     const workspaceDir = safeTrim(runtime.workspaceDir) || path.join(runtime.stateDir, 'workspace');
     const authToken = safeTrim(runtime.authToken);
     const gatewayUrl = safeTrim(runtime.gatewayUrl);
+    const modelPrimary = safeTrim(runtime.modelPrimary);
+    const existingModels = existing?.agents?.defaults?.models && typeof existing.agents.defaults.models === 'object'
+        ? existing.agents.defaults.models
+        : {};
 
     const next = {
         ...existing,
@@ -155,9 +167,19 @@ function patchManagedConfig(runtime = {}) {
             defaults: {
                 ...((existing.agents && existing.agents.defaults && typeof existing.agents.defaults === 'object') ? existing.agents.defaults : {}),
                 workspace: workspaceDir,
-                model: safeTrim(runtime.modelPrimary)
-                    ? { primary: safeTrim(runtime.modelPrimary) }
+                model: modelPrimary
+                    ? { primary: modelPrimary }
                     : (((existing.agents || {}).defaults || {}).model || {}),
+                models: modelPrimary
+                    ? {
+                        ...existingModels,
+                        [modelPrimary]: {
+                            ...(existingModels[modelPrimary] && typeof existingModels[modelPrimary] === 'object'
+                                ? existingModels[modelPrimary]
+                                : {}),
+                        },
+                    }
+                    : existingModels,
             },
         },
         wizard: {
@@ -183,10 +205,16 @@ async function ensureManagedOpenClawSetup(runtime = {}, options = {}) {
 
     const stampPath = safeTrim(options.stampPath) || path.join(runtime.stateDir, 'iu-managed-setup.json');
     const stamp = safeReadJson(stampPath);
+    const setupSignal = readOpenClawSetupSignal(runtime.configPath);
+    const currentAuthFingerprint = fingerprintOpenClawAuth(runtime.openClawSettings || {}, runtime.launchEnv || process.env);
+    const currentAuth = resolveOpenClawProviderApiKey(runtime.openClawSettings || {}, runtime.launchEnv || process.env);
     const needsOnboard = !stamp ||
         Number(stamp.schemaVersion) !== SETUP_SCHEMA_VERSION ||
         safeTrim(stamp.packageVersion) !== safeTrim(runtime.packageVersion) ||
-        safeTrim(stamp.profileId) !== safeTrim(runtime.profileId);
+        safeTrim(stamp.profileId) !== safeTrim(runtime.profileId) ||
+        safeTrim(stamp.authProvider) !== safeTrim(currentAuth.provider) ||
+        safeTrim(stamp.authFingerprint) !== safeTrim(currentAuthFingerprint) ||
+        setupSignal.ready !== true;
 
     let onboarded = false;
     if (needsOnboard) {
@@ -209,6 +237,7 @@ async function ensureManagedOpenClawSetup(runtime = {}, options = {}) {
         onboarded,
         configPatched: true,
         stampPath,
+        setupSignal,
     };
 }
 

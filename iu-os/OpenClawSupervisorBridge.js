@@ -169,6 +169,22 @@ class OpenClawSupervisorBridge {
         return this.lastResolvedInstall || this.readManagedInstall();
     }
 
+    resolveBundledInstallSource() {
+        const packageRoot = resolveOpenClawPackageRoot();
+        const nodePath = resolveOpenClawNodePath();
+        const cliPath = deriveCliPathFromPackageRoot(packageRoot);
+        if (!cliPath || !isFile(cliPath)) {
+            throw new Error('No pude resolver openclaw.mjs dentro del runtime empaquetado de IU');
+        }
+        const packageJson = readJsonFile(path.join(packageRoot, 'package.json')) || {};
+        return {
+            packageRoot,
+            nodePath,
+            cliPath,
+            version: String(packageJson.version || '').trim() || 'unknown',
+        };
+    }
+
     readManagedInstall() {
         const manifest = readJsonFile(this.getManagedManifestPath());
         if (!manifest || manifest.installedByIU !== true) {
@@ -198,61 +214,6 @@ class OpenClawSupervisorBridge {
         };
         this.lastResolvedInstall = resolved;
         return resolved;
-    }
-
-    listExistingExternalCliCandidates() {
-        const candidates = [];
-        const explicitPath = String(process.env.IU_OPENCLAW_CLI_PATH || '').trim();
-        if (explicitPath) {
-            candidates.push(explicitPath);
-        }
-
-        const pathEntries = String(process.env.PATH || '')
-            .split(path.delimiter)
-            .map((entry) => entry.trim())
-            .filter(Boolean);
-        for (const entry of pathEntries) {
-            candidates.push(path.join(entry, 'openclaw'));
-        }
-
-        const homeDir = os.homedir();
-        const nvmRoot = path.join(homeDir, '.nvm', 'versions', 'node');
-        try {
-            const versions = fs.readdirSync(nvmRoot).sort().reverse();
-            for (const version of versions) {
-                candidates.push(path.join(nvmRoot, version, 'bin', 'openclaw'));
-            }
-        } catch (_) {
-            // Ignore missing NVM installs.
-        }
-
-        candidates.push('/opt/homebrew/bin/openclaw');
-        candidates.push('/usr/local/bin/openclaw');
-        candidates.push(path.join(homeDir, '.local', 'bin', 'openclaw'));
-
-        return uniqueList(candidates).filter((candidate) => isFile(candidate));
-    }
-
-    resolveExistingExternalInstall() {
-        const managedCliPath = safeRealpath(this.getManagedCliPath());
-        for (const candidate of this.listExistingExternalCliCandidates()) {
-            const realCandidate = safeRealpath(candidate);
-            if (managedCliPath && realCandidate === managedCliPath) continue;
-            const packageRoot = derivePackageRootFromCliPath(realCandidate);
-            if (!packageRoot) continue;
-            const nodePath = resolveOpenClawNodePath(realCandidate);
-            const resolved = {
-                cliPath: realCandidate,
-                nodePath,
-                packageRoot,
-                installedByIU: false,
-                managedByIU: false,
-                source: 'external',
-            };
-            this.lastResolvedInstall = resolved;
-            return resolved;
-        }
-        return null;
     }
 
     buildManagedManifest(source = {}) {
@@ -401,20 +362,15 @@ rm -f "$0"
     }
 
     installManagedOpenClaw() {
-        const sourcePackageRoot = resolveOpenClawPackageRoot();
-        const sourceNodePath = resolveOpenClawNodePath();
-        const sourceCliPath = deriveCliPathFromPackageRoot(sourcePackageRoot);
-        if (!sourceCliPath || !isFile(sourceCliPath)) {
-            throw new Error('No pude resolver openclaw.mjs dentro del runtime empaquetado de IU');
-        }
+        const bundledSource = this.resolveBundledInstallSource();
 
         // Clean up stale copied-package installs from the previous embedded attempt.
         fs.rmSync(this.getManagedInstallRoot(), { recursive: true, force: true });
 
         const manifest = this.buildManagedManifest({
-            packageRoot: sourcePackageRoot,
-            nodePath: sourceNodePath,
-            cliPath: sourceCliPath,
+            packageRoot: bundledSource.packageRoot,
+            nodePath: bundledSource.nodePath,
+            cliPath: bundledSource.cliPath,
         });
         ensureDir(path.dirname(this.getManagedManifestPath()));
         fs.writeFileSync(this.getManagedManifestPath(), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -428,17 +384,20 @@ rm -f "$0"
     async ensureInstalled() {
         const managed = this.readManagedInstall();
         if (managed) {
-            return managed;
-        }
-
-        const preferExternal = String(process.env.IU_OPENCLAW_USE_EXTERNAL || '').trim() === '1';
-        if (preferExternal) {
-            const external = this.resolveExistingExternalInstall();
-            if (external) {
-                return external;
+            const bundledSource = this.resolveBundledInstallSource();
+            if (
+                safeRealpath(managed.packageRoot) === safeRealpath(bundledSource.packageRoot) &&
+                safeRealpath(managed.cliPath) === safeRealpath(bundledSource.cliPath) &&
+                safeRealpath(managed.nodePath) === safeRealpath(bundledSource.nodePath) &&
+                safeRealpath(String(managed.bundledSource?.packageRoot || '')) === safeRealpath(bundledSource.packageRoot) &&
+                safeRealpath(String(managed.bundledSource?.nodePath || '')) === safeRealpath(bundledSource.nodePath) &&
+                String(managed.version || '').trim() === bundledSource.version
+            ) {
+                return managed;
             }
+            this.log(`Detected bundled OpenClaw upgrade ${managed.version} -> ${bundledSource.version}; refreshing managed runtime manifest.`);
+            return this.installManagedOpenClaw();
         }
-
         return this.installManagedOpenClaw();
     }
 

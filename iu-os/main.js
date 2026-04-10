@@ -38,10 +38,125 @@ if (!envLoaded) {
 
 LoggingSwitch.setMode(process.env.IU_LOG_MODE || LoggingSwitch.getMode(), { persistEnv: true });
 const TURN_TAKING_LOGS_ENABLED = process.env.IU_TURN_TAKING_LOGS === '1';
+let isAppQuitting = false;
+
+function formatLifecycleError(error) {
+    if (!error) return 'unknown error';
+    if (error instanceof Error) {
+        return error.stack || error.message || String(error);
+    }
+    if (typeof error === 'object') {
+        try {
+            return JSON.stringify(error);
+        } catch (_) {
+            return String(error);
+        }
+    }
+    return String(error);
+}
+
+function logLifecycle(scope, message, extra) {
+    const suffix = extra === undefined ? '' : ` ${typeof extra === 'string' ? extra : formatLifecycleError(extra)}`;
+    LoggingSwitch.execution(`Lifecycle:${scope}`, `${message}${suffix}`);
+}
+
+function writeLifecycleStderr(message) {
+    try {
+        process.stderr.write(`❌ [Lifecycle] ${String(message || '').trim()}\n`);
+    } catch (_) {
+        // Ignore stderr failures during shutdown.
+    }
+}
+
+function attachWindowLifecycleDiagnostics(win, name) {
+    if (!win || win.__iuLifecycleDiagnosticsAttached) return;
+    win.__iuLifecycleDiagnosticsAttached = true;
+    const windowName = String(name || 'window');
+    const describeWindow = () => {
+        const id = typeof win.id === 'number' ? win.id : '?';
+        const destroyed = typeof win.isDestroyed === 'function' ? win.isDestroyed() : false;
+        return `${windowName}#${id} destroyed=${destroyed}`;
+    };
+
+    win.on('close', () => {
+        logLifecycle(windowName, `${describeWindow()} close`);
+    });
+    win.on('closed', () => {
+        logLifecycle(windowName, `${describeWindow()} closed`);
+    });
+    win.on('unresponsive', () => {
+        logLifecycle(windowName, `${describeWindow()} unresponsive`);
+    });
+    win.on('responsive', () => {
+        logLifecycle(windowName, `${describeWindow()} responsive`);
+    });
+
+    const contents = win.webContents;
+    if (!contents) return;
+    contents.on('render-process-gone', (event, details) => {
+        logLifecycle(windowName, `${describeWindow()} render-process-gone`, details);
+    });
+    contents.on('unresponsive', () => {
+        logLifecycle(windowName, `${describeWindow()} webContents unresponsive`);
+    });
+    contents.on('responsive', () => {
+        logLifecycle(windowName, `${describeWindow()} webContents responsive`);
+    });
+    contents.on('destroyed', () => {
+        logLifecycle(windowName, `${describeWindow()} webContents destroyed`);
+    });
+    contents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        logLifecycle(windowName, `${describeWindow()} did-fail-load code=${errorCode} mainFrame=${Boolean(isMainFrame)} url=${validatedURL || ''}`, errorDescription || '');
+    });
+}
+
+function installLifecycleDiagnostics() {
+    if (global.__iuLifecycleDiagnosticsInstalled) return;
+    global.__iuLifecycleDiagnosticsInstalled = true;
+
+    process.on('uncaughtException', (error) => {
+        logLifecycle('process', 'uncaughtException', error);
+    });
+    process.on('unhandledRejection', (reason) => {
+        logLifecycle('process', 'unhandledRejection', reason);
+    });
+    process.on('beforeExit', (code) => {
+        logLifecycle('process', `beforeExit code=${code}`);
+    });
+    process.on('exit', (code) => {
+        writeLifecycleStderr(`process exit code=${code}`);
+    });
+
+    app.on('render-process-gone', (event, webContents, details) => {
+        const id = webContents && typeof webContents.id === 'number' ? webContents.id : '?';
+        logLifecycle('app', `render-process-gone webContents=${id}`, details);
+    });
+    app.on('child-process-gone', (event, details) => {
+        logLifecycle('app', 'child-process-gone', details);
+    });
+    app.on('browser-window-created', (event, win) => {
+        attachWindowLifecycleDiagnostics(win, 'browser-window');
+    });
+    app.on('will-quit', () => {
+        isAppQuitting = true;
+        logLifecycle('app', 'will-quit');
+        writeLifecycleStderr('will-quit');
+    });
+    app.on('quit', (event, exitCode) => {
+        logLifecycle('app', `quit code=${exitCode}`);
+        writeLifecycleStderr(`quit code=${exitCode}`);
+    });
+}
+
+installLifecycleDiagnostics();
 
 function logTurnTakingUiux(eventName, data) {
     if (!TURN_TAKING_LOGS_ENABLED) return;
     LoggingSwitch.uiux('turn_taking', eventName, data);
+}
+
+function safeTrim(value) {
+    return String(value || '').trim();
 }
 
 // IPC: Get Device ID from env
@@ -179,6 +294,15 @@ const OpenClawCliBrowserClient = require('./OpenClawCliBrowserClient');
 const OpenClawGatewayExecutor = require('./OpenClawGatewayExecutor');
 const OpenClawGatewaySupervisor = require('./OpenClawGatewaySupervisor');
 const OpenClawSupervisorBridge = require('./OpenClawSupervisorBridge');
+const {
+    buildOpenClawProviderEnv,
+    buildOpenClawRuntimeEnv,
+    buildOpenClawUiState,
+    maskOpenClawApiKey,
+    resolveOpenClawProviderApiKey,
+    normalizeOpenClawModel,
+    sanitizeOpenClawSettings,
+} = require('./OpenClawUiState');
 const TimeManagerRuntime = require('./time-manager/TimeManagerRuntime');
 const TimeManagerStore = require('./time-manager/TimeManagerStore');
 const {
@@ -423,6 +547,7 @@ const USER_ENV_PATH = path.join(app.getPath('userData'), '.env');
 const INCEPTION_ONBOARDING_STATE_PATH = path.join(app.getPath('userData'), 'inception_onboarding.json');
 let currentWindowMode = WINDOW_MODES.SMALL;
 let preferredCompactWindowMode = WINDOW_MODES.SMALL;
+let openClawSettings = sanitizeOpenClawSettings({}, process.env);
 const rememberedWindowBounds = {
     [WINDOW_MODES.SMALL]: null,
     [WINDOW_MODES.MEDIUM]: null,
@@ -513,6 +638,64 @@ function getPreferredCompactMode() {
     return preferredCompactWindowMode === WINDOW_MODES.MEDIUM ? WINDOW_MODES.MEDIUM : WINDOW_MODES.SMALL;
 }
 
+function serializeOpenClawSettingsForDisk(settings = {}) {
+    const next = sanitizeOpenClawSettings(settings, process.env);
+    const payload = {
+        provider: next.provider,
+        rememberApiKey: next.rememberApiKey !== false,
+        lastConfiguredAt: next.lastConfiguredAt || undefined,
+        modelPrimary: normalizeOpenClawModel(next.modelPrimary),
+    };
+    if (payload.rememberApiKey && safeTrim(next.apiKey)) {
+        payload.apiKey = next.apiKey;
+    }
+    return payload;
+}
+
+function updateOpenClawSettings(nextSettings = {}) {
+    const current = sanitizeOpenClawSettings(openClawSettings, process.env);
+    const incoming = sanitizeOpenClawSettings(nextSettings, process.env);
+    const resolved = resolveOpenClawProviderApiKey({
+        provider: incoming.provider || current.provider,
+        apiKey: incoming.apiKey || current.apiKey,
+        runtimeApiKey: nextSettings.runtimeApiKey || incoming.runtimeApiKey || current.runtimeApiKey,
+    }, getOpenClawRuntimeEnv(process.env));
+    const runtimeApiKey = safeTrim(nextSettings.runtimeApiKey || nextSettings.apiKey || incoming.runtimeApiKey || current.runtimeApiKey || resolved.apiKey);
+    openClawSettings = {
+        provider: incoming.provider || current.provider,
+        apiKey: incoming.rememberApiKey !== false ? safeTrim(incoming.apiKey || current.apiKey) : '',
+        runtimeApiKey,
+        rememberApiKey: incoming.rememberApiKey,
+        lastConfiguredAt: incoming.lastConfiguredAt || current.lastConfiguredAt || '',
+        modelPrimary: normalizeOpenClawModel(incoming.modelPrimary || current.modelPrimary || ''),
+    };
+    if (openClawSettings.rememberApiKey !== true) {
+        openClawSettings.apiKey = '';
+    }
+    return openClawSettings;
+}
+
+function getOpenClawRuntimeEnv(baseEnv = process.env) {
+    return buildOpenClawRuntimeEnv(openClawSettings, baseEnv);
+}
+
+function getOpenClawState() {
+    const configPath = path.join(openClawSupervisorBridge.getManagedStateDir(), 'openclaw.json');
+    return buildOpenClawUiState({
+        settings: openClawSettings,
+        configPath,
+        env: getOpenClawRuntimeEnv(process.env),
+    });
+}
+
+function broadcastOpenClawState() {
+    const state = getOpenClawState();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('openclaw-state-changed', state);
+    }
+    return state;
+}
+
 function loadSettings() {
     try {
         if (fs.existsSync(SETTINGS_PATH)) {
@@ -521,6 +704,7 @@ function loadSettings() {
             if (settings.preferredCompactWindowMode === WINDOW_MODES.SMALL || settings.preferredCompactWindowMode === WINDOW_MODES.MEDIUM) {
                 preferredCompactWindowMode = settings.preferredCompactWindowMode;
             }
+            openClawSettings = updateOpenClawSettings(settings.openclaw || {});
             const storedBounds = settings.windowBoundsByMode || {};
             for (const mode of [WINDOW_MODES.SMALL, WINDOW_MODES.MEDIUM, WINDOW_MODES.LARGE]) {
                 rememberedWindowBounds[mode] = sanitizeStoredBounds(storedBounds[mode]);
@@ -538,7 +722,8 @@ function saveSettings() {
             windowMode: currentWindowMode,
             handMeshStyle,
             preferredCompactWindowMode,
-            windowBoundsByMode: rememberedWindowBounds
+            windowBoundsByMode: rememberedWindowBounds,
+            openclaw: serializeOpenClawSettingsForDisk(openClawSettings),
         };
         fs.writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2));
     } catch (e) {
@@ -941,6 +1126,7 @@ function createWindow() {
             webSecurity: true
         }
     });
+    attachWindowLifecycleDiagnostics(mainWindow, 'main-window');
 
     // Keep window always on top
     if (process.platform === 'darwin') {
@@ -1008,6 +1194,15 @@ function createWindow() {
     mainWindow.on('resize', () => {
         syncChatWindowPosition(false);
         rememberBoundsForMode(currentWindowMode, mainWindow.getBounds(), { persist: false });
+    });
+
+    mainWindow.on('closed', () => {
+        const closedWindowId = mainWindow?.id;
+        logLifecycle('main-window', 'main window reference cleared');
+        mainWindow = null;
+        if (!isAppQuitting) {
+            logLifecycle('main-window', `closed while app is not quitting id=${closedWindowId || '?'}`);
+        }
     });
 
     console.log(`✅ Window created in ${isCompactMode ? 'COMPACT' : 'EXPANDED'} mode (${bounds.width}x${bounds.height})`);
@@ -3275,6 +3470,48 @@ ipcMain.handle('set-ui-theme', async (event, payload = {}) => {
     return { success: true, theme: currentUiTheme };
 });
 
+ipcMain.handle('openclaw-get-state', async () => {
+    return getOpenClawState();
+});
+
+ipcMain.handle('openclaw-save-settings', async (event, payload = {}) => {
+    updateOpenClawSettings(payload);
+    if (payload?.persist !== false) {
+        saveSettings();
+    }
+    return broadcastOpenClawState();
+});
+
+ipcMain.handle('openclaw-run-setup', async (event, payload = {}) => {
+    updateOpenClawSettings(payload);
+    saveSettings();
+
+    try {
+        const installInfo = await openClawSupervisorBridge.ensureInstalled();
+        const runtime = require('./OpenClawRuntimeConfig').resolveOpenClawRuntimeConfig({
+            installInfo,
+            managedStateDir: openClawSupervisorBridge.getManagedStateDir(),
+            env: getOpenClawRuntimeEnv(process.env),
+        });
+        runtime.openClawSettings = openClawSettings;
+        const result = await require('./OpenClawManagedSetup').ensureManagedOpenClawSetup(runtime, {
+            log: (message) => LoggingSwitch.execution('OpenClawSetup', message),
+        });
+        const state = broadcastOpenClawState();
+        return {
+            ok: true,
+            result,
+            state,
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            error: error?.message || String(error || 'No se pudo configurar OpenClaw'),
+            state: broadcastOpenClawState(),
+        };
+    }
+});
+
 ipcMain.handle('chat-create-tab', async (event, payload = {}) => {
     return knowledgeService.createNote(payload);
 });
@@ -5207,6 +5444,7 @@ app.whenReady().then(async () => {
     openClawExecutor = new OpenClawGatewayExecutor(mainWindow, {
         supervisorBridge: openClawSupervisorBridge,
         gatewaySupervisor: openClawGatewaySupervisor,
+        getOpenClawSettings: () => openClawSettings,
         log: (message) => LoggingSwitch.execution('OpenClawExecutor', message),
     });
     console.log(`🦞 [Main] OpenClaw gateway executor ready${browserAgentInitError ? ` (BrowserAgent degraded: ${browserAgentInitError})` : ''}`);
@@ -5337,12 +5575,17 @@ ipcMain.handle('consolidate-memory', async () => {
 });
 
 app.on('window-all-closed', () => {
+    logLifecycle('app', `window-all-closed platform=${process.platform}`);
+    writeLifecycleStderr(`window-all-closed platform=${process.platform}`);
     if (process.platform !== 'darwin') {
         app.quit();
     }
 });
 
 app.on('before-quit', () => {
+    isAppQuitting = true;
+    logLifecycle('app', 'before-quit');
+    writeLifecycleStderr('before-quit');
     if (windowBoundsSaveTimer) {
         clearTimeout(windowBoundsSaveTimer);
         windowBoundsSaveTimer = null;
@@ -5554,10 +5797,12 @@ const GPT_ACTION_TRANSPORT = String(process.env.IU_GPT_ACTION_TRANSPORT || 'supa
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
+    writeLifecycleStderr(`duplicate instance rejected execPath=${process.execPath} argv=${JSON.stringify(process.argv)} cwd=${process.cwd()}`);
     console.warn('⚠️ [Main] Another IU instance is already running. Exiting duplicate process.');
     app.quit();
 } else {
-    app.on('second-instance', () => {
+    app.on('second-instance', (event, commandLine = [], workingDirectory = '') => {
+        writeLifecycleStderr(`second-instance event commandLine=${JSON.stringify(commandLine)} cwd=${workingDirectory || process.cwd()}`);
         console.log('🪟 [Main] Prevented duplicate IU instance and focused the existing window.');
         if (mainWindow && !mainWindow.isDestroyed()) {
             if (mainWindow.isMinimized()) {

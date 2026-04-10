@@ -36,6 +36,7 @@ const refs = {
   noteBody: document.getElementById('note-body'),
   noteMarkers: document.getElementById('note-markers'),
   newGroupPlus: document.getElementById('new-group-plus'),
+  aboutMeShortcut: document.getElementById('about-me-shortcut'),
   projectGroups: document.getElementById('project-groups'),
   metaModalRoot: document.getElementById('meta-modal-root')
 };
@@ -68,7 +69,7 @@ function tabLabel(tab) {
 }
 
 function getActiveTab() {
-  return state.tabs.find((tab) => tab.id === state.activeTabId) || state.tabs[0] || null;
+  return state.tabs.find((tab) => tab.id === state.activeTabId) || getDisplayTabs()[0] || null;
 }
 
 function escapeHtml(value) {
@@ -239,6 +240,14 @@ function getInverseTheme(baseTheme) {
   return normalizeTheme(baseTheme) === 'light' ? 'dark' : 'light';
 }
 
+function getDisplayTabs() {
+  return state.tabs.slice().reverse();
+}
+
+function getDisplayMetas() {
+  return state.metas.slice().reverse();
+}
+
 function applyInvertedTheme(baseTheme) {
   const inverseTheme = getInverseTheme(baseTheme);
   document.documentElement.setAttribute('data-inverse-theme', inverseTheme);
@@ -335,9 +344,15 @@ function moveMetaToIndex(metaId, index) {
   renderMetasView();
 }
 
+function getAboutMeTab() {
+  return state.tabs.find((tab) => String(tab?.fixedKind || '').trim() === 'about_me' || String(tab?.id || '').trim() === 'tab_about_me') || null;
+}
+
 function removeMeta(metaId) {
   const meta = state.metas.find((item) => item.id === metaId);
   if (meta?.isFixed) return;
+  const displayBefore = getDisplayMetas();
+  const activeDisplayIndex = displayBefore.findIndex((item) => item.id === metaId);
   const next = state.metas.filter((meta) => meta.id !== metaId);
   if (next.length === state.metas.length) return;
 
@@ -355,11 +370,21 @@ function removeMeta(metaId) {
 
   state.metas = next;
   if (state.activeMetaId === metaId) {
-    state.activeMetaId = next[0]?.id || null;
+    const displayAfter = displayBefore.filter((item) => item.id !== metaId);
+    const nextFocus = displayAfter[Math.min(activeDisplayIndex, displayAfter.length - 1)] || null;
+    state.activeMetaId = nextFocus?.id || null;
   }
   saveMetas();
   renderMetasView();
   renderNoteMarkers();
+}
+
+async function openAboutMeNote() {
+  const aboutTab = getAboutMeTab();
+  if (!aboutTab) return;
+  const next = await window.uChat.setActiveTab(aboutTab.id);
+  applySnapshot(next, { syncEditor: true });
+  setMode('notes');
 }
 
 function sanitizeMeta(meta) {
@@ -806,7 +831,7 @@ function renderNoteTabs() {
   rememberTabsScroll('notes', refs.noteTabs);
   refs.noteTabs.innerHTML = '';
 
-  for (const tab of state.tabs) {
+  for (const tab of getDisplayTabs()) {
     const root = document.createElement('div');
     root.className = `note-tab${tab.id === state.activeTabId ? ' active' : ''}${getLiveNotePresentation(tab.id) ? ' live-focus-tab' : ''}`;
 
@@ -820,17 +845,18 @@ function renderNoteTabs() {
       setMode('notes');
     });
 
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'note-tab-close-btn';
-    closeBtn.textContent = '×';
-    closeBtn.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      await closeTabWithoutSaving(tab.id);
-    });
-
     root.appendChild(openBtn);
-    root.appendChild(closeBtn);
+    if (!tab.isFixed) {
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'note-tab-close-btn';
+      closeBtn.textContent = '×';
+      closeBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        await closeTabWithoutSaving(tab.id);
+      });
+      root.appendChild(closeBtn);
+    }
     refs.noteTabs.appendChild(root);
   }
 
@@ -849,6 +875,9 @@ function syncEditorFromState(force = false) {
     refs.noteMarkers.scrollLeft = refs.noteBody.scrollLeft;
     lastEditorSyncTabId = tab.id;
   }
+
+  refs.noteTitle.readOnly = Boolean(tab.isFixed);
+  refs.noteTitle.classList.toggle('fixed-note-title', Boolean(tab.isFixed));
 
   applyLiveNotePresentation();
 }
@@ -1264,7 +1293,7 @@ function getMetaById(metaId) {
 
 function ensureActiveMeta() {
   if (state.activeMetaId && getMetaById(state.activeMetaId)) return;
-  state.activeMetaId = state.metas[0]?.id || null;
+  state.activeMetaId = getDisplayMetas()[0]?.id || null;
 }
 
 function getMetaStatusMessage(meta) {
@@ -2027,6 +2056,58 @@ function createFinanceTimelineSection(meta) {
   return section;
 }
 
+function findBlankMetaDraft() {
+  return state.metas.find((meta) => {
+    if (!meta || meta.isFixed || isFinanceMeta(meta)) return false;
+    const title = String(meta.title || '').trim();
+    const description = String(meta.description || '').trim();
+    const noteCount = Array.isArray(meta.noteIds) ? meta.noteIds.length : 0;
+    return !title && !description && noteCount === 0;
+  }) || null;
+}
+
+function createBlankMetaDraft(options = {}) {
+  const id = `meta_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
+  const draft = {
+    id,
+    kind: 'generic',
+    isFixed: false,
+    title: '',
+    description: '',
+    noteIds: [],
+    manualNoteIds: [],
+    agentNoteIds: [],
+    excludedNoteIds: [],
+    learningLinks: [],
+    isSaved: false,
+    executionConfig: { type: 'recurrent', whenText: '', enabled: false },
+    executionPromptPending: false,
+    agentStatus: 'idle',
+    agentLogs: [],
+    finance: null
+  };
+  if (options.prepend === true) {
+    state.metas.unshift(draft);
+  } else {
+    state.metas.push(draft);
+  }
+  return draft;
+}
+
+function ensureStartupBlankMetaFocused() {
+  saveMetaViewMode('expanded');
+  let draft = findBlankMetaDraft();
+  if (!draft) {
+    draft = createBlankMetaDraft({ prepend: false });
+    saveMetas();
+  }
+  state.activeMetaId = draft.id;
+  renderMetasView();
+  requestAnimationFrame(() => {
+    focusActiveMetaEditor();
+  });
+}
+
 function createMetaCard(meta, options = {}) {
   const expanded = options.expanded === true;
   const financeMeta = isFinanceMeta(meta);
@@ -2073,6 +2154,7 @@ function createMetaCard(meta, options = {}) {
 
   const actions = document.createElement('div');
   actions.className = 'meta-actions';
+  const canCloseMeta = !meta.isFixed;
 
   let titleInput = null;
   let descriptionInput = null;
@@ -2168,6 +2250,19 @@ function createMetaCard(meta, options = {}) {
 
   const moreShell = document.createElement('div');
   moreShell.className = 'meta-actions-menu-shell';
+
+  if (canCloseMeta) {
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'meta-inline-close-btn';
+    closeBtn.textContent = '×';
+    closeBtn.title = 'Cerrar meta';
+    closeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      removeMeta(meta.id);
+    });
+    actions.appendChild(closeBtn);
+  }
 
   const moreBtn = document.createElement('button');
   moreBtn.type = 'button';
@@ -2333,11 +2428,14 @@ function createExpandedMetaTabs() {
 
   const tabs = document.createElement('div');
   tabs.className = 'meta-expand-tabs note-tabs';
-  for (const meta of state.metas) {
+  for (const meta of getDisplayMetas()) {
     const liveMeta = getLiveMetaPresentation(meta.id);
+    const shell = document.createElement('div');
+    shell.className = `meta-expand-tab-shell note-tab${meta.id === state.activeMetaId ? ' active' : ''}${liveMeta ? ' live-focus-tab' : ''}`;
+
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `meta-expand-tab note-tab${meta.id === state.activeMetaId ? ' active' : ''}${liveMeta ? ' live-focus-tab' : ''}`;
+    button.className = `meta-expand-tab${meta.id === state.activeMetaId ? ' active' : ''}`;
 
     const title = document.createElement('span');
     title.className = 'meta-expand-tab-title';
@@ -2358,7 +2456,22 @@ function createExpandedMetaTabs() {
       state.activeMetaId = meta.id;
       renderMetasView();
     });
-    tabs.appendChild(button);
+    shell.appendChild(button);
+
+    if (!meta.isFixed) {
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'note-tab-close-btn meta-tab-close-btn';
+      closeBtn.textContent = '×';
+      closeBtn.title = 'Cerrar meta';
+      closeBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        removeMeta(meta.id);
+      });
+      shell.appendChild(closeBtn);
+    }
+
+    tabs.appendChild(shell);
   }
 
   const addBtn = document.createElement('button');
@@ -2425,7 +2538,7 @@ function renderMetasView() {
       state.draggingMetaId = null;
     };
 
-    for (const meta of state.metas) {
+    for (const meta of getDisplayMetas()) {
       refs.projectGroups.appendChild(createMetaCard(meta, { expanded: false }));
     }
   }
@@ -2439,7 +2552,7 @@ function addMeta() {
   const id = `meta_${Date.now()}_${Math.random().toString(16).slice(2, 7)}`;
   emitUiUx('meta_created', { metaId: id });
   state.activeMetaId = id;
-  state.metas.unshift({
+  state.metas.push({
     id,
     kind: 'generic',
     isFixed: false,
@@ -2517,6 +2630,10 @@ function bindEvents() {
 
   refs.noteTitle.addEventListener('input', () => {
     const tab = getActiveTab();
+    if (tab?.isFixed) {
+      refs.noteTitle.value = String(tab.title || '').trim();
+      return;
+    }
     if (tab) tab.title = refs.noteTitle.value || '';
     renderNoteTabs();
     renderMetasView();
@@ -2535,6 +2652,9 @@ function bindEvents() {
   });
 
   refs.newGroupPlus.addEventListener('click', addMeta);
+  refs.aboutMeShortcut?.addEventListener('click', async () => {
+    await openAboutMeNote();
+  });
 
   document.addEventListener('mousedown', (event) => {
     const clickedInsideMenus = event.target.closest('.meta-notes-actions, .meta-actions-menu-shell');
@@ -2580,6 +2700,7 @@ async function init() {
   try {
     const snapshot = await window.uChat.bootstrap();
     applySnapshot(snapshot, { syncEditor: true });
+    ensureStartupBlankMetaFocused();
     autoResizeNoteBody();
     emitUiUx('bootstrap_ok', {
       tabs: Array.isArray(snapshot?.tabs) ? snapshot.tabs.length : 0,

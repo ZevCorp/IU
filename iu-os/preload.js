@@ -80,6 +80,12 @@ contextBridge.exposeInMainWorld('iuOS', {
     onActionConfirmRequest: (callback) => ipcRenderer.on('action-confirm-request', (event, data) => callback(data)),
     onActionStatus: (callback) => ipcRenderer.on('action-status', (event, data) => callback(data)),
 
+    // OpenClaw setup and bootstrap state
+    getOpenClawState: () => ipcRenderer.invoke('openclaw-get-state'),
+    saveOpenClawSettings: (payload) => ipcRenderer.invoke('openclaw-save-settings', payload),
+    runOpenClawSetup: (payload) => ipcRenderer.invoke('openclaw-run-setup', payload),
+    onOpenClawStateChanged: (callback) => ipcRenderer.on('openclaw-state-changed', (event, data) => callback(data)),
+
     // Brain / Disconnection Mode
     startDisconnectionMode: (duration) => ipcRenderer.invoke('start-disconnection-mode', duration),
     stopDisconnectionMode: () => ipcRenderer.invoke('stop-disconnection-mode'),

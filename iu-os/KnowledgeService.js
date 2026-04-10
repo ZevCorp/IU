@@ -184,7 +184,7 @@ class KnowledgeService {
             agentLogs: payload.agentLogs || [],
             finance: payload.finance
         }, validNoteIds);
-        this.store.metas.unshift(meta);
+        this.store.metas.push(meta);
         this._ensureFixedMetas();
         this._save();
         const cloned = this._clone(meta);
@@ -336,10 +336,12 @@ class KnowledgeService {
 
     updateNote(noteId, patch = {}) {
         if (!this.notebookManager) return null;
+        const current = this._findNoteById(String(noteId || '').trim());
+        if (!current) return null;
         const source = String(patch.source || 'unknown').trim() || 'unknown';
         const runId = String(patch.runId || '').trim();
         const updated = this.notebookManager.updateTab(String(noteId || '').trim(), {
-            title: patch.title,
+            title: current.isFixed ? current.title : patch.title,
             body: patch.body
         });
         if (!updated) return null;
@@ -361,6 +363,7 @@ class KnowledgeService {
         if (!this.notebookManager) return null;
         const id = String(noteId || '').trim();
         const note = this._findNoteById(id);
+        if (note?.isFixed) return null;
         this.notebookManager.archiveTab(id);
         this._detachNoteEverywhere(id);
         this._notifyChange({

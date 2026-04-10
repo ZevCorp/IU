@@ -456,7 +456,7 @@ body {
   width: 100%;
   height: 100%;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto 1fr auto;
   gap: 14px;
   background: #000000;
   align-content: start;
@@ -519,6 +519,25 @@ body {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 10px;
+}
+
+.about-me-shortcut-btn {
+  justify-self: stretch;
+  min-height: 44px;
+  border: 1px solid rgba(20, 24, 33, 0.08);
+  border-radius: 16px;
+  background: #ffffff;
+  color: #121722;
+  font: 700 13px/1 'Manrope', sans-serif;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.about-me-shortcut-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(20, 24, 33, 0.14);
+  box-shadow: 0 12px 24px rgba(20, 24, 33, 0.08);
 }
 
 .group-drop {
@@ -1256,7 +1275,20 @@ body {
   margin-bottom: 2px;
 }
 
+.meta-expand-tab-shell {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+}
+
 .meta-expand-tab {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
   max-width: 214px;
   text-transform: none;
   display: flex;
@@ -1266,15 +1298,35 @@ body {
   line-height: 1.08;
 }
 
-.meta-expand-tab.active {
-  background: var(--soft);
-  color: #111722;
-  border-color: rgba(20, 24, 33, 0.22);
-}
-
-.meta-expand-tab.live-focus-tab,
+.meta-expand-tab-shell.live-focus-tab,
 .note-tab.live-focus-tab {
   box-shadow: 0 0 0 1px rgba(20, 24, 33, 0.14), 0 10px 24px rgba(20, 24, 33, 0.16);
+}
+
+.meta-tab-close-btn {
+  flex: 0 0 auto;
+}
+
+.meta-inline-close-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(138, 54, 54, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #8a3636;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font: 700 14px/1 'Manrope', sans-serif;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
+}
+
+.meta-inline-close-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(138, 54, 54, 0.26);
+  background: rgba(255, 243, 243, 0.96);
+  box-shadow: 0 10px 20px rgba(138, 54, 54, 0.12);
 }
 
 .meta-expand-tab-title {
@@ -1392,6 +1444,10 @@ body {
   position: fixed;
   inset: 0;
   pointer-events: none;
+}
+
+.fixed-note-title {
+  opacity: 0.82;
 }
 
 .meta-modal-backdrop {

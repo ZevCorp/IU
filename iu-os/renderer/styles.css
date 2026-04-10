@@ -2518,6 +2518,153 @@ body.mode-medium #transcript-text {
   opacity: 0.72;
 }
 
+.openclaw-settings-card {
+  margin-top: 14px;
+  padding: 16px 16px 14px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 106, 61, 0.12), rgba(255, 255, 255, 0.04));
+  border: 1px solid rgba(255, 106, 61, 0.18);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18);
+  color: var(--text-primary);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+[data-theme="light"] .openclaw-settings-card {
+  background: linear-gradient(180deg, rgba(255, 106, 61, 0.08), rgba(255, 255, 255, 0.92));
+  border: 1px solid rgba(255, 106, 61, 0.14);
+  box-shadow: 0 18px 36px rgba(15, 15, 20, 0.08);
+}
+
+.openclaw-settings-eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  opacity: 0.68;
+  margin-bottom: 8px;
+}
+
+.openclaw-settings-title {
+  font-size: 18px;
+  line-height: 1.08;
+  font-weight: 640;
+  margin-bottom: 10px;
+}
+
+.openclaw-settings-copy {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.84;
+}
+
+.openclaw-settings-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.openclaw-field {
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.92;
+}
+
+.openclaw-input {
+  width: 100%;
+  border: 1px solid rgba(255, 106, 61, 0.22);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  padding: 11px 12px;
+  font: 500 13px/1.35 var(--font-primary);
+  outline: none;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.openclaw-input:focus {
+  border-color: rgba(255, 106, 61, 0.52);
+  box-shadow: 0 0 0 4px rgba(255, 106, 61, 0.12);
+}
+
+[data-theme="light"] .openclaw-input {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.openclaw-remember {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.84;
+}
+
+.openclaw-remember input {
+  width: 14px;
+  height: 14px;
+  accent-color: #ff6a3d;
+}
+
+.openclaw-settings-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.openclaw-primary,
+.openclaw-secondary {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: transform 0.18s ease, opacity 0.18s ease, background 0.18s ease;
+}
+
+.openclaw-primary:hover,
+.openclaw-secondary:hover {
+  transform: translateY(-1px);
+}
+
+.openclaw-primary:disabled,
+.openclaw-secondary:disabled {
+  cursor: default;
+  transform: none;
+  opacity: 0.6;
+}
+
+.openclaw-primary {
+  background: #ff6a3d;
+  color: #111216;
+}
+
+[data-theme="light"] .openclaw-primary {
+  background: #111216;
+  color: #f6f7fb;
+}
+
+.openclaw-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  border: 1px solid rgba(255, 106, 61, 0.12);
+}
+
+[data-theme="light"] .openclaw-secondary {
+  background: rgba(17, 18, 22, 0.04);
+}
+
+.openclaw-settings-status {
+  min-height: 18px;
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.35;
+  opacity: 0.78;
+}
+
 #bootloader-overlay.fade-out {
   opacity: 0;
 }

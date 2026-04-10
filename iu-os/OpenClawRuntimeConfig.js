@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { randomBytes } = require('crypto');
+const { normalizeOpenClawModel } = require('./OpenClawUiState');
 
 const MANAGED_GATEWAY_PORT = 18795;
 
@@ -47,11 +48,12 @@ function buildGatewayUrl(gatewayPort) {
 }
 
 function resolveDefaultModel(env = process.env) {
-    const explicit = safeTrim(env.IU_OPENCLAW_MODEL_PRIMARY);
+    const explicit = normalizeOpenClawModel(env.IU_OPENCLAW_MODEL_PRIMARY);
     if (explicit) return explicit;
     if (safeTrim(env.ANTHROPIC_API_KEY)) return 'anthropic/claude-sonnet-4-5';
     if (safeTrim(env.OPENAI_API_KEY)) return 'openai/gpt-5-mini';
     if (safeTrim(env.GEMINI_API_KEY) || safeTrim(env.GOOGLE_API_KEY)) return 'google/gemini-2.5-flash';
+    if (safeTrim(env.OPENROUTER_API_KEY)) return 'openrouter/nvidia/nemotron-3-super-120b-a12b:free';
     return '';
 }
 
@@ -101,9 +103,12 @@ function buildManagedConfig(options = {}) {
         : {};
     const workspaceDir = safeTrim(options.workspaceDir) || path.join(options.stateDir, 'workspace');
     const managedProfile = safeTrim(options.managedProfile) || 'openclaw';
-    const modelPrimary = safeTrim(options.modelPrimary)
-        || safeTrim(existing?.agents?.defaults?.model?.primary)
+    const modelPrimary = normalizeOpenClawModel(options.modelPrimary)
+        || normalizeOpenClawModel(existing?.agents?.defaults?.model?.primary)
         || '';
+    const existingModels = existing?.agents?.defaults?.models && typeof existing.agents.defaults.models === 'object'
+        ? existing.agents.defaults.models
+        : {};
     const nextConfig = {
         gateway: {
             mode: 'local',
@@ -130,8 +135,19 @@ function buildManagedConfig(options = {}) {
             defaults: {
                 workspace: workspaceDir,
                 model: modelPrimary ? { primary: modelPrimary } : cloneJson(existing?.agents?.defaults?.model || {}),
+                models: modelPrimary
+                    ? {
+                        ...cloneJson(existingModels),
+                        [modelPrimary]: {
+                            ...(existingModels[modelPrimary] && typeof existingModels[modelPrimary] === 'object'
+                                ? cloneJson(existingModels[modelPrimary])
+                                : {}),
+                        },
+                    }
+                    : cloneJson(existingModels),
             },
         },
+        wizard: cloneJson(existing?.wizard || {}),
     };
     return nextConfig;
 }
@@ -195,11 +211,11 @@ function resolveOpenClawRuntimeConfig(options = {}) {
     const defaultGatewayPort = isManaged ? MANAGED_GATEWAY_PORT : 18789;
     const gatewayPort = Number.isFinite(configuredGatewayPort) && configuredGatewayPort > 0
         ? configuredGatewayPort
-        : (Number(existingConfig?.gateway?.port) || defaultGatewayPort);
+        : (isManaged ? defaultGatewayPort : (Number(existingConfig?.gateway?.port) || defaultGatewayPort));
     const authToken = safeTrim(env.IU_OPENCLAW_GATEWAY_TOKEN)
         || safeTrim(existingConfig?.gateway?.auth?.token)
         || randomBytes(24).toString('hex');
-    const modelPrimary = resolveDefaultModel(env) || safeTrim(existingConfig?.agents?.defaults?.model?.primary);
+    const modelPrimary = resolveDefaultModel(env) || normalizeOpenClawModel(existingConfig?.agents?.defaults?.model?.primary);
     const runtime = {
         homeDir,
         stateDir,

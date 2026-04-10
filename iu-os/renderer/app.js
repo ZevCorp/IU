@@ -111,6 +111,14 @@ const state = {
     headTilt: 0 // In degrees
 };
 
+const openClawUiState = {
+    current: null,
+    busy: false,
+    error: '',
+    hydrated: false,
+    dirty: false,
+};
+
 const PRESETS = {
     neutral: {
         eyeOpenness: 0.88, eyeSquint: 0.12, leftBrowHeight: -0.5, rightBrowHeight: 3, leftBrowCurve: 0.15, rightBrowCurve: 0.45,
@@ -724,14 +732,13 @@ function init() {
     // ---------------------------
 
     initInceptionOnboarding();
+    void initOpenClawSettings();
 
     // Small mode: independent window, apply visuals immediately with no transition
     if (urlParams.get('mode') === 'small') {
         console.log('🔵 [Renderer] Detected ?mode=small — applying small window layout');
         window.currentActiveWindowMode = 'small';
-        document.body.classList.add('mode-small');
-        const svgEl = document.getElementById('face-svg');
-        if (svgEl) svgEl.setAttribute('viewBox', '50 80 300 340');
+        applyVisualMode('small');
     }
 
 
@@ -2023,6 +2030,276 @@ async function initInceptionOnboarding() {
         const initial = await window.iuOS.getInceptionOnboardingState().catch(() => null);
         if (initial) renderInceptionOnboarding(initial);
     }
+}
+
+function getOpenClawSettingsElements() {
+    return {
+        card: document.getElementById('openclaw-settings-card'),
+        copy: document.getElementById('openclaw-settings-copy'),
+        provider: document.getElementById('openclaw-provider'),
+        modelField: document.getElementById('openclaw-model-field'),
+        model: document.getElementById('openclaw-model'),
+        apiKey: document.getElementById('openclaw-api-key'),
+        remember: document.getElementById('openclaw-remember-key'),
+        configureBtn: document.getElementById('openclaw-configure-btn'),
+        refreshBtn: document.getElementById('openclaw-refresh-btn'),
+        status: document.getElementById('openclaw-settings-status'),
+    };
+}
+
+function getOpenClawStatusCopy(state = {}) {
+    const setup = state.setup || {};
+    const settings = state.settings || {};
+    const authConfigured = Boolean(settings.apiKeyConfigured);
+    const pieces = [];
+
+    if (state.error) {
+        pieces.push(state.error);
+    }
+
+    if (setup.ready) {
+        pieces.push('OpenClaw está listo y ya conserva la señal del wizard para futuros arranques.');
+    } else if (setup.reason === 'missing_config') {
+        pieces.push('Todavía no existe openclaw.json. Pulsa Configurar para correr el onboarding sin consola visible.');
+    } else if (setup.reason === 'wizard_missing') {
+        pieces.push('La config existe, pero falta la marca del primer onboarding. Reintenta para registrar el wizard.');
+    } else if (setup.reason === 'invalid_config') {
+        pieces.push('OpenClaw encontró una config inválida. Reintenta para reconstruir el runtime.');
+    } else {
+        pieces.push(setup.summary || 'OpenClaw aún no quedó inicializado.');
+    }
+
+    if (authConfigured) {
+        const modelPart = settings.provider === 'openrouter' && settings.modelLabel && settings.modelPrimary ? ` con ${settings.modelLabel}.` : '.';
+        pieces.push(`Provider ${settings.providerLabel || settings.provider} listo${settings.rememberApiKey ? ' y persistido' : ' para esta sesión'}${modelPart}`);
+    } else {
+        pieces.push('Falta la API key del provider para completar el arranque inicial.');
+    }
+
+    return pieces.join(' ');
+}
+
+function renderOpenClawSettings(state = null) {
+    const elements = getOpenClawSettingsElements();
+    if (!elements.card) return;
+
+    if (state) {
+        openClawUiState.current = state;
+        openClawUiState.error = '';
+        openClawUiState.hydrated = true;
+    }
+
+    const current = openClawUiState.current || {};
+    const settings = current.settings || {};
+    const setup = current.setup || {};
+    const busy = Boolean(openClawUiState.busy);
+
+    if (elements.provider && settings.provider) {
+        elements.provider.value = settings.provider;
+    }
+    const isOpenRouter = settings.provider === 'openrouter';
+    if (elements.modelField) {
+        elements.modelField.hidden = !isOpenRouter;
+    }
+    if (elements.model && settings.modelPrimary !== undefined) {
+        elements.model.value = settings.modelPrimary || '';
+    }
+    if (elements.remember) {
+        elements.remember.checked = settings.rememberApiKey !== false;
+    }
+    if (elements.apiKey && !busy && !elements.apiKey.matches(':focus')) {
+        elements.apiKey.value = '';
+    }
+    if (elements.copy) {
+        elements.copy.textContent = getOpenClawStatusCopy({
+            ...current,
+            error: openClawUiState.error,
+        });
+    }
+    if (elements.status) {
+        const details = [];
+        if (setup.status) details.push(`Estado: ${setup.status}`);
+        if (settings.providerLabel) details.push(`Provider: ${settings.providerLabel}`);
+        if (settings.apiKeyConfigured) details.push(`Key: ${settings.apiKeyMasked || 'configurada'}`);
+        if (current.auth?.fingerprint) details.push(`Auth: ${current.auth.fingerprint.slice(0, 10)}…`);
+        if (openClawUiState.error) details.push(`Error: ${openClawUiState.error}`);
+        elements.status.textContent = details.join(' · ');
+    }
+
+    const disabled = busy;
+    if (elements.configureBtn) {
+        elements.configureBtn.disabled = disabled;
+        elements.configureBtn.textContent = busy ? 'Configurando…' : (setup.ready ? 'Reconfigurar' : 'Configurar');
+    }
+    if (elements.refreshBtn) {
+        elements.refreshBtn.disabled = disabled;
+        elements.refreshBtn.textContent = busy ? 'Revisando…' : 'Revisar estado';
+    }
+}
+
+function collectOpenClawSettingsPayload() {
+    const elements = getOpenClawSettingsElements();
+    const provider = elements.provider ? elements.provider.value : 'anthropic';
+    const modelPrimary = provider === 'openrouter' && elements.model ? elements.model.value.trim() : '';
+    const apiKey = elements.apiKey ? elements.apiKey.value.trim() : '';
+    const rememberApiKey = elements.remember ? elements.remember.checked : true;
+    return {
+        provider,
+        modelPrimary,
+        apiKey,
+        rememberApiKey,
+    };
+}
+
+function suggestOpenClawProviderFromKey(value = '') {
+    const key = String(value || '').trim();
+    if (key.startsWith('sk-or-v1-')) return 'openrouter';
+    if (key.startsWith('sk-ant-')) return 'anthropic';
+    if (key.startsWith('sk-proj-') || key.startsWith('sk-')) return 'openai';
+    if (/^AIza/i.test(key)) return 'gemini';
+    return '';
+}
+
+async function refreshOpenClawState() {
+    if (!window.iuOS || !window.iuOS.getOpenClawState) return null;
+    try {
+        const state = await window.iuOS.getOpenClawState();
+        if (state) {
+            openClawUiState.current = state;
+            openClawUiState.error = '';
+            openClawUiState.hydrated = true;
+            renderOpenClawSettings(state);
+        }
+        return state;
+    } catch (error) {
+        openClawUiState.error = error?.message || String(error || 'No se pudo leer el estado de OpenClaw');
+        renderOpenClawSettings();
+        return null;
+    }
+}
+
+async function submitOpenClawSettings() {
+    if (!window.iuOS || !window.iuOS.runOpenClawSetup) return;
+    const payload = collectOpenClawSettingsPayload();
+    const existing = openClawUiState.current || {};
+    const existingConfigured = Boolean(existing.settings?.apiKeyConfigured);
+
+    if (!payload.apiKey && !existingConfigured) {
+        openClawUiState.error = 'Necesito una API key para completar el onboarding inicial de OpenClaw.';
+        renderOpenClawSettings();
+        return;
+    }
+
+    openClawUiState.busy = true;
+    openClawUiState.error = '';
+    renderOpenClawSettings();
+
+    try {
+        const result = await window.iuOS.runOpenClawSetup({
+            ...payload,
+            persist: true,
+        });
+        if (!result?.ok) {
+            openClawUiState.error = result?.error || 'No se pudo configurar OpenClaw.';
+            if (result?.state) {
+                openClawUiState.current = result.state;
+            }
+            renderOpenClawSettings();
+            return;
+        }
+
+        if (result?.state) {
+            openClawUiState.current = result.state;
+        } else {
+            await refreshOpenClawState();
+        }
+
+        const elements = getOpenClawSettingsElements();
+        if (elements.apiKey) {
+            elements.apiKey.value = '';
+        }
+        openClawUiState.dirty = false;
+        renderOpenClawSettings();
+        showToast('OpenClaw quedó listo para tareas híbridas.');
+    } catch (error) {
+        openClawUiState.error = error?.message || String(error || 'No se pudo configurar OpenClaw');
+        renderOpenClawSettings();
+    } finally {
+        openClawUiState.busy = false;
+        renderOpenClawSettings();
+    }
+}
+
+async function initOpenClawSettings() {
+    const elements = getOpenClawSettingsElements();
+    if (!elements.card) return;
+
+    if (!elements.card.dataset.bound) {
+        elements.card.dataset.bound = '1';
+
+        if (elements.provider) {
+            elements.provider.addEventListener('change', () => {
+                openClawUiState.dirty = true;
+                if (elements.modelField) {
+                    elements.modelField.hidden = elements.provider.value !== 'openrouter';
+                }
+                if (elements.provider.value === 'openrouter' && elements.model && !elements.model.value) {
+                    elements.model.value = 'openrouter/nvidia/nemotron-3-super-120b-a12b:free';
+                }
+            });
+        }
+
+        if (elements.model) {
+            elements.model.addEventListener('change', () => {
+                openClawUiState.dirty = true;
+            });
+        }
+
+        if (elements.apiKey) {
+            elements.apiKey.addEventListener('input', () => {
+                openClawUiState.dirty = true;
+                const suggestedProvider = suggestOpenClawProviderFromKey(elements.apiKey.value);
+                if (suggestedProvider && elements.provider && elements.provider.value !== suggestedProvider) {
+                    elements.provider.value = suggestedProvider;
+                    if (elements.modelField) {
+                        elements.modelField.hidden = suggestedProvider !== 'openrouter';
+                    }
+                    if (suggestedProvider === 'openrouter' && elements.model && !elements.model.value) {
+                        elements.model.value = 'openrouter/nvidia/nemotron-3-super-120b-a12b:free';
+                    }
+                }
+            });
+        }
+
+        if (elements.remember) {
+            elements.remember.addEventListener('change', () => {
+                openClawUiState.dirty = true;
+            });
+        }
+
+        if (elements.configureBtn) {
+            elements.configureBtn.addEventListener('click', () => {
+                void submitOpenClawSettings();
+            });
+        }
+
+        if (elements.refreshBtn) {
+            elements.refreshBtn.addEventListener('click', () => {
+                void refreshOpenClawState();
+            });
+        }
+
+        if (window.iuOS && window.iuOS.onOpenClawStateChanged) {
+            window.iuOS.onOpenClawStateChanged((state) => {
+                openClawUiState.current = state;
+                openClawUiState.error = '';
+                openClawUiState.hydrated = true;
+                renderOpenClawSettings(state);
+            });
+        }
+    }
+
+    await refreshOpenClawState();
 }
 
 /**

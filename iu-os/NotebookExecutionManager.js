@@ -49,6 +49,22 @@ const STABLE_KEYWORDS = [
     'objetivo base'
 ];
 
+function buildAboutMeTab(now) {
+    const nowIso = new Date(now()).toISOString();
+    return {
+        id: 'tab_about_me',
+        title: 'Sobre mí',
+        body: '',
+        templateId: 'blank',
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        variables: [],
+        archivedAt: null,
+        isFixed: true,
+        fixedKind: 'about_me'
+    };
+}
+
 class NotebookExecutionManager {
     constructor(options = {}) {
         this.storageDir = options.storageDir || path.join(process.cwd(), '.chat-notebooks');
@@ -130,12 +146,14 @@ class NotebookExecutionManager {
             createdAt: nowIso,
             updatedAt: nowIso,
             variables: [],
-            archivedAt: null
+            archivedAt: null,
+            isFixed: false,
+            fixedKind: ''
         };
 
-        this.store.tabs.unshift(tab);
+        this.store.tabs.push(tab);
         const execution = this._createExecutionRecord(tab.id, { title: `Chat · ${tab.title}` });
-        this.store.executions.unshift(execution);
+        this.store.executions.push(execution);
         this.store.activeTabId = tab.id;
         this.store.activeExecutionId = execution.id;
         this._save();
@@ -153,7 +171,7 @@ class NotebookExecutionManager {
         if (!tab) return null;
 
         if (patch.title !== undefined) {
-            tab.title = String(patch.title || '').trim();
+            tab.title = tab.isFixed ? tab.title : String(patch.title || '').trim();
         }
         if (patch.body !== undefined) {
             tab.body = String(patch.body || '').replace(/\r\n/g, '\n');
@@ -170,6 +188,7 @@ class NotebookExecutionManager {
     archiveTab(tabId) {
         this._ensureLoaded();
         const tab = this._findTab(tabId);
+        if (tab?.isFixed) return this.getState();
         if (!tab || tab.archivedAt) return this.getState();
 
         const archivedAt = new Date(this.now()).toISOString();
@@ -445,12 +464,14 @@ class NotebookExecutionManager {
         fs.mkdirSync(this.storageDir, { recursive: true });
         if (fs.existsSync(this.storagePath)) {
             this.store = this._sanitizeStore(JSON.parse(fs.readFileSync(this.storagePath, 'utf8')));
+            this._ensureFixedTabs();
             this._purgeArchived();
             this._repairActivePointers();
             return;
         }
 
         this.store = this._buildInitialStore();
+        this._ensureFixedTabs();
         this._save();
     }
 
@@ -465,14 +486,16 @@ class NotebookExecutionManager {
             createdAt: nowIso,
             updatedAt: nowIso,
             variables: [],
-            archivedAt: null
+            archivedAt: null,
+            isFixed: false,
+            fixedKind: ''
         };
         const execution = this._createExecutionRecord(tab.id, { title: `Chat · ${tab.title}` });
         return {
             version: 1,
             activeTabId: tab.id,
             activeExecutionId: execution.id,
-            tabs: [tab],
+            tabs: [buildAboutMeTab(this.now), tab],
             executions: [execution]
         };
     }
@@ -493,7 +516,9 @@ class NotebookExecutionManager {
                 createdAt: tab.createdAt || new Date(this.now()).toISOString(),
                 updatedAt: tab.updatedAt || new Date(this.now()).toISOString(),
                 variables: Array.isArray(tab.variables) ? tab.variables.map((variable) => this._normalizeVariable(variable)) : [],
-                archivedAt: tab.archivedAt || null
+                archivedAt: tab.archivedAt || null,
+                isFixed: Boolean(tab.isFixed) || String(tab.fixedKind || '').trim() === 'about_me' || String(tab.id || '').trim() === 'tab_about_me',
+                fixedKind: String(tab.fixedKind || (String(tab.id || '').trim() === 'tab_about_me' ? 'about_me' : ''))
             })),
             executions: executions.map((execution) => ({
                 id: String(execution.id || this._id('exec')),
@@ -514,6 +539,24 @@ class NotebookExecutionManager {
                 archivedAt: execution.archivedAt || null
             }))
         };
+    }
+
+    _ensureFixedTabs() {
+        const tabs = Array.isArray(this.store?.tabs) ? this.store.tabs : [];
+        const existingIndex = tabs.findIndex((tab) => String(tab?.id || '').trim() === 'tab_about_me' || String(tab?.fixedKind || '').trim() === 'about_me');
+        if (existingIndex >= 0) {
+            const existing = tabs[existingIndex];
+            tabs[existingIndex] = {
+                ...existing,
+                id: 'tab_about_me',
+                title: 'Sobre mí',
+                archivedAt: null,
+                isFixed: true,
+                fixedKind: 'about_me'
+            };
+            return;
+        }
+        tabs.unshift(buildAboutMeTab(this.now));
     }
 
     _save() {

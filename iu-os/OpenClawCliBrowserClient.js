@@ -2,45 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { pathToFileURL } = require('url');
-const { resolveOpenClawPackageRoot } = require('./OpenClawPackageResolver');
 const { execOpenClawCli } = require('./OpenClawProcessRunner');
-
-let openClawGatewayCallPromise = null;
-
-async function loadOpenClawGatewayCall(cliPath = '') {
-    if (openClawGatewayCallPromise && openClawGatewayCallPromise.cliPath === cliPath) {
-        return openClawGatewayCallPromise;
-    }
-
-    const promise = (async () => {
-        const packageDir = resolveOpenClawPackageRoot({ cliPath });
-        const distDir = path.join(packageDir, 'dist');
-        const callBundleName = fs.readdirSync(distDir).sort().find((entry) => /^call-.*\.js$/i.test(entry));
-        if (!callBundleName) {
-            throw new Error('No pude encontrar el bundle call-*.js dentro de openclaw/dist');
-        }
-
-        const callBundleUrl = pathToFileURL(path.join(distDir, callBundleName)).href;
-        const mod = await import(callBundleUrl);
-        const callGateway = mod.callGateway || mod.n;
-
-        if (typeof callGateway !== 'function') {
-            throw new Error('No pude cargar callGateway desde la dependencia pinneada de OpenClaw');
-        }
-
-        return { callGateway };
-    })();
-    promise.cliPath = cliPath;
-    openClawGatewayCallPromise = promise;
-
-    try {
-        return await promise;
-    } catch (error) {
-        openClawGatewayCallPromise = null;
-        throw error;
-    }
-}
 
 function normalizeProfileName(profileName) {
     const normalized = String(profileName || '').trim().toLowerCase();
@@ -83,6 +45,26 @@ function parseCliStatusOutput(rawText = '') {
             result[String(match[1] || '').trim()] = String(match[2] || '').trim();
         });
     return result;
+}
+
+function extractJsonPayload(rawText = '') {
+    const text = String(rawText || '').trim();
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        // Continue to relaxed parsing below.
+    }
+    const firstBrace = text.indexOf('{');
+    const lastBrace = text.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+        try {
+            return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+        } catch (_) {
+            return null;
+        }
+    }
+    return null;
 }
 
 class OpenClawCliBrowserClient {
@@ -211,7 +193,10 @@ class OpenClawCliBrowserClient {
     }
 
     async requestBrowser(method, pathName, options = {}) {
-        const { callGateway } = await loadOpenClawGatewayCall(String(this.options.cliPath || '').trim());
+        const cliPath = String(this.options.cliPath || '').trim();
+        if (!cliPath) {
+            throw new Error('OpenClaw CLI path is required for browser requests');
+        }
         const timeoutMs = Number.isFinite(options.timeoutMs)
             ? Math.max(1000, Number(options.timeoutMs))
             : this.requestTimeoutMs;
@@ -224,25 +209,30 @@ class OpenClawCliBrowserClient {
                 ))
             )
             : undefined;
-
-        const payload = await callGateway({
-            url: this.preferConfigGateway ? undefined : this.gatewayUrl,
-            token: this.preferConfigGateway ? undefined : (this.authToken || undefined),
+        const args = ['gateway', 'call', 'browser.request', '--json', '--timeout', String(timeoutMs)];
+        if (!this.preferConfigGateway) {
+            appendFlag(args, '--url', this.gatewayUrl);
+            appendFlag(args, '--token', this.authToken || undefined);
+        }
+        args.push('--params', JSON.stringify({
+            method,
+            path: pathName,
+            query,
+            body: options.body,
             timeoutMs,
-            clientName: 'cli',
-            clientVersion: '1.0.0',
-            platform: process.platform,
-            mode: 'cli',
-            method: 'browser.request',
-            params: {
-                method,
-                path: pathName,
-                query,
-                body: options.body,
-                timeoutMs,
-            },
+        }));
+
+        const { stdout, stderr } = await execOpenClawCli(cliPath, args, {
+            env: this.buildCliEnv(),
+            timeout: timeoutMs + 5000,
+            maxBuffer: 8 * 1024 * 1024,
         });
-        return payload === undefined ? {} : payload;
+        const payload = extractJsonPayload(stdout) || extractJsonPayload(stderr);
+        if (payload === null) {
+            const message = String(stderr || stdout || '').trim();
+            throw new Error(message || 'OpenClaw browser.request did not return JSON');
+        }
+        return payload;
     }
 
     mapOpenClawProfile(profileName, remote = {}) {

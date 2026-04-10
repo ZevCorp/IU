@@ -6,6 +6,7 @@ const path = require('path');
 
 const {
     buildManagedOnboardingArgs,
+    buildManagedSetupStamp,
     patchManagedConfig,
     resolveAuthChoice,
 } = require('../OpenClawManagedSetup');
@@ -56,6 +57,7 @@ test('patchManagedConfig aligns local and remote gateway tokens for the managed 
     assert.equal(next.browser.profiles.openclaw.color, '#FF4500');
     assert.equal(next.browser.defaultProfile, 'openclaw');
     assert.equal(next.agents.defaults.model.primary, 'anthropic/claude-sonnet-4-5');
+    assert.deepEqual(next.agents.defaults.models['anthropic/claude-sonnet-4-5'], {});
     assert.equal(next.wizard.lastRunMode, 'local');
     assert.equal(next.wizard.lastRunCommand, 'openclaw onboard --non-interactive');
 });
@@ -66,4 +68,24 @@ test('resolveAuthChoice supports OpenRouter as a managed onboarding source', () 
     });
     assert.equal(auth.choice, 'openrouter-api-key');
     assert.deepEqual(auth.args, ['--openrouter-api-key', 'test-openrouter-key']);
+});
+
+test('buildManagedSetupStamp records auth provenance for the managed runtime', () => {
+    const stamp = buildManagedSetupStamp({
+        packageVersion: '2026.2.9',
+        profileId: 'iu',
+        stateDir: '/tmp/iu-openclaw-state',
+        configPath: '/tmp/iu-openclaw-state/openclaw.json',
+        gatewayPort: 18795,
+        modelPrimary: 'anthropic/claude-sonnet-4-5',
+        openClawSettings: {
+            provider: 'openai',
+            apiKey: 'persisted-openai-key',
+        },
+    });
+
+    assert.equal(stamp.schemaVersion, 1);
+    assert.equal(stamp.authProvider, 'openai');
+    assert.equal(typeof stamp.authFingerprint, 'string');
+    assert.ok(stamp.authFingerprint.length > 10);
 });

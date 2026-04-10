@@ -3,6 +3,7 @@
 const { execOpenClawCli, spawnOpenClawProcess } = require('./OpenClawProcessRunner');
 const { ensureManagedOpenClawSetup } = require('./OpenClawManagedSetup');
 const { resolveOpenClawRuntimeConfig } = require('./OpenClawRuntimeConfig');
+const { buildOpenClawRuntimeEnv, sanitizeOpenClawSettings } = require('./OpenClawUiState');
 
 function safeTrim(value) {
     return String(value || '').trim();
@@ -90,6 +91,9 @@ class OpenClawGatewayExecutor {
         this.mainWindow = mainWindow || null;
         this.supervisorBridge = options.supervisorBridge || null;
         this.gatewaySupervisor = options.gatewaySupervisor || null;
+        this.getOpenClawSettings = typeof options.getOpenClawSettings === 'function'
+            ? options.getOpenClawSettings
+            : () => options.openClawSettings || {};
         this.log = typeof options.log === 'function' ? options.log : () => {};
         this.isRunning = false;
         this.currentRun = null;
@@ -110,12 +114,15 @@ class OpenClawGatewayExecutor {
         if (!this.supervisorBridge || !this.gatewaySupervisor) {
             throw new Error('OpenClaw gateway executor is missing supervisor dependencies');
         }
+        const openClawSettings = sanitizeOpenClawSettings(this.getOpenClawSettings() || {}, process.env);
         const installInfo = await this.supervisorBridge.ensureInstalled();
+        const launchEnv = buildOpenClawRuntimeEnv(openClawSettings, process.env);
         const runtime = resolveOpenClawRuntimeConfig({
             installInfo,
             managedStateDir: this.supervisorBridge.getManagedStateDir(),
-            env: process.env,
+            env: launchEnv,
         });
+        runtime.openClawSettings = openClawSettings;
         await ensureManagedOpenClawSetup(runtime, {
             log: (message) => this.log(message),
         });
@@ -129,6 +136,7 @@ class OpenClawGatewayExecutor {
             homeDir: runtime.homeDir,
             stateDir: runtime.stateDir,
             configPath: runtime.configPath,
+            openClawSettings,
             autoStart: String(process.env.IU_OPENCLAW_AUTO_START || '1').trim() !== '0',
             useConfigGateway: true,
             readyTimeoutMs: Number.parseInt(String(process.env.IU_OPENCLAW_START_TIMEOUT_MS || '').trim(), 10) || 30000,
@@ -137,10 +145,12 @@ class OpenClawGatewayExecutor {
         this._writeRuntimeLog('gateway', `Gateway ready at ${runtime.gatewayUrl}`);
         const browserStartTimeoutMs = Number.parseInt(String(process.env.IU_OPENCLAW_BROWSER_START_TIMEOUT_MS || '').trim(), 10) || 60000;
         const browserClient = this.gatewaySupervisor.createClient({
+            gatewayUrl: runtime.gatewayUrl,
+            authToken: runtime.authToken,
             preferConfigGateway: true,
             defaultProfile: runtime.managedProfile,
             cliPath: installInfo.cliPath,
-            env: runtime.launchEnv,
+            env: launchEnv,
             homeDir: runtime.homeDir,
             stateDir: runtime.stateDir,
             configPath: runtime.configPath,
@@ -157,7 +167,7 @@ class OpenClawGatewayExecutor {
             preferConfigGateway: true,
             profile: runtime.managedProfile,
             cliPath: installInfo.cliPath,
-            env: runtime.launchEnv,
+            env: launchEnv,
             homeDir: runtime.homeDir,
             stateDir: runtime.stateDir,
             configPath: runtime.configPath,
@@ -278,8 +288,8 @@ class OpenClawGatewayExecutor {
             });
             const result = await this._runAgent(runtime, buildAgentMessage(goal, app, stepsHint), sessionId);
             this._emitStatus({
-                phase: result.awaitingUserInput ? 'waiting_user' : 'execution_state',
-                status: result.awaitingUserInput ? 'waiting_user' : 'execution_state',
+                phase: result.awaitingUserInput ? 'waiting_user' : 'completed',
+                status: result.awaitingUserInput ? 'waiting_user' : 'completed',
                 step: result.awaitingUserInput ? '' : 'OpenClaw terminó la tarea.',
             });
             return {
